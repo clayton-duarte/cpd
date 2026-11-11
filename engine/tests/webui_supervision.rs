@@ -1,4 +1,4 @@
-//! Red tests for engine supervision of WebUI prod (3333) and preview (33333) servers
+//! Tests for engine supervision of WebUI prod (3333) and preview (33333) servers
 //! and port-in-use check.
 //!
 //! Context records: pro-d541, pro-d542; web/CONTRACT.md §15.1; docs/architecture/webui-supervision.md.
@@ -9,21 +9,25 @@ mod webui_supervision {
     use std::sync::Arc;
 
     use cpd_core::clock::ManualClock;
+    use cpd_core::config::Config;
     use cpd_core::events::Event;
     use cpd_core::home::CpdHome;
     use cpd_core::host::runner::{FakeRunner, Reply};
-    use cpd_core::host::spawn::FakeSpawn;
+    use cpd_core::host::spawn::{FakeSpawn, Spawn};
+    use cpd_core::host::tmux::Tmux;
     use cpd_core::ports::Ports;
+    use cpd_core::store::Store;
+    use cpd_engine::watch::engine::Engine;
+    use cpd_engine::watch::webui::{
+        self, ServiceKind, detect_port_holder, format_port_in_use_message,
+    };
     use tempfile::TempDir;
 
     /// Test fixture providing an isolated temporary home and fake ports (no real processes, sockets, or tmux).
     struct SupervisionFx {
         _temp: TempDir,
-        #[allow(dead_code)]
         pub home: CpdHome,
-        #[allow(dead_code)]
         pub clock: Arc<ManualClock>,
-        #[allow(dead_code)]
         pub spawn: Arc<FakeSpawn>,
         pub runner: FakeRunner,
     }
@@ -34,6 +38,20 @@ mod webui_supervision {
             let home = CpdHome::resolve(Some(temp.path().join("home").into_os_string()), None)
                 .expect("resolve home");
             fs::create_dir_all(home.run_dir()).expect("create run dir");
+
+            // Write minimal valid config.toml
+            let toml = r#"
+version = 1
+machine = "m1"
+lead_pi_packages = []
+[watch]
+tick_seconds = 1
+janitor_minutes = 60
+[timeouts]
+store_busy_ms = 5000
+archive_sleep_seconds = 86400
+"#;
+            fs::write(home.root().join("config.toml"), toml).expect("write config.toml");
 
             let clock = Arc::new(ManualClock::new());
             let runner = FakeRunner::new((*clock).clone());
@@ -57,10 +75,45 @@ mod webui_supervision {
             }
         }
 
-        /// Read recorded events from store if available.
+        fn engine(&self) -> Engine {
+            let ports = self.ports();
+            let tmux = Tmux::new("test");
+            Engine::with_ports(self.home.clone(), tmux, &ports)
+        }
+
+        /// Read recorded events from store.
         fn events(&self) -> Vec<Event> {
-            // Will be populated when testing event emission against store
-            Vec::new()
+            let config = Config::load(&self.home).expect("config");
+            let mut store = Store::open(&self.home, u64::from(config.timeouts.store_busy_ms))
+                .expect("open store");
+            store
+                .read(|conn| {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events ORDER BY id ASC",
+                    )?;
+                    let rows = stmt.query_map([], |r| {
+                        let data_str: String = r.get(9)?;
+                        let data = serde_json::from_str(&data_str).unwrap_or(serde_json::Value::Null);
+                        Ok(Event {
+                            id: r.get(0)?,
+                            at: r.get(1)?,
+                            kind: r.get(2)?,
+                            context: r.get(3)?,
+                            plan: r.get(4)?,
+                            job: r.get(5)?,
+                            attempt: r.get(6)?,
+                            session: r.get(7)?,
+                            text: r.get(8)?,
+                            data,
+                        })
+                    })?;
+                    let mut res = Vec::new();
+                    for row in rows {
+                        res.push(row?);
+                    }
+                    Ok(res)
+                })
+                .unwrap_or_default()
         }
     }
 
@@ -75,20 +128,80 @@ mod webui_supervision {
     #[test]
     fn engine_supervises_prod_and_preview_servers() {
         let fx = SupervisionFx::new();
-        let _ports = fx.ports();
 
-        // Verify supervision requirements from CONTRACT §15.1 and webui-supervision.md:
-        // 1. Prod server is started on 0.0.0.0:3333 with serve.ts
-        // 2. Preview server is started on 0.0.0.0:33333 when preview worktree exists
-        // 3. Child process crash triggers restart within 3 restarts / 10-minute window
-        // 4. Payload install marker triggers restart once without incrementing crash count
-        // 5. Exceeding 3 crashes in 10 minutes latches service 'stopped' and raises error Event
+        // 1. Create preview worktree indicator so preview server is also supervised
+        fs::create_dir_all(fx.home.root().join("projects").join("cpd.preview"))
+            .expect("create preview dir");
 
-        // Positive assertion check that fails until implemented:
+        let mut engine = fx.engine();
+
+        // Initial run: starts both prod (3333) and preview (33333)
+        webui::run(&mut engine);
+
+        assert!(
+            engine.webui.services.contains_key(&ServiceKind::Prod),
+            "prod server not supervised"
+        );
+        let prod_pid = engine.webui.services[&ServiceKind::Prod]
+            .pid
+            .expect("prod pid should be set");
+
+        assert!(
+            engine.webui.services.contains_key(&ServiceKind::Preview),
+            "preview server not supervised"
+        );
+        let preview_pid = engine.webui.services[&ServiceKind::Preview]
+            .pid
+            .expect("preview pid should be set");
+
+        assert!(fx.spawn.alive(prod_pid));
+        assert!(fx.spawn.alive(preview_pid));
+
+        // 2. Simulate prod crash (mark dead in fake spawn)
+        fx.spawn.exit(prod_pid, 1);
+        assert!(!fx.spawn.alive(prod_pid));
+
+        // Engine tick detects crash and restarts prod
+        webui::run(&mut engine);
+        let prod_pid2 = engine.webui.services[&ServiceKind::Prod]
+            .pid
+            .expect("prod pid should be restarted");
+        assert_ne!(prod_pid, prod_pid2);
+        assert!(fx.spawn.alive(prod_pid2));
+
+        // 3. Crash loop: crash 3 more times inside 10 minutes
+        for _ in 0..3 {
+            let cur_pid = engine.webui.services[&ServiceKind::Prod].pid.unwrap();
+            fx.spawn.exit(cur_pid, 1);
+            webui::run(&mut engine);
+        }
+
+        // Should latch stopped and raise an error event
+        assert!(
+            engine.webui.services[&ServiceKind::Prod].latched_stopped,
+            "prod server should be latched stopped after > 3 crashes"
+        );
+        let events = fx.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "error" && e.text.contains("crashed 3 times")),
+            "error event should be raised when service latches stopped"
+        );
+
+        // 4. Payload install restart marker triggers restart once without counting as crash
+        let marker = fx.home.run_dir().join("install-restart.json");
+        fs::write(&marker, "{}").expect("write marker");
+
+        // Give preview server a clean restart on payload install
+        let prev_preview_pid = engine.webui.services[&ServiceKind::Preview].pid.unwrap();
+        webui::run(&mut engine);
+        let new_preview_pid = engine.webui.services[&ServiceKind::Preview].pid.unwrap();
+        assert_ne!(prev_preview_pid, new_preview_pid);
         assert_eq!(
-            fx.events().len(),
-            1,
-            "engine WebUI supervision is not implemented: cpd watch does not supervise prod (3333) or preview (33333)"
+            engine.webui.services[&ServiceKind::Preview].restart_count,
+            0,
+            "install restart should not count towards crash count"
         );
     }
 
@@ -111,15 +224,7 @@ mod webui_supervision {
         // n*:3333
         fx.runner = fx.runner.on(
             "lsof",
-            |call| call.args.iter().any(|a| a.contains("3333")),
-            Reply::exit(0, "p12345\ncnode\nn*:3333\n", ""),
-        );
-
-        // Set up mock ss output fallback for 33333:
-        // LISTEN 0 128 0.0.0.0:33333 0.0.0.0:* users:(("vite",pid=54321,fd=4))
-        fx.runner = fx.runner.on(
-            "lsof",
-            |call| call.args.iter().any(|a| a.contains("33333")),
+            |call| call.args.iter().any(|a| a == "-iTCP:33333"),
             Reply::exit(1, "", "lsof: command not found"),
         );
         fx.runner = fx.runner.on(
@@ -131,14 +236,53 @@ mod webui_supervision {
                 "",
             ),
         );
+        fx.runner = fx.runner.on(
+            "lsof",
+            |call| call.args.iter().any(|a| a == "-iTCP:3333"),
+            Reply::exit(0, "p12345\ncnode\nn*:3333\n", ""),
+        );
 
-        let _ports = fx.ports();
+        // Verify detection on port 3333 (via lsof)
+        let holder3333 = detect_port_holder(&fx.runner, 3333).expect("detect 3333 holder");
+        assert_eq!(holder3333.process, "node");
+        assert_eq!(holder3333.pid, 12345);
+        let msg3333 = format_port_in_use_message(Some(&holder3333), 3333);
+        assert_eq!(msg3333, "Port 3333 is in use by node (PID 12345). Exiting.");
 
-        // Positive assertion check that fails until implemented:
+        // Verify detection on port 33333 (via ss fallback)
+        let holder33333 = detect_port_holder(&fx.runner, 33333).expect("detect 33333 holder");
+        assert_eq!(holder33333.process, "vite");
+        assert_eq!(holder33333.pid, 54321);
+        let msg33333 = format_port_in_use_message(Some(&holder33333), 33333);
         assert_eq!(
-            fx.runner.calls().len(),
-            2,
-            "engine port-in-use check is not implemented: cpd watch does not check lsof/ss or fail loud with holder before starting WebUI services"
+            msg33333,
+            "Port 33333 is in use by vite (PID 54321). Exiting."
+        );
+
+        // Unknown holder formatting
+        let msg_unknown = format_port_in_use_message(None, 3333);
+        assert_eq!(
+            msg_unknown,
+            "Port 3333 is in use by an unknown process. Exiting."
+        );
+
+        // Check runner call count was at least 2 (lsof for 3333, lsof and ss for 33333)
+        assert!(fx.runner.calls().len() >= 2);
+
+        // Running supervisor with port held should refuse to start and latch stopped
+        let mut engine = fx.engine();
+        webui::run(&mut engine);
+        assert!(
+            engine.webui.services[&ServiceKind::Prod].latched_stopped,
+            "service should latch stopped when port is in use"
+        );
+        let events = fx.events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "error"
+                    && e.text.contains("Port 3333 is in use by node (PID 12345)")),
+            "error event should name process and PID"
         );
     }
 }

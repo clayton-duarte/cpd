@@ -45,7 +45,7 @@ mod durable_drain_sleep_tests;
 mod durable_e2_tests;
 #[cfg(test)]
 mod durable_flow_tests;
-mod engine;
+pub mod engine;
 mod ensure;
 mod escalations;
 #[cfg(test)]
@@ -145,10 +145,10 @@ mod testkit;
 mod tier_refresh_tests;
 mod titles;
 mod wake;
+pub mod webui;
 #[cfg(test)]
 mod worker_cleanup_tests;
 mod workers;
-pub mod webui;
 pub mod ws;
 
 use std::fs;
