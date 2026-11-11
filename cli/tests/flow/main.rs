@@ -75,6 +75,7 @@ mod models_cmd;
 mod plan;
 mod plan_archive_drafts;
 mod plan_cancel;
+mod plan_complete;
 mod plan_delete;
 mod plan_lint;
 mod plan_lint_advice;

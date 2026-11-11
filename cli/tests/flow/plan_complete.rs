@@ -1,11 +1,7 @@
 //! Tests for plan completion, draft dependency validation, outline done_when phase enforcement,
 //! done refusal, plan check, and plan reopen (b17, pro-d549, pro-d550).
 
-#[path = "common/mod.rs"]
-mod common;
-
-pub mod plan_complete {
-    use super::common;
+use crate::common;
     use common::fx::Fx;
     use common::refused;
     use serde_json::json;
@@ -562,4 +558,3 @@ pub mod plan_complete {
             assert_ne!(val["error"]["code"].as_str().unwrap_or(""), "plan_inactive");
         }
     }
-}
