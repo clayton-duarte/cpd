@@ -14,6 +14,8 @@ use std::time::Duration;
 mod adapter;
 mod follow_up;
 mod packages;
+pub mod shell;
+pub mod worktree;
 
 use crate::app;
 use crate::git::run::{Out, run_with};
@@ -126,91 +128,17 @@ fn steps(
     } else {
         follow_up::run(ports, install, &dest, err)
     };
+    let has_web = install.root.join("web/package.json").is_file();
     let failed = electron_step(ports, install, err) || failed;
-    sync_preview_worktree(ports, install, err);
+    if has_web {
+        worktree::ensure_preview_worktree(ports, install, err);
+    }
+    shell::ensure_shell(ports, install, err);
     follow_up::tag(ports, install, err);
     Ok(i32::from(failed))
 }
 
-/// Syncs the preview worktree to `origin/main` with patch preservation (bug b11, pro-d93, contract §3.7).
-/// When the preview worktree exists:
-/// 1. Save uncommitted changes as a temporary patch file (via git diff).
-/// 2. Reset worktree to origin/main (git reset --hard origin/main).
-/// 3. Re-apply the patch with 3-way merge (git apply -3 / git apply --3way).
-/// 4. Run `pnpm install` in the worktree.
-///
-/// If re-applying the patch conflicts: keep the patch, leave the worktree on origin/main, and report an error.
-fn sync_preview_worktree(ports: &Ports, install: &Install, err: &mut dyn Write) {
-    let preview_worktree = std::env::var_os("CPD_WEB_PREVIEW_WORKTREE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            install
-                .root
-                .parent()
-                .map(|p| p.join("cpd.preview.web"))
-                .unwrap_or_else(|| install.root.join("../cpd.preview.web"))
-        });
 
-    if !preview_worktree.is_dir() {
-        return;
-    }
-
-    // Step 1: Save uncommitted changes as a patch (tracked edits and untracked files).
-    let diff_out = run_with(&*ports.runner, &preview_worktree, &["diff", "HEAD"]);
-    let patch_content = match diff_out {
-        Ok(out) if out.code == 0 => out.stdout,
-        _ => String::new(),
-    };
-
-    let patch_file = preview_worktree.join(".cpd-preview-wip.patch");
-    if !patch_content.is_empty() {
-        let _ = crate::atomic::write_atomic(&patch_file, &patch_content);
-    }
-
-    // Step 2: Reset preview worktree to origin/main
-    let _ = run_with(
-        &*ports.runner,
-        &preview_worktree,
-        &["reset", "--hard", "origin/main"],
-    );
-
-    // Step 3: Re-apply patch with 3-way merge
-    let apply_out = run_with(
-        &*ports.runner,
-        &preview_worktree,
-        &[
-            "apply",
-            "-3",
-            patch_file.to_str().unwrap_or(".cpd-preview-wip.patch"),
-        ],
-    );
-    let conflict = match apply_out {
-        Ok(out) if out.code != 0 => true,
-        Err(_) => true,
-        _ => false,
-    };
-
-    if conflict {
-        let _ = writeln!(
-            err,
-            "cpd install: preview sync conflict while re-applying patch; patch preserved at {}",
-            patch_file.display()
-        );
-        return;
-    }
-
-    // If applied cleanly, remove the temporary patch file.
-    let _ = fs::remove_file(&patch_file);
-
-    // Step 4: Run pnpm install in the preview worktree
-    if let Err(e) = app::pnpm(ports, &preview_worktree, &["install"]) {
-        let _ = writeln!(
-            err,
-            "cpd install: preview sync pnpm install failed: {}",
-            e.message()
-        );
-    }
-}
 
 /// The Electron step (commands.md §14.4 step 7a): builds the checkout's Electron app, writes `app-root` and signals the
 /// running Electron; whether a part failed. A failed part skips the rest.
@@ -248,6 +176,10 @@ fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool 
     }
     if let Err(e) = app::ensure(ports, &app, true) {
         return fail("b", e);
+    }
+    // Build production browser bundle (web/CONTRACT.md §30.2)
+    if let Err(e) = app::pnpm(ports, &app.root, &["--filter", "cpd-web-client", "run", "build"]) {
+        return fail("prod browser build", e);
     }
     // Stage versioned payload directory
     let payload_dir = app.root.join("web/dist-electron/payload");
