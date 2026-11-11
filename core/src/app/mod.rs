@@ -215,7 +215,11 @@ pub fn ensure(ports: &Ports, app: &App, rebuild: bool) -> Result<(), CpdError> {
 }
 
 /// The Electron of the health file: `None` when there is no file or no `pid`; a file that does not parse is an error.
-pub fn electron(ports: &Ports, app: &App) -> Result<Option<Electron>, CpdError> {
+/// Also returns the parsed `shell_abi` from the health file.
+pub fn electron_with_abi(
+    ports: &Ports,
+    app: &App,
+) -> Result<Option<(Electron, Option<u32>)>, CpdError> {
     let file = app.cpd_home.join("run/preview-health.json");
     let text = match fs::read_to_string(&file) {
         Ok(text) => text,
@@ -242,16 +246,28 @@ pub fn electron(ports: &Ports, app: &App) -> Result<Option<Electron>, CpdError> 
             format!("{}: pid {pid} is out of range", file.display()),
         )
     })?;
-    Ok(Some(Electron {
-        pid,
-        running: ports.spawn.alive(Pid(pid)),
-    }))
+    let shell_abi = value
+        .get("shell_abi")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok());
+    Ok(Some((
+        Electron {
+            pid,
+            running: ports.spawn.alive(Pid(pid)),
+        },
+        shell_abi,
+    )))
 }
 
-/// SIGUSR1 to the running Electron of the health file; its pid, or `None` when none runs.
+/// The Electron of the health file: `None` when there is no file or no `pid`; a file that does not parse is an error.
+pub fn electron(ports: &Ports, app: &App) -> Result<Option<Electron>, CpdError> {
+    Ok(electron_with_abi(ports, app)?.map(|(e, _)| e))
+}
+
+/// SIGUSR1 to the running Electron of the health file; its pid, or `None` when none runs or shell_abi is missing/< 2.
 pub fn reload(ports: &Ports, app: &App) -> Result<Option<u32>, CpdError> {
-    match electron(ports, app)? {
-        Some(Electron { pid, running: true }) => {
+    match electron_with_abi(ports, app)? {
+        Some((Electron { pid, running: true }, Some(abi))) if abi >= 2 => {
             ports.spawn.signal(Pid(pid), Signal::Usr1).map_err(|e| {
                 fail(
                     ErrorCode::SpawnFailed,

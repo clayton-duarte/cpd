@@ -118,7 +118,11 @@ impl Fx {
     }
 
     fn rows(&mut self) -> Vec<Condition> {
-        let all = conditions_with(&mut self.store, &self.home, NOW, 20, 1, None).unwrap();
+        self.rows_at(NOW)
+    }
+
+    fn rows_at(&mut self, now: OffsetDateTime) -> Vec<Condition> {
+        let all = conditions_with(&mut self.store, &self.home, now, 20, 1, None).unwrap();
         all.into_iter()
             .filter(|c| c.kind == Kind::PrReady)
             .collect()
@@ -126,9 +130,13 @@ impl Fx {
 
     /// The one row of pull request `n`.
     fn row(&mut self, n: i64) -> Condition {
+        self.row_at(n, NOW)
+    }
+
+    fn row_at(&mut self, n: i64, now: OffsetDateTime) -> Condition {
         let subject = format!("pr:acme/shop#{n}");
         let mut found: Vec<Condition> = self
-            .rows()
+            .rows_at(now)
             .into_iter()
             .filter(|c| c.subject == subject)
             .collect();
@@ -239,7 +247,7 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live(
     let mut cases: Vec<(bool, Option<JobKindStatus>, bool)> = vec![(true, None, true)];
     for kind in ["docs", "test", "impl", "verify", "work", "open", "update"] {
         for status in ["queued", "running"] {
-            cases.push((false, Some((kind, status)), true));
+            cases.push((true, Some((kind, status)), true));
         }
         for status in ["merged", "failed", "cancelled"] {
             cases.push((false, Some((kind, status)), false));
@@ -261,14 +269,18 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live(
         }
         next
     };
-    for (set, red, white) in broken {
+    for (set, red, _white) in broken {
         for &(working, job, handled) in &cases {
             let n = reset(&mut f, set, true, working);
             if let Some((kind, status)) = job {
                 f.job(n, &format!("j{n}"), kind, status);
             }
-            let expected = if handled { (White, white) } else { (Red, red) };
-            is(&mut f, n, expected.0, expected.1);
+            let subject = format!("pr:acme/shop#{n}");
+            if handled {
+                assert!(f.rows().iter().all(|c| c.subject != subject));
+            } else {
+                is(&mut f, n, Red, red);
+            }
         }
         let n = reset(&mut f, set, true, false);
         is(&mut f, n, Red, red);
@@ -290,12 +302,13 @@ fn an_owned_broken_pr_is_white_while_its_lead_waits() {
             "fixing",
         ),
     ];
-    for (set, white) in broken {
+    for (set, _white) in broken {
         let mut f = fixture();
         f.workflow(1, set);
         f.own("pay", 1);
         f.sql("UPDATE sessions SET state = 'waiting', state_label = 'φ: Worker question' WHERE id = 'l-pay'");
-        is(&mut f, 1, White, white);
+        let subject = "pr:acme/shop#1";
+        assert!(f.rows().iter().all(|c| c.subject != subject));
     }
 }
 
@@ -491,11 +504,11 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
     f.idle();
     f.own("pay", 2);
     f.sql("UPDATE sessions SET state = 'working' WHERE id = 'l-pay'");
-    let red = f.row(1);
-    f.idle();
-    let red_after = f.row(1);
-    assert_eq!((red.urgency, red_after.urgency), (White, Red)); // the Lead working, then idle
-    for (c, n) in [(red_after, 1), (f.row(2), 2)] {
+    assert!(f.rows().iter().all(|c| c.subject != "pr:acme/shop#1"));
+    let later = NOW + time::Duration::seconds(61);
+    let red = f.row_at(1, later);
+    assert_eq!(red.urgency, Red);
+    for (c, n) in [(red, 1), (f.row_at(2, later), 2)] {
         assert_eq!(
             c.url.as_deref(),
             Some(format!("https://github.com/acme/shop/pull/{n}").as_str())
@@ -504,7 +517,7 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
         assert_eq!(c.context.as_ref().map(|p| p.as_str()), Some("ctx"));
         assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay"));
     }
-    let c = f.row(3);
+    let c = f.row_at(3, later);
     assert_eq!(
         c.url.as_deref(),
         Some("https://github.com/acme/shop/pull/3")
@@ -514,7 +527,7 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
 
 #[test]
 fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
-    for (pay_works, expected) in [(true, (Red, "conflict")), (false, (White, "updating"))] {
+    for pay_works in [true, false] {
         let mut f = fixture();
         f.sql(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -528,11 +541,16 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
         f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
         f.own("pay", 1);
         f.own("pay2", 1);
-        is(&mut f, 1, expected.0, expected.1);
-        let c = f.row(1);
+        let _ = f.rows(); // detection at NOW
+        if !pay_works {
+            assert!(f.rows().iter().all(|c| c.subject != "pr:acme/shop#1"));
+        }
+        let later = NOW + time::Duration::seconds(61);
+        let c = f.row_at(1, later);
+        assert_eq!(c.urgency, Red);
         assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay2"));
         assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay2"));
-        assert_eq!(f.rows().len(), 1);
+        assert_eq!(f.rows_at(later).len(), 1);
     }
 }
 
@@ -784,5 +802,87 @@ fn a_wake_of_another_plan_or_another_kind_leaves_a_broken_pr_red() {
         f.event("job-merged", "pay", None, None, "{}");
         f.idle();
         is(&mut f, 1, Red, red);
+    }
+}
+
+// ---- pro-d518 & pro-d519 tests -------------------------------------------------------------
+
+#[test]
+fn a_broken_pr_the_lead_can_fix_is_no_inbox_row_until_a_human_is_needed() {
+    for (set, _, _) in BROKEN {
+        let mut f = fixture();
+        // An owned broken PR while handled (e.g. Lead working or waiting, or Job running, or within grace)
+        // must not appear in the Inbox at all.
+        f.workflow(1, set);
+        f.own("pay", 1);
+        let subjects: Vec<_> = f.rows().into_iter().map(|c| c.subject).collect();
+        assert!(
+            !subjects.iter().any(|s| s == "pr:acme/shop#1"),
+            "broken PR appeared in inbox: {subjects:?}"
+        );
+    }
+}
+
+#[test]
+fn a_broken_pr_is_shown_inbox_row_when_unresponsive_after_one_minute() {
+    for (set, red, _) in BROKEN {
+        let mut f = fixture();
+        f.workflow(1, set);
+        f.own("pay", 1);
+        // The Lead was woken / detection occurred at T. After 1 minute has elapsed without response
+        // (no Lead turn, no Job, no fix), the PR appears in the Inbox as a Red row named by its cause.
+        // During the first minute (at NOW), it must not be shown as a red row (it is hidden / in grace).
+        // After 1 minute (NOW + 61s), it must appear as Red.
+        let at_start: Vec<_> = f.rows_at(NOW).into_iter().map(|c| c.subject).collect();
+        assert!(
+            !at_start.iter().any(|s| s == "pr:acme/shop#1"),
+            "must not show in inbox during 1m grace period"
+        );
+        let later = NOW + time::Duration::seconds(61);
+        let c = f.row_at(1, later);
+        assert_eq!(c.urgency, Red);
+        let row1 = c.label.split('\n').next().unwrap();
+        let status = row1.strip_prefix("shop#1 ").unwrap();
+        assert_eq!(status, red);
+    }
+}
+
+#[test]
+fn a_broken_pr_is_shown_inbox_row_when_lead_escalates() {
+    for (set, red, _) in BROKEN {
+        let mut f = fixture();
+        f.workflow(1, set);
+        f.own("pay", 1);
+        // At detection / before escalation, it is hidden:
+        let before: Vec<_> = f.rows().into_iter().map(|c| c.subject).collect();
+        assert!(
+            !before.iter().any(|s| s == "pr:acme/shop#1"),
+            "must not show in inbox before escalation"
+        );
+        // The owning Lead escalated (e.g. Lead is blocked with dialog).
+        f.sql("UPDATE sessions SET state = 'blocked', state_label = 'verdict: Ask human' WHERE id = 'l-pay'");
+        let c = f.row(1);
+        assert_eq!(c.urgency, Red);
+        let row1 = c.label.split('\n').next().unwrap();
+        let status = row1.strip_prefix("shop#1 ").unwrap();
+        assert_eq!(status, red);
+    }
+}
+
+#[test]
+fn a_clean_unposted_pr_behind_base_never_shows_waiting_with_no_reason() {
+    let mut f = fixture();
+    // A clean unposted PR that is behind base (base_contained = 0, clean, not stacked)
+    f.workflow(1, "base_contained = 0, merge_state = 'clean'");
+    f.own("pay", 1);
+    // Under pro-d518 STATUS table row 9, waiting with no reason never shows in the Inbox.
+    // Under row 5a, if behind main it is "behind main" row (not waiting).
+    if let Some(c) = f.rows().into_iter().find(|c| c.subject == "pr:acme/shop#1") {
+        let row1 = c.label.split('\n').next().unwrap();
+        let status = row1.strip_prefix("shop#1 ").unwrap();
+        assert_ne!(
+            status, "waiting",
+            "must never show 'waiting' with no reason"
+        );
     }
 }

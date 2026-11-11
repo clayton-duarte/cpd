@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils.ts";
 import { STOPPED, leadOf, livePlans } from "../../state/archiveNav.ts";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { Badge } from "../components/badge.tsx";
+import { ExternalLink } from "../components/ExternalLink.tsx";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
 import { Empty, EmptyHeader, EmptyTitle } from "../components/empty.tsx";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "../components/hover-card.tsx";
@@ -52,10 +53,8 @@ function WorkflowChip({ wf }: { wf: PlanWorkflowSummary }): ReactElement {
         : "border-mizu/45 bg-mizu/10 text-mizu-bright";
     const suffix = !isMerged && checks !== null && checks !== "none" ? ` · ${checks}` : "";
     return (
-      <a
+      <ExternalLink
         href={wf.pr.url}
-        target="_blank"
-        rel="noopener noreferrer"
         data-part="wf-pr-chip"
         onClick={(e) => e.stopPropagation()}
         className={cn(
@@ -66,7 +65,7 @@ function WorkflowChip({ wf }: { wf: PlanWorkflowSummary }): ReactElement {
       >
         <GitPullRequestIcon aria-hidden="true" className="size-2.5 shrink-0" />
         <span>{`#${wf.pr.number} ${state}${suffix}`}</span>
-      </a>
+      </ExternalLink>
     );
   }
   return (

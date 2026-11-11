@@ -1,4 +1,4 @@
-import { CircleDashedIcon, CircleIcon, LoaderCircleIcon, MinusIcon, PlusIcon } from "lucide-react";
+import { CircleDashedIcon, CircleIcon, LoaderCircleIcon, MessageCirclePlusIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -610,7 +610,19 @@ export function ContextTree(props: {
           dataPart="tree-header"
           hasOverlayControls={false}
           actions={
-            onNewContext === undefined ? undefined : (
+            onAction !== undefined ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                data-action="new-manager"
+                aria-label="New Manager"
+                onClick={() => setNewContextOpen(true)}
+                className="hover:bg-accent"
+              >
+                <MessageCirclePlusIcon aria-hidden="true" />
+              </Button>
+            ) : onNewContext !== undefined ? (
               <Button
                 type="button"
                 variant="ghost"
@@ -622,7 +634,7 @@ export function ContextTree(props: {
               >
                 <PlusIcon size={14} aria-hidden="true" />
               </Button>
-            )
+            ) : undefined
           }
         >
           <span data-part="phi" aria-hidden="true" className="-translate-y-[1px] select-none font-display text-[20px] font-bold leading-none text-fg-strong">φ</span>
