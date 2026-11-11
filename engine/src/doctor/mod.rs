@@ -3,6 +3,7 @@
 //! Read-only, except the migration of a database's first open.
 
 mod check;
+mod cross_machine;
 mod host_runner;
 mod pi;
 mod state;
