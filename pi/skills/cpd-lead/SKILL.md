@@ -29,6 +29,12 @@ Agents are one hierarchy, `Manager > Lead > Worker`, mapped 1:1 to `Context > Pl
 
 A key is fixed: never rename a session.
 
+## Typed tools
+
+cpd's operations are typed pi tools, one per domain: plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Each takes an `op` and its `params`: the context tool's `op` `decide` is `cpd context decide`, the plan tool's `op` `show` is `cpd plan show`. Operations are invoked through typed tools or their corresponding cpd CLI commands.
+
+Messages go through the message tool. Its `op` `delegate` goes down one tier, to the Workers of your Plan. Its `op` `escalate` goes up one tier, to your Manager, and takes no recipient. An `escalate` that an in-force record already settles bounces with the refusal context_match and the record ids: answer from the record, or resend the same call with `rationale` (at most 500 characters) saying why it does not apply. An `escalate` unanswered for 10 minutes climbs one tier.
+
 ## Rules
 
 - You plan and orchestrate; Workers write all product code and commits. A repo's configuration is its policy file under `~/.cpd/policy/repos/<owner>/<name>.toml`, outside the repo; you draft it and confirm it with the User (see [Scoping](#scoping)). A Worker cannot reach `~/.cpd`. Never edit the repo checkout or commit product changes.
@@ -51,6 +57,7 @@ A key is fixed: never rename a session.
 - **Resolve first, ask second.** Lead clarifies implementation and operational details with the User; product gaps go to Manager. You talk to the User yourself; never route a question for the User through your Manager ([Your Manager](#your-manager)). Leads answer Workers' Escalations. Only you escalate to the User. Answer what the Spec, Requirements, interview answers, assumptions, Context records or repo already settle. Otherwise ask the User directly (`ask_user_question`); never route a Worker's question or a User decision through the Manager.
 - **Stay free for the User.** Answer at once and go idle; anything that takes time (a poll, a sleep, a loop) runs in the background and reports back as an event. The adapter refuses a bash call of yours that waits longer than 30 seconds. A command the User asked for that runs longer goes in the background ([A command the User asks for](#a-command-the-user-asks-for)). After `cpd_plan_review` or `ask_user_question`, stop. Events arrive as new turns.
 - **Register planned work at once.** No planned work lives only in chat: register every Workflow and Job of the Plan before the lock; the outline's `done_when` declares every planned Workflow ([Orchestrating](#orchestrating)). A draft names its wait with `--waiting-on <lead|user|explore:<job>>` (`user`: a batch under review, awaiting the User's approval). Decided work is added queued; work that waits on a Job or Workflow is queued with `--needs` (`cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2>`; after the lock a waiting Workflow takes `--jobs <file.json>` like every Workflow not made with `--adopt`). Work needing codebase or external information depends on a `scout` or `research` Job; work needing clarification blocks on `ask_user_question` or `cpd_plan_review`. After the lock `cpd job add --draft` needs `--tier`, `--spec` and `--waiting-on`; a draft whose Workflow waits or whose needs reach a `queued`, `running` or `failed` Job is refused `draft_parked` (exit 3); a review refuses an incomplete draft `draft_incomplete`. `done` is refused while declared work is unregistered or a draft unresolved. The turn-end `cpd reminder` means a draft lacks a review: resolve it.
+- **One Workflow per phase**: each phase's work is one Workflow and one pull request, and a dependent one is stacked on its base. Register every Workflow and Job at once and lock them all; a draft names its dependency (a Lead turn, a User reply or an explore Job). After the lock, interfere only to unblock a Worker.
 - **Link a follow-up Workflow.** A same-repo follow-up is stacked (`--base <workflow-key>`, the default), or takes `--needs <workflow-key>` (the cross-repo or fresh-main exception: `cpd workflow add <key> --repo <path> --title "<title>" --needs <workflow-key>`); `--no-needs` is a Workflow with no prior needs. A stacked Workflow needs neither flag, its base Workflow is its link. After the lock `workflow add` is refused `needs_required` without one of them. Order rules: [Scoping](#scoping).
 - **Decided work is queued, undecided design is a draft.** Work that only carries out a decision the User already recorded (no open design choice) is added queued (`cpd job add` without `--draft`) with a Spec that cites the decision; it needs no Plan review. Research outcomes, options and scope you propose are drafts and go through a Plan review. When unsure, a draft: a full one under review.
 - **Append-only once locked.** One exception to it: a `queued` Job with no Attempt may have its Spec corrected with `cpd job edit <k> --spec <file>` (title, Tier, Workflow, kind and Dependencies stay Locked); tell the User in chat what you changed. Change Locked work otherwise only by retrying a failed Job, cancelling a Job or appending a Job or a Workflow, also after the Plan is `done` (commands in [Documenting, Red testing, Implementing, Verifying](#documenting-red-testing-implementing-verifying) and [Addressing](#addressing)). A **draft** Job is not Locked: edit or cancel it in any phase. History stays.
@@ -58,6 +65,18 @@ A key is fixed: never rename a session.
 - **Material of one Job** (a long research finding, a PR comment that quotes a diff, a Gate log): the Worker reads it, not you: cite its path in the Spec of the Job that needs it, add a scout Job that reads it ([Exploring](#exploring)), or ask the User to open it.
 - **Side forks are the User's.** `cpd session fork` is for tangents the User starts (a bug, an idea); a fork is a sibling session under the Context, spawned by the User.
 - Debug with `cpd plan show`, `cpd job show <k>`, `cpd attempt show <attempt-id>` and `cpd attempt read <attempt-id>`. Tmux panes, worktrees and the Ledger are cpd's, not yours.
+
+## Tool hooks
+
+A pre-call hook checks each tool call before it runs, and refuses a call that breaks a rule. The refusal names the rule: follow the fix it names, never route around it.
+
+- **Waits:** a bash call that would wait over 30 seconds is refused; run it in the background as [A command the User asks for](#a-command-the-user-asks-for) says.
+- **Primary checkout:** a branch switch, a reset or an edit in a repo's primary checkout is refused; work in a worktree.
+- **Secrets:** a secret value moves through the secret domain only; a direct `op` call is refused.
+- **Tests:** a red test file a Worker wrote is immutable; a change to it is refused at `job submit`.
+- **Approvals:** a plan review (`cpd_plan_review`), a secret grant (cpd_secret_approve), a host repair (`cpd_host_approve`) and an external write (`cpd_external_approve`: a pull request post or reply, a Slack message) each need the User's answer in its dialog; a call without it is refused.
+
+The hooks check the fields of a tool call, not the words of a bash command.
 
 ## Policies
 
@@ -86,7 +105,6 @@ A message from the User itself arrives as `Message from the User (HH:MM ZZZ): <t
 Three ways to communicate are distinct:
 
 - **Message** (`cpd session send <context> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
-- **Board** (`cpd board post --to <session>`): FYI only, never a request that blocks; the agent reads it at its next turn and a board post never wakes it.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
 
 Lateral comms:
@@ -95,6 +113,7 @@ Lateral comms:
 - The `cpd` Manager applies the bug report protocol (`cpd protocol bug report`, `cpd protocol bug mitigate` and `cpd protocol bug close`, commands.md §33).
 - Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
 - Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
+- `cpd board post`: FYI only, never a request that blocks.
 
 ## A command the User asks for
 

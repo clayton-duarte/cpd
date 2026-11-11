@@ -24,6 +24,7 @@ import { CHANNELS, UPDATE_BOOTSTRAP_CHANNEL, UPDATE_STATE_CHANNEL, type UiMode }
 import { createListenerFactory, createWsServer, WS_PATH } from "../server/ws.ts";
 import { resolveLoginPath, stripSessionEnv } from "./env.ts";
 import { createHealthRecorder } from "./health.ts";
+import { SHELL_ABI_VERSION, SHELL_VERSION } from "./version.ts";
 import { attachHealth } from "./health-main.ts";
 import { registerIpc } from "./ipc.ts";
 import { createModeController } from "./mode.ts";
@@ -297,21 +298,24 @@ async function main(): Promise<void> {
       }
     };
     const setMode = (mode: UiMode): Promise<void> => controller.setMode(mode);
-    const watchdog = createPreviewWatchdog({
-      now: () => Date.now(),
-      readHealth,
-      pidAlive: (pid) => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch (error) {
-          return (error as NodeJS.ErrnoException).code === "EPERM";
-        }
+    const watchdog = createPreviewWatchdog(
+      {
+        now: () => Date.now(),
+        readHealth,
+        pidAlive: (pid) => {
+          try {
+            process.kill(pid, 0);
+            return true;
+          } catch (error) {
+            return (error as NodeJS.ErrnoException).code === "EPERM";
+          }
+        },
+        setMode,
+        showErrorBox,
+        log: async (entry) => console.log(`preview-watchdog ${JSON.stringify(entry)}`),
       },
-      setMode,
-      showErrorBox,
-      log: async (entry) => console.log(`preview-watchdog ${JSON.stringify(entry)}`),
-    });
+      { loadingGraceMs: 60_000 },
+    );
     const client = createPreviewClient({
       root,
       worktree,
@@ -619,6 +623,8 @@ async function main(): Promise<void> {
       file: path.join(cpdHome, "run", "preview-health.json"),
       crashLog: path.join(cpdHome, "run", "preview-crash.log"),
       pid: process.pid,
+      shellAbi: SHELL_ABI_VERSION,
+      shellVersion: SHELL_VERSION,
       now: () => new Date(),
       fs: {
         readFile: (f) => fs.readFile(f, "utf8"),

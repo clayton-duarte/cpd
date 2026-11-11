@@ -58,8 +58,15 @@ export class CursorController {
 		this.phase = 0;
 		this.bound = true;
 		this.subscribe();
-		hookMethod(Editor.prototype, "render", "editor.cursor", (self, args, original) =>
-			this.render(self, args, original));
+		const editorProtos = [Editor.prototype];
+		const customEditorSuper = Object.getPrototypeOf(CustomEditor.prototype);
+		if (customEditorSuper && customEditorSuper !== Editor.prototype && !editorProtos.includes(customEditorSuper)) {
+			editorProtos.push(customEditorSuper);
+		}
+		for (const proto of editorProtos) {
+			hookMethod(proto, "render", "editor.cursor", (self, args, original) =>
+				this.render(self, args, original));
+		}
 		// CustomEditor takes some keys before Editor does; Editor's wrapper skips it so a key holds the cursor once.
 		hookMethod(Editor.prototype, "handleInput", "editor.cursor.input", (self, args, original) =>
 			self instanceof CustomEditor ? original.apply(self, args) : this.input(self, args, original));

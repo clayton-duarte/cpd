@@ -36,6 +36,16 @@ pub use notify::{escalation, job_event};
 pub use select::{Event, Selection, highest_id};
 pub use typed::{BasePull, Counts};
 
+/// Notify the core engine at `$CPD_HOME/run/core.sock` of newly committed events (contract §5.8).
+/// Best effort: fails silently if no engine is listening or socket unreachable.
+pub fn notify_committed(home: &crate::home::CpdHome) {
+    let sock = home.root().join("run/core.sock");
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(sock) {
+        let msg = "{\"method\":\"events.committed\",\"params\":{}}\n";
+        let _ = std::io::Write::write_all(&mut stream, msg.as_bytes());
+    }
+}
+
 /// How many Events one query reads, and `follow`'s batch (§5.4).
 const BATCH: i64 = 500;
 

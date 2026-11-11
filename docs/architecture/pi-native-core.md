@@ -224,6 +224,7 @@ graph TD
 - **Scope**: Add WebSocket listener (`/cpd-ws`) and Unix domain socket (`run/core.sock`) to `cpd watch`. Implement tokio broadcast ledger event stream.
 - **Removals**: Deprecate `cpd cockpit serve`.
 - **Tests**: WebSocket connection, snapshot handshake, cursor resume, and live event push tests.
+- **Contract**: [docs/contract.md §5.8](../contract.md) (endpoints, handshake, cursor, live stream).
 
 ### Plan 2: `pi-extension-tools` (Typed pi Tools from Core Schemas)
 - **Scope**: Use `ts-rs` / `schemars` from `core-ts-types` (pro-d514) to generate TypeScript tool definitions. Implement pi extension connecting to `run/core.sock`. Export 12 domain tools (`cpd_plan`, `cpd_job`, `cpd_context`, `cpd_message`, etc.). Implement write-time curation hook (pro-d531) and escalation context bounce check (pro-d534). Ensure system prompt byte-stability (pro-n418).

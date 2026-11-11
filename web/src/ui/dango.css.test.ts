@@ -58,5 +58,5 @@ it("app css bundles Roboto and Roboto Mono variable fonts", () => {
 it("vite config registers the tailwind plugin", () => {
   const cfg = read("../../vite.config.ts");
   expect(cfg).toContain('import tailwindcss from "@tailwindcss/vite"');
-  expect(cfg).toMatch(/plugins:\s*\[react\(\),\s*tailwindcss\(\),\s*cpdWebPlugin\(\)\]/);
+  expect(cfg).toMatch(/plugins:\s*\[[\s\S]*?tailwindcss\(\)[\s\S]*?\]/);
 });

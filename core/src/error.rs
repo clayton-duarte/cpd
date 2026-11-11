@@ -160,6 +160,7 @@ error_codes! {
     ShapingManagerOnly = "shaping_manager_only" => Usage,
     PlanOtherContext = "plan_other_context" => Usage,
     ShapingExploreOnly = "shaping_explore_only" => Usage,
+    TextTooLong = "text_too_long" => Usage,
 
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
@@ -282,6 +283,10 @@ error_codes! {
     PresetModelUnoffered = "preset_model_unoffered" => Refused,
     // `protocol bug close` without a root-fix link and a regression test (air-d107; commands.md §33.3).
     RootFixRequired = "root_fix_required" => Refused,
+    // Context curation and message bus (contract §5.9).
+    NearDuplicate = "near_duplicate" => Refused,
+    NotPermitted = "not_permitted" => Refused,
+    ContextMatch = "context_match" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,

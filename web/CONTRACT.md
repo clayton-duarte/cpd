@@ -670,7 +670,7 @@ export interface PlanViewModel {
 }
 ```
 
-Notes: live Job objects carry no `workflow` key although `docs/commands.md:883` says so (`scout-cockpit §1.2` "Verified divergence"); the Job's Workflow is therefore taken from membership in `workflows[].jobs`; a Job in no Workflow (explore) has `workflow: null`. A Job whose `needs` is absent is `[]`.
+Notes: live Job objects carry no `workflow` key although `docs/commands.md:883` says so (`scout-cockpit §1.2` "Verified divergence"); the Job's Workflow is therefore taken from membership in `workflows[].jobs`; a Job in no Workflow (explore) has `workflow: null`. A Job whose `needs` is absent is `[]`. The Workflow fields `base_workflow` (not yet in the type above) and `needs` are specified in §28.
 
 ### 5.3 Attention Inbox
 
@@ -1455,7 +1455,7 @@ Behaviours (tested with a fake `ViteDevServer` and fake boundaries):
 - `cpd:c2s` payloads are passed to `hub.handle(data)` unparsed; a rejected `handle` is logged, never thrown into Vite. **Amended by 15.1:** the same `hub.handle(data)` call serves the WebSocket endpoint's incoming text frames, and the hub answers a `ping` client message with `pong` at once (15.2), with no cockpit, backend or parse error involved.
 - Closing: on `server.httpServer?.once("close")` (and the plugin's `closeBundle` hook, whose dev-server timing is unverified, O17) the plugin closes every connection, calls `cockpit.stop()`; idempotent. Plugin starts services on server start and closes them on server close.
 
-`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code.
+`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code. **Superseded for the port by pro-d541** (§15.1 "Fixed ports"): the dev server binds `0.0.0.0:33333` with `strictPort`. **Amended by 28.2 (Plan `webui-ext-links`):** the plugin list also holds `cpdFavicon`, and the plugin serves `/favicon.svg` and `/favicon.ico` from memory, two static middlewares of its own.
 
 ### 6.7 ui-cockpit `web/src/ui/cockpit/`
 
@@ -2154,8 +2154,12 @@ Normative. ADR 0015 option B (air-d46) decides the three points below; docs/cont
 
 - **One endpoint.** One WebSocket endpoint, path `/cpd-ws`, on the pinned `ws` package (<https://github.com/websockets/ws>), wrapping the one `newConnection(send)` factory (6.6): one hub per accepted socket, one JSON text frame per wire message both ways (§4). The Electron main process binds it on `127.0.0.1` on a port the OS chooses (bind port 0); the Vite dev server hosts the same endpoint same-origin on its httpServer (6.6, amended by 15.1), replacing the `cpd:c2s`/`cpd:s2c` hot route. No test opens a real port (A6): the server socket is injected like the durable client's `SocketFactory` (6.4).
 - **How the renderer learns the URL.** The desktop renderer reads the resulting `ws://127.0.0.1:<port>/cpd-ws` from the preload `contextBridge` — one read-only member of `window.cpdElectron` (`webSocketUrl`), handed over once at mount. No IPC channel carries WebUI data frames; `web/src/electron/transport.ts` (`createElectronTransport`) and the per-sender IPC hub wiring are deleted, and so is the dev-only hot transport of `web/src/main.tsx`. The browser build connects same-origin `/cpd-ws` on the Vite dev server. A remote thin client reaches the endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
-- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in.
+- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in. **Amended by pro-d543** for ports 3333 and 33333: the accepted set is widened to LAN hosts and narrowed to those two ports, as "LAN origins" below states.
 - **The client transport.** `createWebSocketTransport` implements the unchanged `Transport` interface (6.1): `connect()` begins one attempt, `open` arrives as `onStatus("open")`, `send` throws `WebError("internal")` when not open, `close` is final. A socket `close` or `error` — including a heartbeat failure (15.2) — is a real `closed` status, so the renderer's existing backoff and re-subscribe run (6.2): every reconnect resyncs by full `cockpit.snapshot`, no delta protocol and no `seq` resume. The transport carries the client side of the heartbeat and no reconnect logic.
+
+- **Fixed ports (pro-d541).** The production WebUI server (built renderer and `/cpd-ws`) is a supervised engine service on `0.0.0.0:3333`. The preview Vite server is bound to `0.0.0.0:33333` with `strictPort`. Both are described in docs/ui-preview.md, "WebUI ports", and web/ELECTRON.md, "WebUI ports". The production page is served from `http://localhost:3333`, so its `/cpd-ws` connection is same-origin. The frames and the path do not change.
+- **LAN origins on the fixed ports (pro-d543; amends "The Origin check" above).** On ports 3333 and 33333, the endpoint accepts a connection whose `Origin` host is one of: `localhost`, a loopback address (`127.0.0.1`, `[::1]`); an RFC 1918 private IPv4 address (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`); an IPv6 unique-local address (`fc00::/7`); or a `.local` mDNS hostname. The `Origin` port must be exactly 3333 or 33333, so an `Origin` with no explicit port is rejected. The scheme must be plain `http`; an `https` Origin is rejected. Absent, `null` and `file://` Origins are accepted as above. Every other Origin is rejected before any hub is created. Loopback on any other port, which the earlier rule accepted, is no longer accepted. There is no token and no TLS, by decision. This is not access control: the `Origin` header is set by a browser, and any non-browser client can send any `Origin`, so a LAN peer that is not a browser is not stopped by this rule. That risk is accepted by the decision and stated here. Status: decided; as of this amendment the code accepts loopback on any port and no LAN host (`web/src/server/ws.ts`, `acceptsOrigin`).
+- **Port in use fails loud (pro-d542).** A server that must bind 3333 or 33333 while another process holds that port exits non-zero and never falls back to another port. Before it exits, it names the holder by process name and PID. The holder is read with `lsof -nP -iTCP:<port> -sTCP:LISTEN`, and with `ss -H -ltnp 'sport = :<port>'` when `lsof` is not available. If neither names the holder, the exit still names the port. Status: decided; as of this amendment no such check exists in the code, and the message is the implementing change's to write.
 
 ### 15.2 The heartbeat and the stall watchdog (air-d46)
 
@@ -2478,3 +2482,194 @@ Normative. Directives pro-d513 and pro-d514 decide the points below: core is the
 - `web/src/protocol/tier.ts` exports no tier grammar constants (`MODEL_LETTERS`, `EFFORTS`, `TIER_COUNT`) or ladder math (`parseTier`, `tierIndex`, `tierAt`).
 - `web/src/ui/dialogs/SettingsDialog.tsx` derives available model and effort options and performs coherent boundary linking directly from the catalog and role ranges returned by core, rather than hardcoded arrays or local ladder indexing.
 - Core's ladder order (J < G < H < S < O, efforts 0 < 1 < X < 2 < 3 < 4) and role defaults/ranges are defined in `core/src/config/tier.rs` and documented in docs/contract.md §9.
+
+## 26. Direct WebSocket connection to core and the pi session stream (Plan `webui-core-ws`; Job `webui-core-ws-docs`)
+
+Normative. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-d522, pro-d527 (WebUI connects to core directly), pro-d528, pro-d541 (port 3333); docs/contract.md §5.8 (core's `/cpd-ws` and `run/core.sock`) and §6.21 (the pi live-stream socket). The Lead's answer to escalation `webui-core-ws-docs-a1-q1` decides §26.1. Where this section and §5, §13, §18 of this file, or docs/contract.md §5.5 and §5.6 disagree, this section wins (recency; those sections are superseded at §26.3 and their text is not edited).
+
+### 26.1 The data connection: direct to core `/cpd-ws`
+
+- **The endpoint.** The WebUI opens one WebSocket to core, `ws://127.0.0.1:<port>/cpd-ws`, the endpoint of docs/contract.md §5.8. Core binds `127.0.0.1` only, on a port the OS chooses. There is no proxy on the data path: the WebUI does not connect to port 3333 for data.
+- **Where the port comes from.** The Lead's answer (escalation `webui-core-ws-docs-a1-q1`): the engine records the bound port in `$CPD_HOME/run/core.port`, and the WebUI reads it from there. The answer also allows an environment variable; this section defines one source only, `run/core.port`. **Open, flagged:** docs/contract.md §5.8 open point 2 ("How a client learns the WebSocket port") is still open there, and does not name `run/core.port`. The core-ws-engine Job must write the file and §5.8 must be amended to say so; this section does not amend §5.8.
+- **Port 3333.** Port 3333 is the WebUI production HTTP and static server only (pro-d541: a supervised Node service under the engine, bound on `0.0.0.0:3333`, serving the renderer). Under the Lead's answer it does **not** carry `/cpd-ws`: pro-d541's clause that it serves `/cpd-ws` is superseded by that answer (recency).
+- **Who hands over the URL.** The page cannot read a file, so the process that serves the page reads `run/core.port` and gives the renderer the `ws://127.0.0.1:<port>/cpd-ws` URL on load. The Lead's answer does not name the hand-over; this is an **inference** that the implementation Job must confirm. In Electron the preload `contextBridge` carries the URL (§15.1, one read-only member, no IPC data channel), as before.
+- **Origin.** The Origin rule of ADR 0015 point 1 applies unchanged (docs/contract.md §5.8): an absent, `null`, `file://` or loopback Origin is accepted; any other is refused before a connection's state is created. Consequence: the page loaded from `http://127.0.0.1:3333` or `http://localhost:3333` is accepted; a page loaded from another machine's address (for example `http://<host>:3333` over the LAN) is refused. This is a fact of the rule, not a new rule.
+- **Framing.** One JSON text frame per message, as §5.8. The renderer speaks core's two requests, with a `{"id", "method", "params"}` request and an `{"id", "result", "error"}` reply: `snapshot` and `events.subscribe`. Core then sends one `{"method": "event", "params": {"event": <Event>}}` notification per Event.
+- **The handshake and the reconnect** are §5.8's: the client sends `snapshot`, renders it, keeps the returned `cursor`, and sends `events.subscribe` with that cursor. On every reconnect it does the same with the last cursor it processed. This replaces §15.1's "every reconnect resyncs by full `cockpit.snapshot`" for the core connection, because §5.8 is the later record (pro-d527). The transport still carries no reconnect logic of its own (§15.1); the renderer's existing backoff runs.
+- **Events into the store.** Each `event` notification is an Event row (the shape of `cpd events follow`, docs/contract.md §5.2). The renderer's store applies it through the reducer, as it applies a `cockpit.patch` today (§4).
+
+**Open, not fixed by this section:**
+1. The content of `snapshot` (docs/contract.md §5.8 leaves it to this Plan).
+2. The mapping of core's `snapshot` and `event` messages onto the renderer's `cockpit.snapshot` and `cockpit.patch` wire messages (§4). Until the implementation Job fixes it, the store's shapes are unchanged.
+3. Whether core's `/cpd-ws` answers the `ping` and `pong` heartbeat of §15.2. docs/contract.md §5.8 defines no heartbeat.
+
+### 26.2 pi session transcript streaming into the WebUI reactive store
+
+- **Two sources, one per Session kind.** A tmux pi Session streams from its live socket, `${CPD_HOME}/run/pi/${CPD_SESSION}.sock` (docs/contract.md §6.21, protocol 1). A durable Session streams from the durable host's socket, `run/host/<id>.sock` (docs/contract.md §6.14, protocol 2). A durable Session has no `run/pi/` socket (§6.21).
+- **Who connects.** A browser cannot open a Unix socket, so the Node side of the WebUI (the process of §26.1 that serves the page) connects to the Session's socket, and forwards its frames to the renderer over the one WebSocket of §15. Pi-native-core §5.2 names the WebUI as the reader; read literally, that cannot run in a browser. **Assumption, decided and stated (reversible, doc-only):** the Node side is the reader. The alternative, core relaying pi's frames over `/cpd-ws`, would add a core method that docs/contract.md §5.8 does not define.
+- **Frames.** The renderer receives the frames of §6.21 unchanged in content (`hello`, `inflight`, `agent_start`, `message_start`, `delta`, `message_end`, `tool_start`, `tool_update`, `tool_end`, `agent_end`). Their handling is §12 of this file (L1 to L6, A6), which is not restated here: a live item is ephemeral and the committed `.jsonl` line replaces it.
+- **The committed record.** The Session's `.jsonl` remains the record and is tailed as today (§12.4). Live frames never write the transcript.
+- **Store.** Frames become items in the reactive store by the reducers of §12.3 (`web/src/state/{transcript,store,connection}.ts`). `connection.ts` coalesces transcript messages as it does today, unchanged.
+- **Lifecycle.** The socket is listened to from `session_start` to `session_shutdown` (§6.21). The Node side retries while the socket is absent (§12, L2, every 1 s) and stops on detach. The socket is not an Event and not a core method.
+
+### 26.3 Removal of the `cpd` argv shell-outs and the cockpit stream
+
+The implementation Job (`webui-core-ws-impl`) deletes these. This section names them; the Job makes the deletion.
+
+- **`web/src/server/cpd-argv.ts`** (`toArgv`, `CpdCommand`) and every call site that builds a `cpd` argv: the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, the Electron paths `web/src/electron/update/`, `pty.ts` and `pty-tabs.ts`, and the call-site modules `web/src/server/cockpit/`, `web/src/server/pi/backend.ts` and `web/src/server/durable/backend.ts`, as far as they spawn `cpd`. The reads and actions they carried move to the core `/cpd-ws` messages of §26.1; each action's replacement is the Job's, and the Lead decides any that core does not yet define.
+- **`web/src/server/cockpit/stream.ts`** and the `cpd cockpit serve` child process, with its `hello`, `snapshot`, `event` and `error` frames. `cockpit serve` is deprecated by Plan 1 (docs/contract.md §5.5, §5.8); the stall watchdog of §15.2 and the `cpd:c2s`/`cpd:s2c` hot route are deleted with it.
+- **The argv contract**: §18 of this file and docs/contract.md §5.6, with the Gate test `web/src/server/cockpit/argv-contract.test.ts` and `cpd argv-check` (its interface, docs/contract.md §5.6).
+- **Superseded, not edited:** §13 (cockpit stream), §18 (argv contract), §15.2 (the stall watchdog), docs/contract.md §5.5 and §5.6 for the web. Each carries its own history, so none is rewritten.
+
+**Open, flagged:** pi-native-core §2.6 also lists git (`plugin.ts:361`), tmux (`status.ts:38`) and the classifier (`completion-classify.ts:91`) as shell-outs from the web. Plan 4's removal list names only the cpd-argv layer and `cockpit/stream.ts`. Whether the other three leave the web in this Plan is not stated; this section does not remove them.
+
+### 26.4 Verification and test coverage
+
+The core WebSocket connection and session streaming pipeline are tested and verified by:
+- `web/src/server/core-ws.test.ts`: verifies `CoreWsClient` connecting to `/cpd-ws`, performing `snapshot` synchronization, keeping cursors, subscribing via `events.subscribe`, and streaming live events.
+- `web/src/ui/chat/SessionStream.test.tsx`: verifies `SessionStream` rendering transcript items (user and assistant messages) from a live stream source.
+
+Both test suites pass cleanly under Vitest.
+
+## 27. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
+
+Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
+
+### 27.1 Who writes a token
+
+- Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
+- The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The Electron main process's runs in `before-quit`. Neither removes a file of another pid.
+
+### 27.2 Lifecycle cases
+
+| Event | Effect on the files | Effect on the tokens |
+|---|---|---|
+| A second server starts while another runs (CPD.app and the preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
+| One server quits (`before-quit` or `closeAll`) | Only its own file is removed | The other server's token still verifies |
+| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running CPD.app server is unaffected |
+| A server exits without its close (crash, or `app.exit(0)` of the watchdog's rollback relaunch, `web/ELECTRON.md`) | The file stays until the next start sweeps it | Its token is not accepted once its pid is dead |
+| The packaged app relaunches after an update (pro-d502) | A new process, a new file | As a restart |
+| SIGUSR1 reloads the window in place (`web/ELECTRON.md`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
+
+### 27.3 Verifiers
+
+The verifiers read the directory at each check, as docs/contract.md §6.16 says: the durable host (`pi/durable-host/run.ts`, `webuiVerified`, at each submit) and the cpd CLI (`core/src/session/send.rs`, for `cpd session send --origin webui`). Both accept a presented value when it matches a file of a live pid. The rule is written once, in §6.16; neither verifier keeps its own copy of it in a document.
+
+### 27.4 Status and limits
+
+- Status: decided by the Lead for bug b13; as of this amendment the code still writes and reads the single file `run/webui-token`. Job `webui-token-impl` makes the code match this section. Until it lands, the statements above describe the target, not the running code.
+- Stale documents: `web/ELECTRON.md` ("WebUI token") and `docs/ui-preview.md` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
+- Limits, as §6.16 states them: a pid reused by an unrelated process after a crash, before the next start sweeps its file, is accepted until the sweep; a same-user process can read the files (the residual boundary of §6.16).
+
+---
+
+## 27. cpd notices are attributed to cpd, never to the User (bug b12)
+
+Normative. Bug b12 decides the points below. Where this section and §10.1 differ, this section stands: its rule for §10.1(a) (a `session-message` with `data.from` null is a `UserItem`) holds only for a message the User sent. The attribution rule and its open point are docs/contract.md §2.2 "Attribution of cpd's notices"; where the two differ, docs/contract.md wins.
+
+### 27.1 No cpd notice renders as "You"
+
+- A `session-message` that cpd wrote itself (the bug wake `Bug <id> is open`, the breach alert `Bug <id> breached`, and every other message of docs/contract.md §2.2 "Attribution of cpd's notices") is a cpd fold row, never a `UserItem`: it has no `You` label and does not set `facts.lastRole` to `"user"`.
+- Only a message the User sent is a `UserItem`, with its `You · HH:MM` row (6.8). The running code does not meet this yet: until the wire marker of docs/contract.md §2.2 is decided, a from-null message cannot be told apart from the User's, and §10.1(a) maps every one of them to a `UserItem`.
+
+### 27.2 The cpd row
+
+- The row is the fold of §10.1(b): `FoldItem` with `foldKind` `"cpd"`, `defaultOpen` false, `body` the message text, and `title` its first line cut to `FOLD_TITLE_MAX`. Its DOM is the `FoldRow` of 6.8 with `data-fold="cpd"`.
+- No text in the row says the User sent it.
+
+### 27.3 Limits
+
+- Stated plainly: the running code is unchanged by this section. The claim that it maps a cpd notice to the User is read from the source (`web/src/server/pi/jsonl.ts:301`, `pi/lib/render.ts:62`), not seen in a running browser (unverified).
+- The marker is not decided here (docs/contract.md §2.2, open point). Until it is, the rule of 27.1 cannot be implemented, and the stated limitation of §10.1 stands.
+
+
+## 28. Favicon: build-time generated ICO and SVG (Plan `webui-ext-links`; pro-d99, pro-d544)
+
+Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI gets a favicon generated at build time from one source, `web/build/icon/cpd-icon.svg`, with an SVG favicon and an ICO fallback, both linked from `web/index.html`. Survey (the Plan's explore artefact `survey-favicon.md`): no favicon is served today. `web/public/` does not exist, and `web/index.html` has no icon link.
+
+### 28.1 Source and outputs
+
+- The source is `web/build/icon/cpd-icon.svg`: a self-contained SVG with a 1024 by 1024 `viewBox`, the Electron app icon. It is the only favicon source. No copy of it is committed under `web/`, because a committed copy is the hand-kept copy that pro-d99 forbids.
+- The outputs are generated, never committed:
+  - `favicon.svg`: the source bytes, served as the SVG favicon.
+  - `favicon.ico`: the fallback. One ICO file with PNG-encoded entries at 16, 32 and 48 px, rasterised from the source. The sizes are a Phase choice of this section.
+- The ICO header is `00 00 01 00`, then a little-endian count of entries equal to the number of sizes.
+
+### 28.2 Generation
+
+- It is wired in `web/vite.config.ts` only, as one Vite plugin (`cpdFavicon`). That file is the one the Job `web-impl` may touch for it.
+- One generator function produces both files. It runs once per process, so the dev server and `vite build` serve the same bytes.
+- In `vite build` the plugin emits both files into the output root (`generateBundle`), so `dist/favicon.svg` and `dist/favicon.ico` exist.
+- In `vite` dev the plugin serves both files from memory (`configureServer`, registered before Vite's own middlewares, so `/favicon.ico` is not answered by the HTML fallback).
+- No file is written into the source tree. Nothing generated is committed, so no `.gitignore` entry is needed.
+- The output is deterministic: the same source bytes give byte-identical outputs on every run (Idempotence).
+- It fails loud. A missing source, or a failed rasterisation, stops the build or the dev server with the error. No fallback icon is served.
+- The rasteriser and the ICO packer are new dependencies, and A2 and pro-d17 freeze `web/package.json`. This section does not choose them; 28.6 item 1 is the decision the Lead takes before `web-impl` adds one.
+
+### 28.3 Links in `web/index.html`
+
+The `<head>` of `web/index.html` gets these two links after the `<title>`, in this order:
+
+```html
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
+```
+
+The SVG is the preferred icon. The ICO is the fallback for a browser that does not take an SVG favicon. A browser requests `/favicon.ico` even without a link, so the ICO path is served either way.
+
+`web/electron.html` is the Electron renderer entry, not `web/index.html`, and it gets no icon link in this section. The Electron app icon comes from electron-builder (`web/electron-builder.yml`).
+
+### 28.4 Serving
+
+- Dev (`vite`, port 5173, `strictPort`): `GET /favicon.svg` answers 200 with `image/svg+xml`, and `GET /favicon.ico` answers 200 with `image/x-icon`.
+- Build (`vite build`): `dist/favicon.svg` and `dist/favicon.ico` sit at the output root, so a static server of `dist/` answers the same paths with 200.
+- Tests (Job `web-tests`, `web/src/ui/favicon.test.ts`), each with no real server, socket or file watcher (A6):
+  - `index.html` has the two links of 28.3, read as text, the pattern of `src/electron/electron-html.test.ts`.
+  - The generator's ICO has the header and the entry count of 28.1, and its SVG is the source bytes.
+  - The dev middleware answers the two paths with 200 and the content types of 28.4, against a fake `ViteDevServer`.
+  - The build emits both files, against a fake plugin context.
+
+### 28.5 Limits (stated plainly)
+
+- Unverified: how the icon renders at 16 and 32 px. The source has a 100 px margin and a blurred shadow, and the glyph may be illegible at 16 px. If it is, a favicon-specific SVG is a new decision for the Lead, not a silent variant of the source.
+- Unverified: whether Safari takes an `image/svg+xml` favicon.
+
+### 28.6 Open points (not decided here)
+
+1. The rasteriser and ICO packer: which packages, at which exact versions. Adding them lifts the freeze of A2 and pro-d17 for those lines. Candidates named by the survey, unverified (no network): `@resvg/resvg-js` and `png-to-ico`. The Lead decides before `web-impl` runs.
+2. The preview servers on ports 3333 and 33333 are outside `web/` (`scripts/preview-web.sh`, not read). Unverified whether they serve the favicon paths. If they do not, `/favicon.ico` answers 404 there.
+3. The icon at 16 and 32 px (28.5).
+
+## 28. Workflow dependency fields on WorkflowView (Plan `plan-dag-edges`; pro-d100, pro-d513, pro-d514, pro-d551)
+
+Normative for the target. **Status at this commit: not built.** `WorkflowView` (5.2) has no `base_workflow` yet, and `buildPlanView` does not copy it. The Job `web-impl` makes this section true. Core already sends both fields; no core change is part of this section.
+
+### 28.1 The field
+
+- `WorkflowView.base_workflow: string | null` (`web/src/protocol/cockpit.ts`), mapped in `buildPlanView` (`web/src/server/cockpit/readmodel.ts`) from the `base_workflow` key of each `workflows[]` object of `cpd plan show`. The mapping is direct: the value passes through unchanged, and `null` stays `null`. The client never derives it from `base`.
+- The name is snake_case, as core sends it, so no rename layer sits between core and the view. The other `WorkflowView` fields are camelCase (`jobKeys`). This is a deliberate deviation for this one field, not a precedent.
+- `base` keeps its meaning: the branch string (`main`, or a Lead Branch). `base_workflow` is a different value and is never compared with a branch name.
+
+### 28.2 Value (verified by reading core)
+
+- Format: `<plan>/<key>`, for example `pay-1/api`. Never a bare key.
+- Core derives it; nothing is stored. The `plan show` query selects `(SELECT q.plan || '/' || q.key FROM workflows q WHERE q.repo = workflows.repo AND q.lead_branch = workflows.base)` (`core/src/plan/show.rs:31`, emitted at `show.rs:43`). It is `null` when the Workflow is not stacked.
+- Limits, stated plainly: the subquery is not filtered by Plan, so the value may name a Workflow of another Plan. It has no `ORDER BY`, so when several Workflows match, the one returned is not specified. Both are facts of the SQL; the consequences were not run (unverified).
+
+### 28.3 Needs (verified by reading core)
+
+- `WorkflowView.needs` lists the keys of Workflows of the same Plan, sorted, from `workflow_needs` (`core/src/plan/prs.rs:122`, `load_needs`). These are Workflow keys, not branch names and not `<plan>/<key>` strings.
+
+### 28.4 Dependency sources
+
+- The only inputs to Workflow-to-Workflow edges are `base_workflow` and `needs`. A dependency is never inferred from a branch name or from the `base` string (pro-d513).
+- The client matches `base_workflow` to a card by composing `<planId>/<key>` from the Plan it renders. This matches the identifier format core sends. It is not a branch-name inference.
+- An upstream that is not a card of the rendered Plan draws no edge, and it is not an error. A stack onto another Plan's Workflow is a valid case. The rule matches the Job rule for `needs` (DESIGN-panes 1e(ii) rule 1).
+
+### 28.5 Supersedes A6 for this field
+
+- DESIGN-panes 0 (A6) says nothing under `web/src/protocol/**` changes. That is superseded for `WorkflowView.base_workflow` by this section (recency: pro-d100, pro-d513, pro-d514, pro-d551). A6 still holds for every other field.
+
+### 28.6 Where it is drawn
+
+DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).

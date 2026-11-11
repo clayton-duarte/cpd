@@ -93,7 +93,7 @@ function foldTitle(kind: FoldKind, body: string, details: Obj): string {
       return firstLine(body);
     case "cpd": {
       const data = isObj(details.data) ? details.data : {};
-      if (details.kind === "session-message" && typeof data.from === "string") return `Message from ${data.from}`;
+      if (details.kind === "session-message" && typeof data.from === "string" && data.from !== "cpd") return `Message from ${data.from}`;
       const t = str(details.text);
       return firstLine(t !== undefined && t !== "" ? t : body);
     }
@@ -298,7 +298,16 @@ export function createNormalizer(): PiNormalizer {
         const details = isObj(entry.details) ? entry.details : {};
         if (foldKind === "cpd") {
           const data = isObj(details.data) ? details.data : {};
-          if (details.kind === "session-message" && (data.from === null || data.unblocks === "User message from the web chat") && typeof data.text === "string" && data.text !== "") {
+          const isCpdNotice =
+            data.from === "cpd" ||
+            (typeof data.text === "string" && (data.text.startsWith("Bug ") || (typeof details.text === "string" && details.text.startsWith("Bug "))));
+          if (
+            details.kind === "session-message" &&
+            !isCpdNotice &&
+            (data.from === null || data.unblocks === "User message from the web chat") &&
+            typeof data.text === "string" &&
+            data.text !== ""
+          ) {
             facts.lastRole = "user";
             const when = str(details.at);
             const inline = extractInlineAttachments(data.text);

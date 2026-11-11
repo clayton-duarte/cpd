@@ -800,7 +800,7 @@ Built: the double-click resets above, and `Reset layout` (3g, values from pro-d5
 
 ### 3d. Context Tree (sidebar, 20% panel)
 
-File `web/src/ui/cockpit/ContextTree.tsx`. pro-d48..pro-d61 name no change to the tree: the Sidebar below and its menus (3g) stand as written, and the approved preview's tree rework is not part of this contract (merge rule: main wins where no decision names the behaviour). The tree's only pro-d50 effect is its aside's `overflow-hidden` (3c). The tree is built on the shadcn/ui sidebar parts (`web/src/ui/components/sidebar.tsx`, 2f): `Sidebar collapsible="none"` with `SidebarContent` as its only child. There is no `SidebarHeader` and no `SidebarFooter`, and no `SidebarProvider` (the parts hold no state) (pro-d42). Props **KEPT**, unchanged:
+File `web/src/ui/cockpit/ContextTree.tsx`. pro-d48..pro-d61 name no change to the tree: the Sidebar below and its menus (3g) stand as written, and the approved preview's tree rework is not part of this contract (merge rule: main wins where no decision names the behaviour). The tree's only pro-d50 effect is its aside's `overflow-hidden` (3c). The tree is built on the shadcn/ui sidebar parts (`web/src/ui/components/sidebar.tsx`, 2f): `Sidebar collapsible="none"` with `SidebarContent` as its only child. There is no `SidebarHeader` and no `SidebarFooter`, and no `SidebarProvider` (the parts hold no state) (pro-d42). Props, with `onNewContext` replaced by `onAction` (New Manager, below):
 
 ```ts
 export function ContextTree(props: {
@@ -809,8 +809,8 @@ export function ContextTree(props: {
   selectedPlanId: string | null;
   onSelectSession(sessionId: string): void;
   onSelectPlan(planId: string): void;
-  /** New context. The "+" button is rendered only when passed (Not built). */
-  onNewContext?: () => void;
+  /** Runs a tree menu action and the New Manager flow (below). Without it the header button and the row menus are not rendered. */
+  onAction?: (action: CockpitAction) => void;
 }): ReactElement;
 ```
 
@@ -837,7 +837,7 @@ div[aria-label="Context tree"]                                    Sidebar collap
    │   ├─ TopPaneHeader[data-part="tree-header"][hasOverlayControls=false]   the shared header (3i), h-11
    │   │   ├─ span[data-part="phi"][aria-hidden="true"]  "φ"   font-display text-[20px] font-bold text-fg-strong
    │   │   ├─ span.sr-only  "Contexts"
-   │   │   └─ actions: Button[type="button"][data-action="new-context"][aria-label="New context"]   ghost, icon-sm, 26px; PlusIcon 14; only when onNewContext
+   │   │   └─ actions: Button[type="button"][data-action="new-manager"][aria-label="New Manager"]   ghost, icon-xs; MessageCirclePlusIcon (lucide-react); only when onAction (New Manager, below)
    │   └─ ScrollArea > SidebarGroupContent
    │       ├─ p[data-part="loading"]  "Loading contexts…"           (tree === null)   px-2 text-fg-dim
    │       ├─ p[data-part="empty"]  "No contexts"                  (no live and no archived contexts)   px-2 text-fg-dim
@@ -898,7 +898,17 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 - Keyboard: every row and the chevron are native `button`s: Tab order is document order, Enter and Space activate. The `role="tree"` has no arrow-key navigation (Not built).
 - Scrolling: the column `aside` clips (`overflow: hidden`, 3c); the section bodies scroll through `ScrollArea` (pro-d69, Section layout); the `tree-header` is not sticky: it sits outside its body's `ScrollArea` (TopPaneHeader, 3i).
 
-Not built: the Active section, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner, `New context` (button rendered only with `onNewContext`; `App` does not pass it).
+**New Manager (tree header button).** The tree header's right action is `Button[type="button"][data-action="new-manager"][aria-label="New Manager"]`: `variant="ghost"`, `size="icon-xs"`, with `MessageCirclePlusIcon` from lucide-react (`aria-hidden`). It renders only with `onAction`. Clicking it opens `NewContextDialog`, the same dialog as the empty-tree `New Context…` item (Title, Owner, and an id slug-derived from the title; Prompts, 3g).
+
+Confirm sends one action, `context.new` (`{ contextId, title, owner }`), which the server runs as two `cpd` commands in order:
+1. `cpd context new <id> --title=<title> --owner=<owner>`
+2. `cpd context manager --context=<id> --by-user`
+
+Step 2 runs only after step 1 succeeds. The Manager is created with `--by-user`: it has no first message and takes no turn until the User's first prompt. The action's reply is the `context manager` reply (`{ manager: { session }, started }`), so `selectCreated` (`connection.ts`) selects and attaches the new Manager's chat, as in the air-d111 paragraph (3g).
+
+**Errors (A2).** The dialog closes on confirm, so a failed step shows in the global error toast (`cockpit-error-toast`, 3e) with the cpd error code and message. If step 1 fails, no Context is created. If step 2 fails, the Context exists in the tree without a Manager, and the toast shows the Manager error. The dialog offers no retry of step 2.
+
+Not built: the Active section, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner. Server: until the composite lands, `actions.ts` maps `context.new` to `cpd context new` alone (no Manager, no selection), and `cpd-argv.ts` has no `context.manager` command.
 
 ### 3e. `App.tsx` wiring
 
@@ -916,7 +926,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 - **Plan pane (pro-d70, pro-d75).** `visiblePlan !== null` renders `ErrorBoundary name="PlanView"` around `MemoPlan`, with `postableWorkflows` when the Inbox is loaded (DESIGN-panes 1f). Otherwise `ErrorBoundary name="ManagerView"` renders `MemoManager` (DESIGN-panes 1j) with `context` = the Context whose own `sessions`, or whose Plans' `sessions`, hold the selected session (`session?.id ?? selectedSessionId`), or `null` (then `CpdFlowCanvas`), and with `onSelectPlan` and `onSelectSession` as `App`'s handlers. `PlanView` gets `onSelectManager` (pro-d84, A5): it finds the Context's live Manager (its `manager` session that is not archived), calls `onSelectPlan(null)`, then `onSelectSession(manager.ref.id)` when there is one. The manager key of the title row (DESIGN-panes 1) calls it.
 - The Plan, Inbox and Chat contents are restyled by `DESIGN-panes.md`, `DESIGN-chat.md` and `DESIGN-compose.md`; their props are not changed by this file.
 - `cockpit.status` is the status snapshot the server sends (3b, Data sources). The Status Bar's buttons, dialogs and the reset of 3c are wired inside the bar and `Shell`; `App` passes the snapshot and the costs flag only. `costsOn` is `App` state (`useState(false)`), never stored (3b).
-- Not built in `App`: `onOpenSearch`, `onNewContext`. `App` builds no breadcrumb crumbs and passes no `header` (pro-d87, A1); the engine pill and the breadcrumb navigation are a known loss, not rebuilt (3a).
+- Not built in `App`: `onOpenSearch`. The New Manager header button (`variant` ghost, `size` icon-xs, `MessageCirclePlusIcon`, `aria-label` "New Manager", `data-action` "new-manager") needs no prop from `App`: it is gated on `onAction` alone (3d, New Manager). `App` builds no breadcrumb crumbs and passes no `header` (pro-d87, A1); the engine pill and the breadcrumb navigation are a known loss, not rebuilt (3a).
 
 ### 3f. Phase 2 tests this section changes (owner `ui-impl-shell`)
 
@@ -927,7 +937,7 @@ File `web/src/ui/App.tsx`. `AppProps` (`transport`, `scheduler`, `reader`, `newI
 | `Frame.test.tsx` 4, 5 | **changed** by 3c: the direct children of `[data-shell]` are the columns group (no `aria-label`) and `footer` (pro-d87: no `header`); the three column labels are read from the group's panels (`aside`, `div[data-column="center"]`, `aside`). `[data-column="center"]` still has 2 children: the centre group and the controls. |
 | `Shell.test.tsx` | none (descendant selectors still match) |
 | `ContextTree.test.tsx` 1 to 4 | **changed** by 3d: the Manager row is the Context button (its dot and selection); a Context row has no `data-part="counters"`; a Plan row's counts are `data-count` spans in the keys `draft, queued, running, merging, failed, merged`, separated by one space (`planned`, `active`, `done` and ` · ` are gone); `[role="img"][data-dot]` is one per row (2 for the fixture) |
-| `tree.dango.test.tsx` 1 to 3 | **changed** by 3d: the counts text of a Plan row is its non-zero buckets separated by one space; the selected Manager is the Context button; the Context row has no counts; the `Archived (1)` summary and `button[data-action="new-context"]` are KEPT |
+| `tree.dango.test.tsx` 1 to 3 | **changed** by 3d: the counts text of a Plan row is its non-zero buckets separated by one space; the selected Manager is the Context button; the Context row has no counts; the `Archived (1)` summary is KEPT; `button[data-action="new-context"]` becomes `button[data-action="new-manager"]` (3d, New Manager) |
 | `App.test.tsx` (line 108) | **changed** by 3d: the tree root is `div[aria-label="Context tree"]` (the Sidebar), not `nav` |
 | `app.css.test.ts` 1, 2 | none |
 | `app.css.test.ts` 3 | **changed** by 2a and 3c: the selector regex for the tree and inbox asides matches `[data-shell] aside` (not `[data-shell] > aside`); the `declsMatching(/plan/i)` assertion drops `max-height` |
@@ -998,7 +1008,7 @@ No Rename, Archive or Delete. The TUI's Permanent menu has the same two items (`
 
 An archived fork Session has no Delete.
 
-**Empty tree area (air-d111).** The empty tree space is itself a Base UI `ContextMenu` (2f) — the TUI's `Kind::Empty` menu (`tui/src/tree/menu.rs:97`) — with one item, `New Context…`. Picking it opens the prompt dialog (Prompts) asking `Title:` and Owner; the Owner field is a select over `ContextTreeModel.owners` (the policy-owner stems, CONTRACT 20.1), and the id is slug-derived from the title (Plan id, below). OK sends `context.new`; on an ok `action.result` the new Context's Manager session is selected and attached, the way `selectCreated` selects a created Plan's Lead — the created Manager opens.
+**Empty tree area (air-d111).** The empty tree space is itself a Base UI `ContextMenu` (2f) — the TUI's `Kind::Empty` menu (`tui/src/tree/menu.rs:97`) — with one item, `New Context…`. Picking it opens the prompt dialog (Prompts) asking `Title:` and Owner; the Owner field is a select over `ContextTreeModel.owners` (the policy-owner stems, CONTRACT 20.1), and the id is slug-derived from the title (Plan id, below). OK sends `context.new`; on an ok `action.result` the new Context's Manager session is selected and attached, the way `selectCreated` selects a created Plan's Lead — the created Manager opens. The same dialog opens from the tree header's New Manager button (3d).
 
 **Not offered.** No menu on the Manager (it has no row of its own on the web; the Context row above is its row), on the toggle, on the `New Plan` tree row or on the Archive tree row (the TUI has no menu on these either).
 
@@ -1017,7 +1027,7 @@ An archived fork Session has no Delete.
 
 **Chat slot.** Archive (Context, Plan, fork) and Close (fork) run their command. If it fails with `cpd_failed` whose `details.cpdCode` is `in_chat_slot`, the server runs `cpd session park` (no id: the chat-slot Session) and then the same argv once more. Any other error, and an error of the retry, is returned as it is (`runAction` in `actions.ts`).
 
-**After a create.** On an `action.result` with `ok`, when the output has `plan.id`, the new Plan is selected. Its Session (`output.lead.session` for `plan.new`, `output.session.id` for `session.fork`) is selected and attached too when it differs from the selected one (`connection.ts`). A `context.new` reply selects and attaches the new Context's Manager the same way (air-d111).
+**After a create.** On an `action.result` with `ok`, when the output has `plan.id`, the new Plan is selected. Its Session (`output.lead.session` for `plan.new`, `output.session.id` for `session.fork`) is selected and attached too when it differs from the selected one (`connection.ts`). A `context.new` action returns the `context manager` reply (3d, New Manager), and selects and attaches the new Context's Manager the same way (air-d111).
 
 **Copy id.** `navigator.clipboard.writeText(id)`. Tests mock the clipboard.
 
@@ -1097,7 +1107,7 @@ header[data-part=dataPart]   flex h-11 shrink-0 items-center gap-2.5 border-b bo
 
 | Header | `data-part` | `hasOverlayControls` | left content | `actions` | Contract |
 |---|---|---|---|---|---|
-| Context tree | `tree-header` | false | φ mark and sr-only `Contexts` | `New context` button, only with `onNewContext` | 3d |
+| Context tree | `tree-header` | false | φ mark and sr-only `Contexts` | `New Manager` button (`data-action="new-manager"`, ghost `icon-xs`), only with `onAction` | 3d |
 | Plan | `title-row` | true | manager key, `/`, Plan key, phase stepper | Review and Escalations badges | DESIGN-panes 1 |
 | Manager | `manager-header` | true | manager key, counters | none | DESIGN-panes 1j |
 | Inbox | `inbox-header` | false | `INBOX` heading | tier filters | DESIGN-panes 2 |
@@ -1139,7 +1149,7 @@ Every decision is stated as a testable contract in the section named. The shell'
 | pro-d62 live micro-interactions | collapsible height animations; Chain of Thought opens while busy and collapses when the turn ends; synthetic `Thinking…` step; step and message entry animations; transcript auto-scroll rules | 5.1, 5.2 |
 | pro-d65 PlanView follows the Lead | the Plan shown is the selected Lead session's Plan; `selectedPlanId` follows it; the empty state is the flowchart (pro-d68, 5.3) when no Context is selected, a selected Manager shows ManagerView (pro-d70, 3e); header `min-h-11`, title truncates | 5.3 |
 | pro-d66 trace rows | `FoldRow`, `ToolRow` and `ToolGroup` unified with `ChainOfThoughtRow` and `ReasoningBlock`: φ mark, middle dot before the time, trace font classes, `max-w-[45%]` removed from `TraceDescription` | 5.4 |
-| pro-d84, pro-d85, pro-d86 shared pane header | one `TopPaneHeader` (h-11, sticky) on the column headers: Context tree (φ, New context; not collapsible), Plan (manager key, plan key, phase; badges), Inbox (`INBOX`, tier filters) | 3i; 3d Section layout; DESIGN-panes 1, 1j, 2 |
+| pro-d84, pro-d85, pro-d86 shared pane header | one `TopPaneHeader` (h-11, sticky) on the column headers: Context tree (φ, New Manager; not collapsible), Plan (manager key, plan key, phase; badges), Inbox (`INBOX`, tier filters) | 3i; 3d Section layout; DESIGN-panes 1, 1j, 2 |
 | pro-d87 header bar removed | the full-width Header bar (φ link, Location breadcrumb, engine pill) and the Shell `header` slot are removed; the three column `TopPaneHeader`s form the top row; the engine pill and breadcrumb navigation are a known loss, not rebuilt | 2a, 3a, 3c, 3e; DESIGN-panes 4.1 (superseded) |
 | pro-d88 fixed pane header and plan collapse control | the ManagerView and PlanView headers stay fixed while their bodies scroll (`plan-scroll`, DESIGN-panes 1, 1j); the collapse control moves into `TopPaneHeader` through `PlanCollapseContext`; `TopPaneHeader` is not sticky (supersedes the `sticky` of the pro-d84..86 row); Shell's ScrollArea around the plan and its floating controls are removed; the Plan pane is not `inert` when collapsed | 3c, 3i, 5.3; DESIGN-panes 1, 1b, 1j |
 | air-d121 Inbox card interaction (Plan `inbox-cards`) | the card click opens the owning Lead or Manager (`onSelectPlan` + `onSelectSession`); a row with no owner opens its `url`, else nothing; the top-right slot is the external-link anchor (`ExternalLinkIcon`, `target="_blank"`, `rel="noopener noreferrer"`) whenever `row.url` is non-null, else `ChevronRight`; the title is not a link; the action button keeps the primary-action ladder (`row.actions` -> Start -> Approve -> Claim -> Merge/Post/RePost -> Curate -> Dismiss) and never an owner-link or an external link; action errors go through the cockpit error toast (air-d44), never inline | DESIGN-panes 2.5, 2.6, 2.7, 4.8; CONTRACT 6.7 |
@@ -1204,3 +1214,55 @@ The contract is stated before the code and the tests. The code on this branch do
 - **Tool rows and tool groups.** `TraceLine` and `span[data-part="name"]` take the default `text-sm font-sans`. `TraceTitle[data-part="detail"]` (`ToolRow`) and `TraceTitle[data-part="summary"]` (`ToolGroup`) are `font-mono text-xs text-muted-foreground/70`. The `TraceDescription` elements of these rows (`delta`, `status`, `totals`) are `font-mono text-xs text-muted-foreground/70`.
 - **Description width (`web/src/ui/components/trace.tsx`).** `max-w-[45%]` is removed from `TraceDescription`. Its base class is `min-w-0 shrink-0 truncate text-muted-foreground/70 tabular-nums`, and a `className` is merged after it.
 - **Not changed.** The chevron and collapsible animations (5.1), the Chain of Thought (5.2), and the `Trace`, `TraceCollapsible` and `TraceCollapsibleTrigger` parts.
+
+## 6. External links: every external link opens in a new tab (pro-d98, pro-d540)
+
+Record: pro-d98 (User) and pro-d540 decide that every external link in the WebUI opens in a new tab. The rule is one shared component, `ExternalLink` (`web/src/ui/components/ExternalLink.tsx`), and one source-scan test that enforces it. Status: this section is the contract. The code lands in Job `web-impl`, and its tests in Job `web-tests`. Until then the code differs as 6.3 states.
+
+### 6.1 The rule
+
+- An **external** link has an absolute `href` whose scheme is `http:`, `https:` or `mailto:`. It renders with `target="_blank"` and `rel="noopener noreferrer"`, and it opens in a new tab.
+- An **in-app** link stays in the same tab and carries neither attribute. In-app links are AgentKey routes (`#/a/...`, `agentKey.ts`), same-page anchors (`#<id>`) and every other relative `href`.
+- A programmatic open of an external URL (`window.open`) uses the same policy: target `_blank` and features `noopener,noreferrer`.
+- The icon of an external link is the caller's choice. `ExternalLink` adds none.
+
+### 6.2 The shared component
+
+`ExternalLink` takes the props of an `<a>` (`React.ComponentProps<"a">`) except `target` and `rel`, which its props type omits, so a caller cannot set them. It decides external or in-app from `href` by 6.1, sets `target` and `rel` for an external link only, and passes every other prop through unchanged (`data-part`, `aria-label`, `onClick`, children).
+
+### 6.3 Where it is used
+
+| Site | Kind | Attributes | State |
+|---|---|---|---|
+| `web/src/ui/chat/Markdown.tsx`, `markdownComponents.a` | every link Markdown renders (DESIGN-chat 2.4.1) | external: new tab; in-app: same tab | web-impl. Today the Markdown link has neither attribute, so it opens in the app's own tab (source-read, unverified at runtime) |
+| `web/src/ui/cockpit/Inbox.tsx`, `InboxItemRow` item link (`aria-label="Open external link"`, air-d121 in 4) | external | new tab | web-impl (moves to `ExternalLink`) |
+| `web/src/ui/cockpit/Inbox.tsx`, `openExternalUrl` (`window.open`) | programmatic external | new tab, `noopener,noreferrer` | unchanged; 6.1 is its policy |
+| `web/src/ui/cockpit/ManagerView.tsx`, `WorkflowChip` (`wf-pr-chip`) | external PR link | new tab | web-impl (moves to `ExternalLink`) |
+| `web/src/ui/cockpit/PlanView.tsx`, `WorkflowCard` and `ReviewPrCard` PR links | external PR link | new tab | web-impl (moves to `ExternalLink`) |
+| `web/src/ui/chat/mentions.tsx`, `MentionLink` (`#/a/...`) | in-app AgentKey route | same tab | unchanged |
+| `web/src/ui/dialogs/PlanReviewCard.tsx` and the in-page outline anchor of `DESIGN-compose.md` | same-page `#<id>` | same tab | unchanged |
+
+### 6.4 Enforcement
+
+Prose is not enforcement, so the rule is pinned by a source-scan test, `web/src/ui/links-enforcement.test.ts` (Job `web-tests`). The test walks the production files under `web/src/ui` and fails on any raw `<a` element outside `components/ExternalLink.tsx` that could carry an external URL (6.1). `components/ExternalLink.tsx` is the only file allowed to write the attributes. The test's matching rules are the test Job's; this section fixes what it pins. Markdown links are pinned by `web/src/ui/chat/Markdown.test.tsx`, and the component by `web/src/ui/components/ExternalLink.test.tsx`.
+
+### 6.5 Electron
+
+Electron's main process already keeps external navigation out of the app: `setWindowOpenHandler` (`src/electron/main.ts`) and the `will-navigate` guard that opens a URL outside the app externally (`src/electron/main.ts`, `createExternalLinkHandler` in `src/electron/native.ts`). The attributes of 6.1 are the browser build's behaviour and the contract for every build. The Electron handlers stay as a second layer, and this section does not replace them. Unverified at runtime: the behaviour above is read from source.
+
+### 6.6 Open points
+
+- `mailto:` with `target="_blank"` may open an empty tab in some browsers. The scheme is in the rule because Job `web-impl`'s context lists it. Unverified in any browser.
+
+### 5.5 Workflow dependency arrows (pro-d100, pro-d551)
+
+Records: pro-d100 (PlanView draws the Workflow dependencies: a base and a needs arrow between cards) and pro-d551 (the Workflows are ordered topologically). The contract is DESIGN-panes 1e(iv); the data is CONTRACT §28. Status at this commit: not built (Job `web-impl`).
+
+- **What is drawn.** In `PlanView`, between the Workflow cards of the Plan: one solid arrow for each `base` dependency (`WorkflowView.base_workflow`, the stacked base) and one dashed arrow for each `needs` dependency (`WorkflowView.needs`). Both carry an arrowhead at the dependant's top edge.
+- **Where the data comes from.** Only `base_workflow` and `needs`, as core sends them. The client never infers a dependency from a branch name or from `base` (pro-d513).
+- **Order.** The cards are sorted topologically: an upstream Workflow comes before its dependants. Independent cards keep their `plan.workflows` order. A cycle is an error and is not drawn around (DESIGN-panes 1e(iv) 2).
+- **Legend.** A compact legend above the cards names the two styles: `Stacked (base)` (solid) and `Depends on (needs)` (dashed). It shows only when at least one arrow is drawn.
+- **Plans without Workflow dependencies.** No arrow and no legend: the cards render in `plan.workflows` order, as today.
+- **Not in scope.** Job arrows inside a card (DESIGN-panes 1e(ii)) are unchanged. Arrows are not coloured by status and are not interactive.
+- **Tests.** `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`) pins: a base arrow and a needs arrow between the right cards, the topological order, the legend text, and a Plan with no Workflow dependencies drawing no arrow.
+

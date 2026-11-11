@@ -80,9 +80,52 @@ export interface WsServerDeps {
 }
 
 /**
- * The Origin check (web/CONTRACT.md §15.1): absent and `null` are accepted, `file://` (the
- * production `loadFile` renderer's Origin) is accepted, a loopback host (`localhost`,
- * `127.0.0.1`, `[::1]`) is accepted, every other Origin is rejected.
+ * Helpers to test for private IPv4 subnets (RFC 1918):
+ * 10.0.0.0/8 (10.0.0.0 - 10.255.255.255)
+ * 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
+ * 192.168.0.0/16 (192.168.0.0 - 192.168.255.255)
+ */
+function isRfc1918Ipv4(host: string): boolean {
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  const nums = parts.map((p) => {
+    if (!/^\d+$/.test(p)) return -1;
+    const n = parseInt(p, 10);
+    return n >= 0 && n <= 255 ? n : -1;
+  });
+  if (nums.some((n) => n === -1)) return false;
+
+  const [a, b] = nums as [number, number, number, number];
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+/**
+ * Checks if an IPv6 address is Unique Local Address (ULA) (fc00::/7, i.e., starts with fc or fd).
+ * URL.hostname for IPv6 removes brackets or retains them depending on parser. In URL standard,
+ * url.hostname for [fc00::1] is "[fc00::1]".
+ */
+function isIpv6Ula(host: string): boolean {
+  const clean = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  const lower = clean.toLowerCase();
+  // ULA prefix is fc00::/7, meaning the first 7 bits are 1111110.
+  // First byte has hex prefix fc or fd.
+  return lower.startsWith('fc') || lower.startsWith('fd');
+}
+
+/**
+ * The Origin check (web/CONTRACT.md §15.1, amended by pro-d543):
+ * Absent, `null`, and `file://` are accepted.
+ * For network origins:
+ * - Scheme must be plain `http` (https rejected).
+ * - Port must be exactly 3333 or 33333 (no default / implicit port).
+ * - Host must be one of:
+ *   - localhost or loopback (127.0.0.1, ::1, [::1])
+ *   - RFC 1918 private IPv4 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+ *   - IPv6 ULA (fc00::/7)
+ *   - .local mDNS hostname (e.g. host.local)
  */
 export function acceptsOrigin(origin: string | string[] | undefined): boolean {
   if (origin === undefined) return true;
@@ -92,13 +135,45 @@ export function acceptsOrigin(origin: string | string[] | undefined): boolean {
   // so Chromium serializes its Origin as `file://`. A page loaded from this machine's disk is
   // as local as `null`, so it is accepted; no foreign `http(s)` origin slips in.
   if (origin === "file://") return true;
-  let host: string;
+
+  let parsed: URL;
   try {
-    host = new URL(origin).hostname;
+    parsed = new URL(origin);
   } catch {
     return false;
   }
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+
+  // Scheme must be plain http
+  if (parsed.protocol !== "http:") return false;
+
+  // Port must be explicit and exactly 3333 or 33333
+  // When no port is explicitly in the origin, parsed.port is ""
+  if (parsed.port !== "3333" && parsed.port !== "33333") return false;
+
+  const host = parsed.hostname;
+
+  // 1. Localhost or loopback
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
+    return true;
+  }
+
+  // 2. RFC 1918 private IPv4
+  if (isRfc1918Ipv4(host)) {
+    return true;
+  }
+
+  // 3. IPv6 ULA (fc00::/7)
+  if (isIpv6Ula(host)) {
+    return true;
+  }
+
+  // 4. mDNS .local hostnames
+  // Must end in .local and not have additional domain labels after .local (e.g. evil.local.example is rejected)
+  if (host.endsWith('.local') && !host.slice(0, -'.local'.length).includes('/') && host.length > '.local'.length) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
