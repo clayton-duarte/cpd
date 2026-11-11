@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { toolGuardActive, validateToolCall } from "../lib/guards.ts";
 
 // docs/architecture/pi-native-core.md §4.6 & §7 (Plan 3: skills-to-tools).
 // Pins:
@@ -15,12 +16,27 @@ test("tool guard enforces test and main immutability", async () => {
   // 2. Attempts to modify primary checkout are refused by mainguard tool hook.
   // 3. Guards inspect structured tool arguments, not bash regexes.
 
-  // In the current branch before migration, tool guard hooks for test immutability
-  // and typed tool call guards are not yet implemented/active.
-  const toolGuardActive = false; // Stub: will be true when tool hooks are active
-
   assert.ok(
     toolGuardActive,
     "Typed tool guards for test and main checkout immutability must be active",
   );
+
+  // 1. Testguard: red test file immutability
+  const testVerdict = validateToolCall({
+    toolName: "edit",
+    input: { path: "pi/test/foo.test.ts" },
+    role: "worker",
+    guardedTestFiles: ["pi/test/foo.test.ts"],
+  });
+  assert.equal(testVerdict.blocked, true, "Attempts to edit red test files must be refused");
+  assert.equal(testVerdict.source, "testguard");
+
+  // Allowed edit on un-guarded file
+  const allowedVerdict = validateToolCall({
+    toolName: "edit",
+    input: { path: "pi/lib/foo.ts" },
+    role: "worker",
+    guardedTestFiles: ["pi/test/foo.test.ts"],
+  });
+  assert.equal(allowedVerdict.blocked, false, "Editing un-guarded files must be allowed");
 });
