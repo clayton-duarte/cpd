@@ -11,4 +11,13 @@ cd "$(dirname "$0")/.."
 
 scripts/cargo.sh build -q -p cpd >&2 # a no-op when cpd is current: a cpd older than this source has no `cpd test`
 cpd=$(ls -t target/*/cpd | head -n 1)
-exec "$cpd" test "$@"
+
+args=()
+for arg in "$@"; do
+    case "$arg" in
+        engine::*) args+=("${arg#engine::}") ;;
+        *) args+=("$arg") ;;
+    esac
+done
+
+exec "$cpd" test "${args[@]}"
