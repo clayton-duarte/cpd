@@ -279,6 +279,11 @@ archive_sleep_seconds = 86400
         // Check runner call count was at least 2 (lsof for 3333, lsof and ss for 33333)
         assert!(fx.runner.calls().len() >= 2);
 
+        // Create serve.ts so prod WebUI is supervised
+        let serve_ts = fx.home.root().join("web/src/server/serve.ts");
+        fs::create_dir_all(serve_ts.parent().unwrap()).expect("create web server dir");
+        fs::write(&serve_ts, "// mock server").expect("write serve.ts");
+
         // Running supervisor with port held should refuse to start and latch stopped
         let mut engine = fx.engine();
         webui::run(&mut engine);
