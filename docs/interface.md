@@ -42,6 +42,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd plan unarchive` | Unarchive the Plan, its Lead and its side forks (§4.11) | | yes |
 | `cpd plan cancel` | Cancel the Plan's Jobs and pull requests, close its Lead, archive it (§4.12) | Lead | |
 | `cpd plan delete` | Delete an archived or asleep Plan: its rows, files, worktrees and local branches (§4.14) | | yes |
+| `cpd plan check` | Check the Plan's registered work: unregistered workflows and unresolved drafts (§4.16) | Lead, Manager | |
+| `cpd plan reopen` | Reopen a done Plan to dispatch phase (§4.17) | Lead | |
 | `cpd job` | Jobs, Specs and Dependencies (commands.md §5) | | |
 | `cpd job add` | Add a Job (§5.1) | Lead, Manager | |
 | `cpd job edit` | Edit a draft Job (§5.2) | Lead | |

@@ -718,6 +718,7 @@
       "--tier": true,
       "--title": true,
       "--urgent": false,
+      "--waiting-on": true,
       "--workflow": true
     },
     "positionals": {
@@ -807,6 +808,7 @@
       "--spec": true,
       "--tier": true,
       "--title": true,
+      "--waiting-on": true,
       "--workflow": true
     },
     "positionals": {
@@ -961,6 +963,17 @@
     },
     "required": []
   },
+  "plan check": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "plan decide": {
     "flags": {
       "--approve": false,
@@ -1085,6 +1098,16 @@
     "positionals": {
       "max": 0,
       "min": 0
+    },
+    "required": []
+  },
+  "plan reopen": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
     },
     "required": []
   },
