@@ -30,7 +30,9 @@ A key is fixed: never rename a session.
 
 ## Typed tools
 
-cpd's operations are typed pi tools, one per domain, each called with an `op` and its `params`. Call the tool for the operation instead of a bash `cpd` subcommand: `cpd_context.decide` records a decision, `cpd_plan.show` shows a Plan. The domains are plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Messages to another agent go through the message domain: `cpd_message.delegate` (down one tier) and `cpd_message.escalate` (up one tier, to the parent).
+cpd's operations are typed pi tools, one per domain: plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Each takes an `op` and its `params`: the context tool's `op` `decide` is `cpd context decide`, the plan tool's `op` `show` is `cpd plan show`. The command lines of this skill name the operations they stand for; when no typed tool of that domain is in your tool list, run that command line in bash instead.
+
+A message down to a Lead goes through the message tool's `op` `delegate`, to the Leads of your Context's Plans; `cpd session send <context>:<plan>` names the same message.
 
 ## Rules
 
@@ -61,6 +63,17 @@ cpd's operations are typed pi tools, one per domain, each called with an `op` an
   - `cpd plan new <id> --context <c> --title "<title>" --brief-file <file>` (`--title` and `--brief-file <file>` are the only flags for the Plan's title and its brief: no flag takes a goal or a brief text). Write `<file>` with the `write` tool and never delete `<file>` before `cpd plan new` finishes. On your own shaping Plan the form is `cpd plan new <id> --context <c> --title "<t>" --shaping` (`--brief-file` and `--by-user` are refused with `--shaping`).
   - `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` (`--unblocks` is always required; never send the identical text to two Sessions within 60 minutes or `broadcast` is refused).
   - `cpd job retry <key> --plan <p> --tier <T>` (`--tier <T>` is always required). On a shaping Plan the list adds `cpd job add <k> --title "<t>" --tier <T> --spec <file.json> --kind scout|research --plan <id>` (the explore kinds only, with no `--draft`), `cpd job list --plan <id>`, `cpd job show <k> --plan <id>`, `cpd job cancel <k> --reason "<why>" --plan <id>` and `cpd answer <escalation> "<text>" --plan <id>` (a Worker's question).
+
+## Tool hooks
+
+A pre-call hook checks each tool call before it runs, and refuses a call that breaks a rule. The refusal names the rule: follow the fix it names, never route around it.
+
+- **Waits:** a bash call that would wait over 30 seconds is refused; run it in the background.
+- **Primary checkout:** a branch switch, a reset or an edit in a repo's primary checkout is refused.
+- **Secrets:** a secret value moves through the secret domain only; a direct `op` call is refused.
+- **Approvals:** an external write (`cpd_external_approve`: a pull request post or reply, a Slack message), a secret grant (cpd_secret_approve) and a host repair (`cpd_host_approve`) each need the User's answer in its dialog; a call without it is refused.
+
+The hooks check the fields of a tool call, not the words of a bash command.
 
 ## Policies
 
@@ -147,7 +160,7 @@ Prevent conflicts between Leads' Workflows before the work starts, and remedy th
 
 - **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, pull request opened or merged, Job failed, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Then a `Pending work:` section, computed fresh each turn: per active Plan its Workflow and Job counts (the Jobs and their touched files: `cpd context pending --context <c>`). Nothing new and no active Plan: no message.
 - **On demand:** `cpd plan list --context <c>` for every Plan's phase, Job counts and Workflows; `cpd plan show --plan <p>` for one Plan's Workflows, Jobs and open Escalations.
-- **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up Workflows, later fixes) as Jobs or Workflows in a legal form: a Job that `--needs` a `queued`, `running` or `failed` Job, a follow-up Workflow (`--base` / `--needs`) added with `--jobs <file.json>`, or a draft covered by a pending `cpd_plan_review`. A draft that waits is refused `draft_parked`; `draft` is never a waiting state. When something announced is missing, ask the Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` to register it in one of these forms and to name its key.
+- **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up Workflows, later fixes) as Jobs or Workflows in a legal form: a Job that `--needs` a `queued`, `running` or `failed` Job, a follow-up Workflow (`--base` / `--needs`) added with `--jobs <file.json>`, or a draft covered by a pending `cpd_plan_review`. A draft that waits is refused `draft_parked`; `draft` is never a waiting state. When something announced is missing, ask the Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` to register it in one of these forms and to name its key. One Workflow per phase (pro-d549): planned work for a phase that has no Workflow is unregistered.
 - A Plan's phases are grounding → plan → dispatch → deploy → done. A `job-failed` line is its Lead's to handle; mention it to the User only when it touches the Epic (a blocked Plan, a cut that no longer holds).
 - **Urgent Jobs.** Mark a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or an incident. For a queued Job run `cpd job urgent <k> --plan <p>` instead of `cpd job dispatch`; for a new one ask its Lead to add it with `cpd job add <k> … --urgent` (`cpd session send <context>:<plan> "<text>" --unblocks "<reason>"`). The engine then starts it first and may run it as one Attempt beyond `concurrency`.
 - When a Plan is done, record what outlives it and tell the User which Plans remain.
@@ -159,7 +172,6 @@ Prevent conflicts between Leads' Workflows before the work starts, and remedy th
 Three ways to communicate are distinct:
 
 - **Message** (`cpd session send <context>:<plan> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
-- **Board** (`cpd board post --to <session>`): FYI only, never a request that blocks; the agent reads it at its next turn and a board post never wakes it.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
 
 Lateral comms:
