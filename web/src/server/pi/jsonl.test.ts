@@ -198,6 +198,75 @@ describe("pi jsonl normalisation", () => {
     expect(normalizeText(text).facts.lastRole).toBe("user");
   });
 
+  it("jsonl_formats_cpd_messages_as_cpd", () => {
+    // Bug b12 / web/CONTRACT.md §27:
+    // A session-message that cpd wrote itself (e.g. bug wake "Bug <id> is open" or breach alert
+    // "Bug <id> breached") is attributed to cpd, never to the User.
+    // It must become a cpd fold row, never a UserItem:
+    // - it must not become a user item (kind: "user")
+    // - it must be a fold item (kind: "fold", foldKind: "cpd")
+    // - its title/content must not say "Message from the User"
+    // - it must not set facts.lastRole to "user"
+    const cpdWakeNotice = cpdMsg(
+      "w1",
+      "Bug b1 is open: \"Payment fails at checkout\". Mitigate it with cpd protocol bug mitigate b1",
+      {
+        id: 99001,
+        at: "2026-11-10T21:00:00.000Z",
+        kind: "session-message",
+        text: "Bug b1 is open: \"Payment fails at checkout\". Mitigate it with cpd protocol bug mitigate b1",
+        data: {
+          from: "cpd",
+          text: "Bug b1 is open: \"Payment fails at checkout\". Mitigate it with cpd protocol bug mitigate b1",
+          wake: true,
+        },
+      },
+    );
+
+    const { items, facts } = normalizeText(cpdWakeNotice);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind).toBe("fold");
+    expect(items[0]).toMatchObject({
+      kind: "fold",
+      id: "f:w1",
+      foldKind: "cpd",
+      defaultOpen: false,
+    });
+    const fold = items[0] as FoldItem;
+    expect(fold.title).not.toContain("Message from the User");
+    expect(fold.body).not.toContain("Message from the User");
+    expect(facts.lastRole).not.toBe("user");
+
+    // Also test null-from cpd notice with bug notice text (under current code, from: null maps to UserItem)
+    const cpdNullFromNotice = cpdMsg(
+      "w2",
+      "Bug b1 breached the bug report protocol (unmitigated_past_bound): \"Payment fails at checkout\"",
+      {
+        id: 99002,
+        at: "2026-11-10T21:15:00.000Z",
+        kind: "session-message",
+        text: "Bug b1 breached the bug report protocol",
+        data: {
+          from: null,
+          text: "Bug b1 breached the bug report protocol (unmitigated_past_bound): \"Payment fails at checkout\"",
+          wake: true,
+        },
+      },
+    );
+
+    const res2 = normalizeText(cpdNullFromNotice);
+    expect(res2.items).toHaveLength(1);
+    expect(res2.items[0]?.kind).toBe("fold");
+    expect(res2.items[0]).toMatchObject({
+      kind: "fold",
+      id: "f:w2",
+      foldKind: "cpd",
+      defaultOpen: false,
+    });
+    expect(res2.facts.lastRole).not.toBe("user");
+  });
+
+
   it("malformed lines raise a typed error with the line number", () => {
     const caught = (fn: () => unknown): WebError => {
       try {

@@ -68,6 +68,7 @@ export interface JobView {
 }
 export interface WorkflowView {
   readonly key: string; readonly title: string; readonly repo: string; readonly base: string;
+  readonly base_workflow?: string | null;
   readonly status: string; // open|merged|cancelled|waiting|...
   readonly needs: readonly string[];
   readonly jobKeys: readonly string[]; // `jobs` of the Workflow row (keys), in source order
