@@ -133,24 +133,6 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd inbox claim` | Hand a review-requested item to the review Context's Manager (§21.7) | | |
 | `cpd inbox approve` | Approve the pending deployments of a deploy item (§21.13) | | |
 | `cpd watch` | The engine, one per machine (commands.md §12) | Lead | |
-| `cpd tui` | Build the cockpit and start the engine (commands.md §13) | | |
-| `cpd tui view` | A view in a cockpit pane (internal; owns its terminal) (§13.2) | internal | |
-| `cpd tui view tree` | The session tree (left) | internal | |
-| `cpd tui view plan` | The Plan of the Lead in the chat slot (centre top) | internal | |
-| `cpd tui view widgets` | The Dispatch column (right) | internal | |
-| `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
-| `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
-| `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |
-| `cpd tui view dialog` | A dialog of the kit: `confirm`, `input`, `text`, `checklist` or `select` (opened by the cockpit's actions, in a tmux popup) | internal | |
-| `cpd tui view dialog confirm` | A question with two buttons | internal | |
-| `cpd tui view dialog input` | A labelled text box that grows with its text | internal | |
-| `cpd tui view dialog text` | Scrollable read-only text | internal | |
-| `cpd tui view dialog checklist` | Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}` | internal | |
-| `cpd tui view dialog select` | A radio list of options, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value}` | internal | |
-| `cpd tui view dialog form` | A labelled text box and a labelled radio list, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value, choice}` | internal | |
-| `cpd tui view settings` | The settings (opened by the StatusBar's settings button, in a tmux popup) | internal | |
-| `cpd tui view chat` | The chat slot's placeholder | internal | |
-| `cpd tui action` | A click on a StatusBar button, or a merge started at once (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd config tiers` | Set the five Tier keys of config.toml (§14.2a) | | |
@@ -184,8 +166,6 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd metrics` | The read-only aggregate of the machine's Ledger, or of its refusals (`cpd metrics refusals`, commands.md §14.7) | Lead, Manager | |
 | `cpd metrics refusals` | The refusal rate per guard, role, model and day over the `guard` Events (commands.md §14.7) | Lead, Manager | |
 | `cpd install` | Install the cpd built from a checkout (commands.md §14.4) | | |
-| `cpd desktop` | The Electron app of the installed checkout and the web preview (commands.md §14.4a) | | |
-| `cpd desktop release` | Cut a release of the CPD.app shell (commands.md §14.4b) | | |
 | `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
 | `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |
 | `cpd secret list` | List the items of a vault (§24.2) | Lead, Manager | |
@@ -209,8 +189,6 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd resource run` | Take a resource and run a command holding it (§30.2) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
 | `cpd janitor` | Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29) | | |
-| `cpd cockpit` | The WebUI backend's state and event stream (commands.md §11a) | | |
-| `cpd cockpit serve` | Serve snapshots and Events as NDJSON on stdout until stdin ends (commands.md §11a) | | |
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |

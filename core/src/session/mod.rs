@@ -496,8 +496,8 @@ fn not_a_lead(id: &SessionId, role: Role) -> CpdError {
 pub(crate) fn no_cockpit(cockpit: &str) -> CpdError {
     CpdError::new(
         ErrorCode::NoCockpit,
-        format!("The cockpit (tmux session {cockpit:?} with its main window and chat slot) does not exist: run cpd tui."),
+        format!("The cockpit (tmux session {cockpit:?} with its main window and chat slot) does not exist: run cpd watch."),
     )
     .with("cockpit_session", cockpit)
-    .with("next", "cpd tui")
+    .with("next", "cpd watch")
 }

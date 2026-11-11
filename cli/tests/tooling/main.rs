@@ -7,7 +7,6 @@ mod common;
 mod cargo_script;
 mod config_tiers_list;
 mod dead_code;
-mod desktop;
 mod fake_tmux;
 mod fx;
 mod fx_exec;

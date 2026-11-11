@@ -295,7 +295,7 @@ fn refusals_register_nothing() {
         "no_cockpit",
         3,
     );
-    assert_eq!(error["details"]["next"], "cpd tui");
+    assert_eq!(error["details"]["next"], "cpd watch");
     assert!(manager_ids(&fx).is_empty());
 
     fx.cockpit();
