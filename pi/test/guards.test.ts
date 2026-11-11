@@ -35,6 +35,7 @@ test("tool guard enforces test and main immutability", async () => {
   const allowedVerdict = validateToolCall({
     toolName: "edit",
     input: { path: "pi/lib/foo.ts" },
+    cwd: "/tmp/fake-worktree",
     role: "worker",
     guardedTestFiles: ["pi/test/foo.test.ts"],
   });

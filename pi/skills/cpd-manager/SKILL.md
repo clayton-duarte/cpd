@@ -32,7 +32,7 @@ A key is fixed: never rename a session.
 
 cpd's operations are typed pi tools, one per domain: plan, job, workflow, session, context, pr, secret, protocol, policy, resource, mcp and message. Each takes an `op` and its `params`: the context tool's `op` `decide` is `cpd context decide`, the plan tool's `op` `show` is `cpd plan show`. Operations are invoked through typed tools or their corresponding cpd CLI commands.
 
-A message down to a Lead goes through the message tool's `op` `delegate`, to the Leads of your Context's Plans; `cpd session send <context>:<plan>` names the same message.
+A message down to a Lead goes through the message tool's `op` `delegate`, to the Leads of your Context's Plans; `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` names the same message.
 
 ## Rules
 
@@ -160,7 +160,7 @@ Prevent conflicts between Leads' Workflows before the work starts, and remedy th
 
 - **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, pull request opened or merged, Job failed, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Then a `Pending work:` section, computed fresh each turn: per active Plan its Workflow and Job counts (the Jobs and their touched files: `cpd context pending --context <c>`). Nothing new and no active Plan: no message.
 - **On demand:** `cpd plan list --context <c>` for every Plan's phase, Job counts and Workflows; `cpd plan show --plan <p>` for one Plan's Workflows, Jobs and open Escalations.
-- **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up Workflows, later fixes) as Jobs or Workflows in a legal form: a Job that `--needs` a `queued`, `running` or `failed` Job, a follow-up Workflow (`--base` / `--needs`) added with `--jobs <file.json>`, or a draft covered by a pending `cpd_plan_review`. A draft that waits is refused `draft_parked`; `draft` is never a waiting state. When something announced is missing, ask the Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` to register it in one of these forms and to name its key. One Workflow per phase (pro-d549): planned work for a phase that has no Workflow is unregistered.
+- **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up Workflows, later fixes) as Jobs or Workflows in a legal form: a Job that `--needs` a `queued`, `running` or `failed` Job, a follow-up Workflow (`--base` / `--needs`) added with `--jobs <file.json>`, or a draft covered by a pending `cpd_plan_review`. A draft that waits is refused `draft_parked`; `draft` is never a waiting state. When something announced is missing, ask the Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` to register it in one of these forms and to name its key. One Workflow per phase: planned work for a phase that has no Workflow is unregistered.
 - A Plan's phases are grounding → plan → dispatch → deploy → done. A `job-failed` line is its Lead's to handle; mention it to the User only when it touches the Epic (a blocked Plan, a cut that no longer holds).
 - **Urgent Jobs.** Mark a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or an incident. For a queued Job run `cpd job urgent <k> --plan <p>` instead of `cpd job dispatch`; for a new one ask its Lead to add it with `cpd job add <k> … --urgent` (`cpd session send <context>:<plan> "<text>" --unblocks "<reason>"`). The engine then starts it first and may run it as one Attempt beyond `concurrency`.
 - When a Plan is done, record what outlives it and tell the User which Plans remain.
@@ -180,6 +180,7 @@ Lateral comms:
 - The `cpd` Manager applies the bug report protocol (`cpd protocol bug report`, `cpd protocol bug mitigate` and `cpd protocol bug close`, commands.md §33).
 - Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
 - Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
+- `cpd board post`: FYI only, never a request that blocks.
 
 ### Sending a message
 

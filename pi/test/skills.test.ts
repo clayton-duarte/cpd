@@ -31,16 +31,16 @@ test("skills use typed tools instead of cli", () => {
     );
   }
 
-  // 2. Verify legacy board post is completely removed
+  // 2. Verify legacy board post bullet is removed (except lateral comms rule)
   assert.doesNotMatch(
     lead,
-    /cpd board post/,
-    "cpd-lead must not instruct using legacy cpd board post",
+    /`cpd board post --to <session>`/,
+    "cpd-lead must not instruct using legacy cpd board post --to",
   );
   assert.doesNotMatch(
     manager,
-    /cpd board post/,
-    "cpd-manager must not instruct using legacy cpd board post",
+    /`cpd board post --to <session>`/,
+    "cpd-manager must not instruct using legacy cpd board post --to",
   );
 
   // 3. Verify tool-first migration for state commands
