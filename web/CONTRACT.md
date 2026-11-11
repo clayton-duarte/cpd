@@ -2694,4 +2694,28 @@ Normative for the target. **Status at this commit: not built.** `WorkflowView` (
 
 DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).
 
-<!-- install-converge-docs-a1 skeleton: cpd install convergence contract, pending the Lead's answer. -->
+## 30. Install convergence: the preview worktree, the prod assets and CPD.app (Plan `ports-everywhere`; pro-d545, pro-d553)
+
+Normative target. The rules of one `cpd install --root <checkout>` on every machine, the part that is macOS only, and what the code does today. `docs/architecture/install-convergence.md` states the same with the reasons; where they differ, this section wins for the web contract and `docs/commands.md` §14.4 for the command. Recency: pro-d553 (2026-11-11) supersedes pro-d504 and pro-d505 (2026-11-10) on whether install installs CPD.app.
+
+### 30.1 Preview worktree
+
+- When `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` is missing, install creates it: `git worktree add -B preview/web <path> origin/main`, then `pnpm install --frozen-lockfile` in it. On a checkout at `~/projects/cpd` that path is `~/projects/cpd.preview.web`, on branch `preview/web`.
+- When it exists, install does not create it, and syncs it to `origin/main` as §28.1 states.
+- Today: creation is in `scripts/preview-web.sh` (`on` and `serve_only`). `cpd install` only syncs an existing worktree (`sync_preview_worktree`, `core/src/install/mod.rs`). Unverified: that install creates nothing on a machine that lacks the worktree (read from source, not run).
+
+### 30.2 Prod browser static assets
+
+- Install builds `<root>/web/dist` from the checkout on every machine: `pnpm --dir <root> --filter cpd-web-client run build` (`vite build`). The production server on `0.0.0.0:3333` serves it (`docs/architecture/webui-network-ports.md`).
+- Today: install builds only `web/dist-electron` (step 7a, `build:electron`). No install step runs `vite build`.
+
+### 30.3 CPD.app, macOS only
+
+- On macOS, install installs shell release `app-v0.1.0` to `/Applications/CPD.app`. On Linux it installs no shell (the homeserver gets none; pro-d553).
+- The shell is the GitHub Release, not built from the checkout: `scripts/release-shell.sh` builds it and `gh release create app-v0.1.0` publishes it (§14.4b of `docs/commands.md`).
+- Today: install does not install CPD.app. `cpd desktop` (`docs/commands.md` §14.4a) does: when the bundle is missing it runs `gh release download` for the latest release, not the tag `app-v0.1.0`, clears quarantine and opens the app (`core/src/app/mod.rs`, `install_and_open_release`).
+
+### 30.4 Idempotence and open points
+
+- A rerun on a converged machine changes nothing (`docs/commands.md` §14.4: install is idempotent). Assumption of this section, not in any record: a shell already at `app-v0.1.0` is not reinstalled.
+- Open, not decided here: whether install opens CPD.app after it installs it; what install does when `/Applications/CPD.app` is at another version; whether a failed worktree creation or prod build fails the install's exit or only prints.
