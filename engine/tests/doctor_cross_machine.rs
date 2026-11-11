@@ -16,6 +16,7 @@ mod doctor_cross_machine {
     use cpd_core::host::spawn::FakeSpawn;
     use cpd_core::output::Output;
     use cpd_core::ports::Ports;
+    use cpd_engine::doctor::cross_machine::{ProbeOutcome, with_mock_probe};
     use cpd_engine::doctor::{self, Args};
     use serde_json::Value;
     use tempfile::TempDir;
@@ -136,7 +137,10 @@ host = "192.168.3.5"
 host = "homeserver"
 "#;
         let fx = DoctorFx::new(toml);
-        let res = fx.run_doctor();
+        let res = with_mock_probe(
+            |_host, _port, _timeout| ProbeOutcome::Reachable { status: 200 },
+            || fx.run_doctor(),
+        );
         let checks = extract_checks(res);
 
         let check = find_cross_machine_check(&checks);
@@ -209,7 +213,19 @@ host = "192.168.3.5"
 host = "homeserver"
 "#;
         let fx = DoctorFx::new(toml);
-        let res = fx.run_doctor();
+        let res = with_mock_probe(
+            |host, port, _timeout| {
+                if host == "homeserver" && port == 33333 {
+                    ProbeOutcome::Unreachable {
+                        reason: "refused",
+                        message: None,
+                    }
+                } else {
+                    ProbeOutcome::Reachable { status: 200 }
+                }
+            },
+            || fx.run_doctor(),
+        );
         let checks = extract_checks(res);
 
         let check = find_cross_machine_check(&checks);
