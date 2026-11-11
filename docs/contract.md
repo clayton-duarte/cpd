@@ -3637,6 +3637,8 @@ The fields, once more in one line: `data = {code, role, tier, model, tool, excer
 
 ### 5.5 `cpd cockpit serve`
 
+**Removed** (decision pro-d529, Plan `drop-cli-tui`, which follows Plan 4 `webui-core-ws`; pi-native-core.md §6.1, §7). The command is no longer part of cpd's surface: the WebUI connects to the core engine directly (§5.8). The binary still ships it until the code removal lands, so the text below is what the running code keeps until then. The command's removal note is commands.md §11a.
+
 The cockpit's state and event stream for the WebUI backend (Plan `cpd-realtime-engine`; the command, its frames and its exit codes are commands.md §11a). The backend used to spawn four or five `cpd` commands for every refresh and to see a change up to 200 ms late; this command replaces them with one process. Its PROTOCOL is 1. These are its invariants:
 
 - **One process, NDJSON, no socket** (A1). It is one long-lived process: one JSON object per line on stdout, each with a string field `t`, and one request per line on stdin. It binds no socket and no port. stderr carries logs only.
@@ -3681,6 +3683,8 @@ The web backend (`web/src/server/`) carries the frames of this command to the re
 | `STREAM_PROBE_TIMEOUT_MS` | 10 s | how long after a probe the watchdog waits for any frame before it reports the stall |
 
 ### 5.6 The web-to-CLI argv contract (air-d54, air-d57)
+
+**Removed** (decision pro-d529, Plan `drop-cli-tui`). `cpd argv-check` and this contract go with the WebUI's Node argv bridge (`web/src/server/cpd-argv.ts`), which Plan 4 `webui-core-ws` deletes (pi-native-core.md §5.3, §7). Plan `drop-cli-tui` follows Plan 4. The binary still ships `argv-check` until the code removal lands.
 
 The WebUI backend builds `cpd` command lines and spawns the `cpd` binary in three spawn flavours of `web/src/server/plugin.ts` (`cpdExec.run`, `follow.start`, `stream`) and in the Electron paths (`web/src/electron/update/`, `web/src/electron/pty.ts`, `web/src/electron/pty-tabs.ts`). This section fixes how those command lines are built and how the build is proven against the real CLI grammar. It is normative for Jobs that touch web argv; the code itself is added by Jobs `argv-tests` and `argv-impl`, not by this section.
 
@@ -6146,6 +6150,22 @@ Rules of the table:
 ```
 
 Matching this stream to the `.jsonl`: the first assistant line has `timestamp` 1783334400123 and the second 1783334401500; the `toolResult` line has `toolCallId` `toolu_01`. A client that connects during the reply gets the partial in `inflight` (`message` with the text so far, `tools` with `toolu_01` once it runs) and then the rest of the `delta` frames.
+
+### 6.22 Recovery mode: pi's native TUI for incidents (pro-d522, pro-d528; Plan `drop-cli-tui`)
+
+**Definition.** Recovery mode is the terminal mode for an incident in which the WebUI or the core engine's socket (`run/core.sock`, §5.8) is down or unreachable. It is pi's own TUI, running a Session's pi with the cpd adapter. It is an incident mode, not a way of working: the WebUI is the User's client (pi-native-core.md §5.1), and cpd ships no terminal client of its own (pro-d529; commands.md §2 "Removed").
+
+**Entry points.**
+1. **Attach to a live pane.** `tmux -u -L cpd attach -t cpd`, then select the window of the Session: a Manager's `ctx-<context>`, or a parked Lead's `park-<label>` (§6.2). The window names are labels for the User; the target stays the window's id. Try this first: a live pane already runs the Session's pi, and one live pi per Session is the rule (§6.7 "One live pi per Session"). Tmux keep-alive keeps these panes (pi-native-core.md §3.3, §6.2) until Plan 6 `durable-manager-keepalive` retires it.
+2. **Launch a Session's pi directly**, when it has no live pane. Run pi with the resume row of §6.6 (`--no-mcp --tools +codemode --model <model>:<level> --session <file>`, with the `-e` arguments that row adds) and that row's environment, above all `CPD_SESSION=<id>`: the adapter activates only when `CPD_SESSION` is set and equals the Session's id (commands.md §15.1, "Activation"). The shorthand `pi --session-id <id>` with the cpd extension in pi-native-core.md §5.4 is not a form cpd runs (§6.6). A direct launch takes no `locks/pi-<session>.lock`, which `session run` holds for the whole pi session (§6.7). So check first that no pane or process runs the Session.
+
+**What works in recovery mode.**
+- **The conversation.** The Session's pi file and pi's own TUI: pi owns chats and transcripts (pi-native-core.md §5.2).
+- **Framework state and writes through the typed pi tools** (§5.9). They reach the core over `run/core.sock`. While the core is down a call fails with `core_unreachable`, and `details.sent` says whether the request was written; the agent checks the state before it repeats the call (§5.9, "Failure is loud"). So with the core down the tools show no state and make no writes.
+- **Shell `cpd` commands.** Any cpd process may write the store, and readers never block (§4.2), so the shell commands do not need the engine to read or write it. `cpd doctor` (commands.md §14.1) runs in a recovery shell.
+- **Restarting the engine:** `cpd watch --ensure` (commands.md §12).
+
+**What it does not do.** It does not replace the WebUI for daily work. With the WebUI down and the core up, every typed tool works, so only the WebUI is lost. With the core down, state comes from the shell commands alone.
 
 ## 7. git and the Gate
 

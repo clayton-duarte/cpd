@@ -22,9 +22,9 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 10. [`session`](#10-session)
 10a. [`board`](#10a-board)
 11. [`events`](#11-events)
-11a. [`cockpit serve`](#11a-cockpit-serve)
+11a. [`cockpit serve` (removed)](#11a-cockpit-serve)
 12. [`watch`](#12-watch)
-13. [`tui`](#13-tui)
+13. [`tui` (removed)](#13-tui)
 14. [`doctor`, `config`, `tiers`, `models`, `preset`](#14-doctor-config-tiers-models-preset)
 15. [The pi adapter's protocol](#15-the-pi-adapters-protocol)
 16. [The Worker contract](#16-the-worker-contract)
@@ -57,37 +57,29 @@ Every command section has the same parts:
 - **Output**: one JSON example of success. Every failure is the envelope of §1.2, `{"ok": false, "error": {"code", "message", "details"}}`; `details` is listed where it carries something the caller acts on.
 - **Idempotent**: what a rerun does. The default of §1.3 is `"already": true`; a command that differs says so.
 
-A command is **internal** when cpd runs it by itself and neither an agent nor the User types it: a program cpd starts in a pane or detached, or a command only cpd's own parts (the engine, the pi adapter) run. Internal commands are hidden in clap (`hide = true`; a command under a hidden one is internal too), so they are absent from `--help` text but listed, marked, in the `tree` (§1.2). Today: `session run`, `attempt run`, `tui view` and its views, `plan decide` and `session state`. They are documented so their implementation Jobs have a contract.
+A command is **internal** when cpd runs it by itself and neither an agent nor the User types it: a program cpd starts in a pane or detached, or a command only cpd's own parts (the engine, the pi adapter) run. Internal commands are hidden in clap (`hide = true`; a command under a hidden one is internal too), so they are absent from `--help` text but listed, marked, in the `tree` (§1.2). Today: `session run`, `attempt run`, `plan decide` and `session state`. They are documented so their implementation Jobs have a contract.
 
 ### 1.2 Output and exit codes
 
-Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Six kinds of command print something other than one JSON value and are the only exceptions (amendment 10, §19):
+Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Four kinds of command print something other than one JSON value and are the only exceptions (amendment 10, §19):
 
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | a streaming command (§1.2) |
-| `cpd cockpit serve` (§11a) | one frame per line, NDJSON, on stdout (§5.5) | a streaming command (§1.2); it reads requests on stdin |
 | `cpd session tail` (§10.19) | one line per completed transcript message, the grammar of contract §6.20 (§10.19) | a read-only tail of a durable Session's host socket: it streams live frames as they complete, as the socket tail of Q33 is |
 | `cpd gate finish` (§26) | the run's report on stderr and its exit status | it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
-| `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
-| `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
-| `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the design outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
+| `cpd session run` (internal) | it runs pi in its pane | it is the program inside a Session's pane (§6.2), not a command an agent calls. If it fails before taking the terminal, it prints the failure envelope and exits with its code |
 
 `cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.22.45-070ddee", "protocol": 22, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. The `version` field is `<semantic version>-<commit>` where the semantic version is `0.<protocol>.<migrations>`: the commit is the short hash the build was given in `CPD_COMMIT` (set by `scripts/install-cpd.sh` and the Gate, so an installed binary reports the commit it was built from), capped at 7 characters: a longer hash is truncated to its first 7, so the commit suffix is at most 7 characters, e.g. `070ddee`; and `dev` when the build was given none, e.g. `0.19.45-dev` (docs/implementing.md "The version string"; docs/versioning.md). `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **23** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278, 4 until `session-titled`, hs-d257, 5 until `workflow-base-changed`, hs-d324, 6 until `session state waiting`, hs-d303, 7 until `review-opened`/`review-closed`, hs-d496, 8 until `session-retiered`, hs-d506, 9 until `plan-outlined`, hs-d502, 10 until `job-merged`'s `data.turn` and `session-message`'s `data.unblocks`, hs-d514, 11 until `session-resumed`, hs-d552, 12 until `session report`, hs-d573, 13 until `incident-started` and `incident-ended`, hs-d634, 14 until `mcp-attached`, pro-d8, 15 until the adapter runs `session switch-failed` and `session switched` and the `error` Event carries the reporting Session, 16 until `workflow-described`, pro-d94, 17 until `session-model-changed`: the tier-preset switch, the adapter acts on it at the Session's next idle, §14.6, 18 until `context pending`'s plan-level `jobs` field (Plan `explore-view`): the adapter's Manager `Pending work:` digest reads it, §15.7, 21 until the agent key on every display surface: `session show` and `session list` carry `key` and `board take` and `board list` carry `from_name`, both read by the adapter, which also restores a fixed name and handles `key_fixed`, §10.1, §10a, §15.4), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7) and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false` and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
 
-Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`cpd --help`, `cpd -h`, `cpd help`) adds `tree`: the whole command tree, every command whatever its depth, in clap's order, clap's own `help` subcommand left out. `cpd <group> --help` and `cpd help <group>` print `help` only. Each node is `{"name", "about", ...}`: `name` the command's word, `about` its one-line description (clap's, which ends with its § here). A runnable node (no subcommand, or subcommands that are optional, as `tui`) also has `callers`, `cockpit` and `internal` (§2). A node with subcommands has `commands`, its children. Example (trimmed with `...`):
+Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`cpd --help`, `cpd -h`, `cpd help`) adds `tree`: the whole command tree, every command whatever its depth, in clap's order, clap's own `help` subcommand left out. `cpd <group> --help` and `cpd help <group>` print `help` only. Each node is `{"name", "about", ...}`: `name` the command's word, `about` its one-line description (clap's, which ends with its § here). A runnable node (no subcommand, or subcommands that are optional) also has `callers`, `cockpit` and `internal` (§2). A node with subcommands has `commands`, its children. Example (trimmed with `...`):
 
 ```json
 {"ok": true, "help": "...", "tree": [
   {"name": "context", "about": "Contexts and their records (commands.md §3)", "commands": [
     {"name": "new", "about": "Create a Context (§3.1)", "callers": ["Lead"], "cockpit": true, "internal": false}
   ]},
-  {"name": "ask", "about": "Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1)", "callers": ["Worker"], "cockpit": false, "internal": false},
-  {"name": "tui", "about": "Build the cockpit and start the engine (commands.md §13)", "callers": [], "cockpit": false, "internal": false, "commands": [
-    {"name": "view", "about": "A view in a cockpit pane (internal; owns its terminal) (§13.2)", "commands": [
-      {"name": "tree", "about": "The session tree (left)", "callers": [], "cockpit": false, "internal": true}
-    ]}
-  ]}
+  {"name": "ask", "about": "Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1)", "callers": ["Worker"], "cockpit": false, "internal": false}
 ]}
 ```
 
@@ -303,9 +295,6 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
 | `cpd context embed` (§3.19) | Lead | no | no |
 | `cpd context reads` (§3.18) | Manager, Lead, Worker | no | no |
-| `cpd cockpit serve` (§11a) | none | no | no |
-| `cpd desktop` (§14.4a) | none | no | no |
-| `cpd desktop release` (§14.4b) | none | no | no |
 | `cpd protocol bug report` (§33.1) | Lead, Manager | no | no |
 | `cpd protocol bug mitigate` (§33.2) | Lead, Manager | no | no |
 | `cpd protocol bug close` (§33.3) | Lead, Manager | no | no |
@@ -313,6 +302,20 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd protocol bug show` (§33.5) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
+
+**Removed** (decision pro-d529, Plan `drop-cli-tui`; pi-native-core.md §6.1). These commands are no longer part of cpd's surface, so they have no index entry. Each removed command's section is headed by a removal note; the body under it is the command as the binary still has it, and it stays until the code removal lands and the cross-references are rewritten. The recovery entry that replaces the cockpit is contract §6.22.
+
+| Removed command | What it was | Replacement |
+|---|---|---|
+| `cpd tui` (§13.1) | build and attach the cockpit | none. The engine is restarted by `cpd watch --ensure` (§12) |
+| bare `cpd` (§13.3) | open the cockpit | none. `tmux -u -L cpd attach -t cpd` attaches to the tmux server (contract §6.2) |
+| `cpd tui view` and its views (§13.2, internal) | the cockpit's panes and dialogs | none |
+| `cpd tui action` (§9.12, §9.13, §13.2, internal) | the StatusBar's and the popups' clicks | none |
+| `cpd cockpit serve` (§11a) | the NDJSON stream for the WebUI backend | the WebUI's direct WebSocket to the core engine (contract §5.8) |
+| `cpd desktop`, `cpd desktop release` (§14.4a, §14.4b) | the Electron shell: launch, preview, release | none named by pro-d529 |
+| `cpd argv-check` (contract §5.6, hidden) | the parse-only check of the WebUI's argv bridge | none; it goes with the bridge that Plan 4 `webui-core-ws` deletes |
+
+Other sections of this file still mention the cockpit and `cpd tui` (for example the `no_cockpit` refusals, whose `details.next` names `cpd tui`); they are not yet rewritten.
 
 ## 3. `context`
 
@@ -3232,9 +3235,13 @@ cpd host repair
 
 ### 9.12 `cpd tui action host`
 
+**Removed** (decision pro-d529, Plan `drop-cli-tui`). No StatusBar click runs it: the cockpit is removed (§13). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
+
 (internal): what a click on the red version pill runs when `@cpd_host_alert` is set. Reads the install state file; when it is not `skipped` it does nothing. First ensures Context `host` (§3.11, contract §3.7 `permanent-contexts`), which returns its live Manager, registering it when there is none; a failure of ensure is reported on the client with `display-message -c <client>` and nothing is sent. Then brings that Manager into the chat slot as `session open` does (a stopped or asleep Manager is resumed), then, when `$CPD_HOME/run/cpd-install-notified` does not hold this incident's `since`, sends the Manager one message (as the User, `session send` with `--unblocks "cpd install skipped"`) and writes `since` and a newline to that file atomically; a later click on the same incident only opens the Manager. Message text (fixed): `cpd install skipped: <reason> (since <since>). Checkout: ~/projects/cpd. Read it with git -C ~/projects/cpd status / diff / log origin/main..HEAD (read only; never write in the checkout). Show the User what a repair would discard, ask with the tool cpd_host_approve, then run cpd host repair.` (contract §3.7 `host-alert`, §1.4, commands.md §15.18).
 
 ### 9.13 `cpd tui action incident`
+
+**Removed** (decision pro-d529, Plan `drop-cli-tui`). No StatusBar click runs it: the cockpit is removed (§13). Incident mode itself is unchanged; `cpd incident` starts and ends it. The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
 
 (internal): what a click on the incident pill runs (contract §6.1). Reads the incident's stored Lead (`incident.lead`); when it is null, resolves the `lead_session` of the alphabetically first Plan in `incident_plans`. Brings that Lead into the chat slot as `session open` does (a stopped or asleep Lead is resumed), sends it no message. With incident mode off it reports on the client with `display-message -c <client>` `no incident: nothing to open`; with no resolvable Lead `incidents require a lead`. It prints nothing on stdout or stderr and exits 0, as every `cpd tui action` does..
 
@@ -4039,6 +4046,8 @@ Idempotent: read-only; the same `--since` replays the same lines.
 
 ## 11a. `cockpit serve`
 
+**Removed** (decision pro-d529, Plan `drop-cli-tui`). `cpd cockpit serve` is no longer a command: the WebUI connects to the core engine directly over its WebSocket (contract §5.8; pi-native-core.md §5.1). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
+
 The WebUI backend's state and event stream (Plan `cpd-realtime-engine`; its invariants are contract §5.5). One process replaces the backend's spawns: the four list commands and `plan show` that it ran on every refresh, and the `events follow` child whose lines triggered them. A committed change reaches the stream without a spawn.
 
 ```
@@ -4213,7 +4222,11 @@ The engine it starts says how long it was down to each Manager (contract §3.7).
 
 ## 13. `tui`
 
+**Removed** (decision pro-d529, Plan `drop-cli-tui`; pi-native-core.md §6.1). `cpd tui`, the cockpit it builds, its `tui action` clicks and the bare `cpd` that opens the cockpit are no longer cpd's client surface. Sections 13.1 and 13.3 are removed. Section 13.2 (the views and their dialogs) and §17 (what the TUI reads) are kept unchanged as the record of what the views showed. Whether they are deleted or move into the WebUI's spec is an open point for the Lead. The recovery entry that replaces the cockpit is contract §6.22.
+
 ### 13.1 `tui`
+
+**Removed** (pro-d529). `cpd tui [--attach] [--respawn]` is no longer a command. The engine is restarted by `cpd watch --ensure` (§12); only tmux keep-alive stays (pi-native-core.md §3.3). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
 
 ```
 cpd tui [--attach] [--respawn]
@@ -4802,6 +4815,8 @@ Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_fo
 
 ### 13.3 `cpd` with no arguments
 
+**Removed** (decision pro-d529, Plan `drop-cli-tui`). Bare `cpd` no longer opens the cockpit or attaches a terminal to it. What it prints after the code removal is not decided here. To attach to the tmux server, use `tmux -u -L cpd attach -t cpd` (contract §6.2). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
+
 ```
 cpd
 ```
@@ -5091,7 +5106,7 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 5. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
 6. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced, are not protected by a live pin (`pi.pin.<pid>` of a live pid, whose target is a version name; contract §3.7 "The pin") and are older than 60 minutes and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids and the pins of dead or unparseable pids, are removed (a failure only warns); the cleanup never touches `<share>/node_modules`, `<share>/package.json`, `<share>/pnpm-lock.yaml`, `<share>/pnpm-workspace.yaml` or `<share>/patches`. Prints `installed <bin> and <link>` on stderr.
 7. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure` and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
-7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd desktop`, §14.4a). It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
+7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd desktop`, §14.4a, removed by pro-d529: this step goes with it in the code removal, and until then the binary still runs it). It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
    - a. `pnpm --dir <root> install --frozen-lockfile`.
    - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd desktop` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`.
    - c. `<home>/.local/share/cpd/app-root` (`<home>` = `$HOME`) is written with `<root>` as its one line, the absolute path, after b succeeded (a temporary file, then a rename).
@@ -5112,6 +5127,8 @@ Every refusal (steps 1 to 4b, nothing replaced), failure (steps 5 and 6) and fai
 Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`), the scratch home of step 4b (removed before the install ends), the checkout's `web/node_modules` and `web/dist-electron` (step 7a) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
 
 ### 14.4a `desktop`
+
+**Removed** (decision pro-d529, Plan `drop-cli-tui`). `cpd desktop` and its flags `--preview`, `--reload`, `--off` and `--status` are no longer commands. pro-d529 names no replacement, so the launch of the CPD.app shell is not decided here. The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
 
 ```
 cpd desktop
@@ -5163,6 +5180,8 @@ Effects: the checkout form of plain `cpd desktop` writes `<root>/web/dist-electr
 Idempotence: yes for each form. Ensure builds only a missing bundle; a second plain run signals the running Electron again (the checkout form) or reopens the installed app and downloads nothing (the shell form); `--preview` respawns the dev server and rewrites `web-state`; `--off` with no preview on succeeds (docs/ui-preview.md, `off`).
 
 ### 14.4b `desktop release`
+
+**Removed** (decision pro-d529, Plan `drop-cli-tui`). `cpd desktop release` is no longer a command. The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
 
 ```
 cpd desktop release
@@ -6441,6 +6460,8 @@ Removed by R19 (no Job-level Reviewer).
 Removed by hs-n641. The Worker latitude that hs-d512 allowed (a file outside `touches` when a test could not pass without it, listed in the commit message) is gone: the enforced `touches` check (contract §7.5) refuses such a path with `touches_violation`. The escape is the Lead's `job approve-touches` (§5.9a): a Worker that needs a path outside its `touches` asks (`cpd ask`) and the Lead approves it.
 
 ## 17. What the TUI reads
+
+**Removed surface** (decision pro-d529, Plan `drop-cli-tui`): the TUI this section describes is removed (§13). The section is kept unchanged as the record of what the views read. See the open point in §13.
 
 Outline §8 and D4: the views take one **snapshot** with a read command, then **follow Events**; there is no timer polling of the CLI, no cache directory and no tmux option carrying state, **with deliberate exceptions**: `@cpd_workers`, the StatusBar's workers text, which the engine sets, with the workers' short form and the width (below; contract §6.1) and `@cpd_runner`, the runner pill's text, which the engine sets from `[experimental].durable_workers` and a click also sets (pro-d199; contract §6.1). A view reads the database **in process**, through the read model (`tui/src/read/`): the same queries as the snapshot commands named below, one read transaction per snapshot, no subprocess and no `gh`. (An earlier draft had each view run `cpd` as a subprocess; the implementation does not and one source of truth is the store.) Reads take no lock and never wait for writers (§4.2); cpd 1's `workflow show` took 58 s under load (research.md), which is why the spike needed a cache.
 
