@@ -4,6 +4,7 @@ import type { CockpitAction, JobView, PlanViewModel, WorkflowView } from "../../
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
 import { Empty } from "../components/empty.tsx";
+import { ExternalLink } from "../components/ExternalLink.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
@@ -184,10 +185,10 @@ function WorkflowCard(props: { plan: PlanViewModel; wf: WorkflowView; onAction(a
         <span className="flex-1" />
         {wf.pr !== null ? (
           <p data-part="pr" className="flex items-center gap-2 font-mono text-[11.5px]">
-            <a href={wf.pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline">
+            <ExternalLink href={wf.pr.url} className="inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline">
               {`#${wf.pr.number} ${wf.pr.state ?? ""}`.trim()}
               <ExternalLinkIcon aria-hidden="true" className="size-3" />
-            </a>
+            </ExternalLink>
             {canPost ? (
               <Button type="button" variant="outline" size="xs" data-action="post-pr"
                 onClick={() => props.onAction({ kind: "pr.post", planId: plan.planId, workflow: wf.key })}>
@@ -233,10 +234,10 @@ function ReviewPrCard(props: { pr: NonNullable<PlanViewModel["reviewedPr"]> }): 
       <p data-part="review-pr-repo" className="font-mono text-[11.5px] text-muted-foreground">{pr.repo}</p>
       <p data-part="review-pr-title" className="text-foreground">{pr.title}</p>
       <p data-part="pr" className="font-mono text-[11.5px]">
-        <a href={pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline">
+        <ExternalLink href={pr.url} className="inline-flex items-center gap-1 text-status-focus-bright underline-offset-2 hover:underline">
           {`#${pr.number}${pr.state === null ? "" : ` ${pr.state}`}`}
           <ExternalLinkIcon aria-hidden="true" className="size-3" />
-        </a>
+        </ExternalLink>
       </p>
     </section>
   );

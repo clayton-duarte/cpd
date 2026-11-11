@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ExternalLink } from "../components/ExternalLink.tsx";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -50,6 +51,7 @@ export function splitMarkdown(text: string): string[] {
 }
 
 const markdownComponents: Components = {
+  a: ExternalLink,
   pre({ children }) {
     return <>{children}</>;
   },

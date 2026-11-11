@@ -1455,7 +1455,7 @@ Behaviours (tested with a fake `ViteDevServer` and fake boundaries):
 - `cpd:c2s` payloads are passed to `hub.handle(data)` unparsed; a rejected `handle` is logged, never thrown into Vite. **Amended by 15.1:** the same `hub.handle(data)` call serves the WebSocket endpoint's incoming text frames, and the hub answers a `ping` client message with `pong` at once (15.2), with no cockpit, backend or parse error involved.
 - Closing: on `server.httpServer?.once("close")` (and the plugin's `closeBundle` hook, whose dev-server timing is unverified, O17) the plugin closes every connection, calls `cockpit.stop()`; idempotent. Plugin starts services on server start and closes them on server close.
 
-`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code. **Superseded for the port by pro-d541** (§15.1 "Fixed ports"): the dev server binds `0.0.0.0:33333` with `strictPort`.
+`web/vite.config.ts`: `export default defineConfig({ plugins: [react(), cpdWebPlugin()], server: { port: 5173, strictPort: true } })`. No other plugin (no Tailwind), no other server middleware; the legacy live adapter is deleted with the legacy code. **Superseded for the port by pro-d541** (§15.1 "Fixed ports"): the dev server binds `0.0.0.0:33333` with `strictPort`. **Amended by 28.2 (Plan `webui-ext-links`):** the plugin list also holds `cpdFavicon`, and the plugin serves `/favicon.svg` and `/favicon.ico` from memory, two static middlewares of its own.
 
 ### 6.7 ui-cockpit `web/src/ui/cockpit/`
 
@@ -2533,4 +2533,62 @@ Normative. Bug b12 decides the points below. Where this section and §10.1 diffe
 
 - Stated plainly: the running code is unchanged by this section. The claim that it maps a cpd notice to the User is read from the source (`web/src/server/pi/jsonl.ts:301`, `pi/lib/render.ts:62`), not seen in a running browser (unverified).
 - The marker is not decided here (docs/contract.md §2.2, open point). Until it is, the rule of 27.1 cannot be implemented, and the stated limitation of §10.1 stands.
+
+
+## 28. Favicon: build-time generated ICO and SVG (Plan `webui-ext-links`; pro-d99, pro-d544)
+
+Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI gets a favicon generated at build time from one source, `web/build/icon/cpd-icon.svg`, with an SVG favicon and an ICO fallback, both linked from `web/index.html`. Survey (the Plan's explore artefact `survey-favicon.md`): no favicon is served today. `web/public/` does not exist, and `web/index.html` has no icon link.
+
+### 28.1 Source and outputs
+
+- The source is `web/build/icon/cpd-icon.svg`: a self-contained SVG with a 1024 by 1024 `viewBox`, the Electron app icon. It is the only favicon source. No copy of it is committed under `web/`, because a committed copy is the hand-kept copy that pro-d99 forbids.
+- The outputs are generated, never committed:
+  - `favicon.svg`: the source bytes, served as the SVG favicon.
+  - `favicon.ico`: the fallback. One ICO file with PNG-encoded entries at 16, 32 and 48 px, rasterised from the source. The sizes are a Phase choice of this section.
+- The ICO header is `00 00 01 00`, then a little-endian count of entries equal to the number of sizes.
+
+### 28.2 Generation
+
+- It is wired in `web/vite.config.ts` only, as one Vite plugin (`cpdFavicon`). That file is the one the Job `web-impl` may touch for it.
+- One generator function produces both files. It runs once per process, so the dev server and `vite build` serve the same bytes.
+- In `vite build` the plugin emits both files into the output root (`generateBundle`), so `dist/favicon.svg` and `dist/favicon.ico` exist.
+- In `vite` dev the plugin serves both files from memory (`configureServer`, registered before Vite's own middlewares, so `/favicon.ico` is not answered by the HTML fallback).
+- No file is written into the source tree. Nothing generated is committed, so no `.gitignore` entry is needed.
+- The output is deterministic: the same source bytes give byte-identical outputs on every run (Idempotence).
+- It fails loud. A missing source, or a failed rasterisation, stops the build or the dev server with the error. No fallback icon is served.
+- The rasteriser and the ICO packer are new dependencies, and A2 and pro-d17 freeze `web/package.json`. This section does not choose them; 28.6 item 1 is the decision the Lead takes before `web-impl` adds one.
+
+### 28.3 Links in `web/index.html`
+
+The `<head>` of `web/index.html` gets these two links after the `<title>`, in this order:
+
+```html
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
+```
+
+The SVG is the preferred icon. The ICO is the fallback for a browser that does not take an SVG favicon. A browser requests `/favicon.ico` even without a link, so the ICO path is served either way.
+
+`web/electron.html` is the Electron renderer entry, not `web/index.html`, and it gets no icon link in this section. The Electron app icon comes from electron-builder (`web/electron-builder.yml`).
+
+### 28.4 Serving
+
+- Dev (`vite`, port 5173, `strictPort`): `GET /favicon.svg` answers 200 with `image/svg+xml`, and `GET /favicon.ico` answers 200 with `image/x-icon`.
+- Build (`vite build`): `dist/favicon.svg` and `dist/favicon.ico` sit at the output root, so a static server of `dist/` answers the same paths with 200.
+- Tests (Job `web-tests`, `web/src/ui/favicon.test.ts`), each with no real server, socket or file watcher (A6):
+  - `index.html` has the two links of 28.3, read as text, the pattern of `src/electron/electron-html.test.ts`.
+  - The generator's ICO has the header and the entry count of 28.1, and its SVG is the source bytes.
+  - The dev middleware answers the two paths with 200 and the content types of 28.4, against a fake `ViteDevServer`.
+  - The build emits both files, against a fake plugin context.
+
+### 28.5 Limits (stated plainly)
+
+- Unverified: how the icon renders at 16 and 32 px. The source has a 100 px margin and a blurred shadow, and the glyph may be illegible at 16 px. If it is, a favicon-specific SVG is a new decision for the Lead, not a silent variant of the source.
+- Unverified: whether Safari takes an `image/svg+xml` favicon.
+
+### 28.6 Open points (not decided here)
+
+1. The rasteriser and ICO packer: which packages, at which exact versions. Adding them lifts the freeze of A2 and pro-d17 for those lines. Candidates named by the survey, unverified (no network): `@resvg/resvg-js` and `png-to-ico`. The Lead decides before `web-impl` runs.
+2. The preview servers on ports 3333 and 33333 are outside `web/` (`scripts/preview-web.sh`, not read). Unverified whether they serve the favicon paths. If they do not, `/favicon.ico` answers 404 there.
+3. The icon at 16 and 32 px (28.5).
 
