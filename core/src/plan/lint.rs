@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::jobs::{self, Job};
 use super::outline::Outline;
 use super::prs::WorkflowRow;
-use super::review::{drafts_incomplete, outline_incomplete, outline_missing};
+use super::review::{
+    drafts_incomplete, outline_incomplete, outline_missing, unregistered_workflows,
+};
 use super::row::Phase;
 use super::shape;
 use super::shared::is_shared;
@@ -35,6 +37,7 @@ pub enum Rule {
     DraftIncomplete,
     OutlineMissing,
     OutlineIncomplete,
+    WorkflowUnregistered,
     TestJobRequired,
     ImplJobRequired,
     ShapeIncomplete,
@@ -45,10 +48,11 @@ pub enum Rule {
 }
 
 impl Rule {
-    pub const ALL: [Rule; 10] = [
+    pub const ALL: [Rule; 11] = [
         Rule::DraftIncomplete,
         Rule::OutlineMissing,
         Rule::OutlineIncomplete,
+        Rule::WorkflowUnregistered,
         Rule::TestJobRequired,
         Rule::ImplJobRequired,
         Rule::ShapeIncomplete,
@@ -63,6 +67,7 @@ impl Rule {
             Rule::DraftIncomplete => "draft_incomplete",
             Rule::OutlineMissing => "outline_missing",
             Rule::OutlineIncomplete => "outline_incomplete",
+            Rule::WorkflowUnregistered => "workflow_unregistered",
             Rule::TestJobRequired => "test_job_required",
             Rule::ImplJobRequired => "impl_job_required",
             Rule::ShapeIncomplete => "shape_incomplete",
@@ -183,10 +188,11 @@ impl<'a> Input<'a> {
 type RuleFn = fn(&Input) -> Vec<Finding>;
 
 /// The rules, in catalogue order: another rule is one variant, one function and one line here.
-const RULES: [RuleFn; 10] = [
+const RULES: [RuleFn; 11] = [
     draft_incomplete_rule,
     outline_missing_rule,
     outline_incomplete_rule,
+    workflow_unregistered_rule,
     test_job_required_rule,
     impl_job_required_rule,
     shape_incomplete_rule,
@@ -203,6 +209,7 @@ impl Rule {
             Rule::DraftIncomplete => ErrorCode::DraftIncomplete,
             Rule::OutlineMissing => ErrorCode::OutlineMissing,
             Rule::OutlineIncomplete => ErrorCode::OutlineIncomplete,
+            Rule::WorkflowUnregistered => ErrorCode::WorkflowUnregistered,
             Rule::TestJobRequired => ErrorCode::TestJobRequired,
             Rule::ImplJobRequired => ErrorCode::ImplJobRequired,
             Rule::ShapeIncomplete => ErrorCode::ShapeIncomplete,
@@ -250,6 +257,13 @@ fn outline_incomplete_rule(i: &Input) -> Vec<Finding> {
         .outline
         .and_then(|o| outline_incomplete(i.plan, o, i.workflows, i.jobs));
     one(Rule::OutlineIncomplete, e)
+}
+
+fn workflow_unregistered_rule(i: &Input) -> Vec<Finding> {
+    let e = i
+        .outline
+        .and_then(|o| unregistered_workflows(i.plan, o, i.workflows));
+    one(Rule::WorkflowUnregistered, e)
 }
 
 fn test_job_required_rule(i: &Input) -> Vec<Finding> {

@@ -246,11 +246,12 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261109T2108-bug-protocol-breach",
             "20261110T0121-quota-cause",
             "20261110T1305-protocol-breach",
+            "20261110T2200-draft-waiting-on",
         ]
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261110T1305-protocol-breach")
+        Some("20261110T2200-draft-waiting-on")
     );
 }
 

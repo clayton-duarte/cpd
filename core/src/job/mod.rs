@@ -142,6 +142,9 @@ pub struct AddArgs {
     /// like any Job; a draft that lacks them is a stub, completed later with job edit
     #[arg(long)]
     draft: bool,
+    /// What a draft waits on: lead, user, explore:<job>
+    #[arg(long, value_name = "target")]
+    pub(crate) waiting_on: Option<String>,
     /// Add it urgent (§2.2): E3 starts it first and may run it beyond the
     /// concurrency. Only when the User explicitly asks
     #[arg(long)]
@@ -183,6 +186,9 @@ pub struct EditArgs {
     /// Move the Job to this Workflow (it keeps no old Dependency)
     #[arg(long = "workflow", value_name = "key")]
     workflow: Option<WorkflowKey>,
+    /// What a draft waits on: lead, user, explore:<job>
+    #[arg(long, value_name = "target")]
+    pub(crate) waiting_on: Option<String>,
     /// The new kind (§2.2 "Job kinds"): work, docs, test or impl. open and update are cpd's
     #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]
     kind: Option<String>,

@@ -50,7 +50,10 @@ export function zoneTime(at: string | Date, timeZone?: string): string {
 /** The system prompt line naming the zone, built from `now`. */
 export function zoneLine(now: Date, timeZone?: string): string {
   const iana = timeZone ?? new Intl.DateTimeFormat().resolvedOptions().timeZone; // Node canonicalises a given name (Asia/Kolkata -> Asia/Calcutta), so a given one is kept
-  return `Time zone: ${iana} (${zoneLabel(now, timeZone)}). State every time to a person in this zone with the zone named, as ${proseTime(now, timeZone)}, never in UTC.`;
+  return `Time zone: ${iana} (${zoneLabel(now, timeZone)}). State every time to a person in this zone with the zone named, as ${proseTime(STATIC_REFERENCE_TIME, timeZone)}, never in UTC.`;
 }
 
 export const TIME_ZONE_SECTION = "cpd-time-zone";
+
+const STATIC_REFERENCE_TIME = new Date("2026-01-15T12:00:00.000Z");
+

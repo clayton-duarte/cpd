@@ -5,11 +5,51 @@
 //! Writers: `pr poll`'s merge, `pr open`'s record and `workflow cancel`'s finish. `pr review`'s `finish_plan` ends codereview Plans,
 //! which have no Workflows, and is not governed by this rule.
 
-use crate::error::CpdError;
+use rusqlite::OptionalExtension;
+
+use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey};
 use crate::pr::open::merged_workflows;
 use crate::store::WriteTxn;
+
+/// Verifies that all outline `done_when` workflows are registered and merged, and no drafts remain.
+pub(crate) fn check_complete(conn: &rusqlite::Connection, plan: &PlanId) -> Result<(), CpdError> {
+    if let Ok(Some(outline)) = crate::plan::outline::load(conn, plan) {
+        for key in outline.done_when.keys() {
+            let status: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM workflows WHERE plan = ?1 AND key = ?2",
+                    [plan.as_str(), key.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if status.as_deref() != Some("merged") {
+                return Err(CpdError::new(
+                    ErrorCode::PlanIncomplete,
+                    format!(
+                        "Plan {plan} cannot reach done: workflow {key} is unregistered or unmerged."
+                    ),
+                )
+                .with("plan", plan.as_str())
+                .with("workflow", key.as_str()));
+            }
+        }
+    }
+    let draft_exists: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status = 'draft')",
+        [plan.as_str()],
+        |r| r.get(0),
+    )?;
+    if draft_exists {
+        return Err(CpdError::new(
+            ErrorCode::PlanIncomplete,
+            format!("Plan {plan} cannot reach done: unresolved draft jobs remain."),
+        )
+        .with("plan", plan.as_str()));
+    }
+    Ok(())
+}
 
 /// In the caller's transaction: when the Plan is in `dispatch` or `deploy` (never `plan`), every non-cancelled Workflow is `merged` (one at least) and
 /// no Job is non-final, the Plan steps dispatch -> deploy (no Event) and is `done` with `done_at`, one `plan-done` Event, and its pending plan reviews superseded. When the
@@ -81,6 +121,23 @@ pub(crate) fn settle_done(
         [plan.as_str()],
     )?;
     if blocked {
+        return Ok(false);
+    }
+    if let Err(e) = check_complete(tx, plan) {
+        let context: Option<String> = tx
+            .query_row(
+                "SELECT context FROM plans WHERE id = ?1",
+                [plan.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(ctx) = context {
+            let _ = crate::session::tell_manager_of(
+                tx,
+                Some(&ctx),
+                &format!("Plan {plan} cannot reach done: {e}"),
+            );
+        }
         return Ok(false);
     }
     crate::plan::close_reviews(tx, plan, &crate::plan::Closing::Done)?;
