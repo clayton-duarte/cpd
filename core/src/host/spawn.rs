@@ -552,11 +552,12 @@ impl FakeSpawn {
         self.table().survives.push((pid, signal));
     }
 
-    /// `launches` without the engine's `cpd janitor` launch (step E16 starts one on the first tick of every engine start).
+    /// `launches` without the engine's `cpd janitor` launch (step E16 starts one on the first tick of every engine start)
+    /// and WebUI service launches (e.g. `node web/src/server/serve.ts`).
     pub fn launches_but_janitor(&self) -> Vec<Launch> {
         self.launches()
             .into_iter()
-            .filter(|l| l.args != ["janitor"])
+            .filter(|l| l.args != ["janitor"] && !l.args.iter().any(|arg| arg.contains("serve.ts")))
             .collect()
     }
 
