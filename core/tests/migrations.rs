@@ -896,6 +896,15 @@ mod migrations {
         clone.commit();
         clone.check().unwrap();
     }
+
+    /// Evidence pro-n444: A worktree build applied an uncommitted draft migration
+    /// to the live ~/.cpd store, causing install refusal.
+    /// Verify that the store connection / migration runner refuses migration application
+    /// against the live store unless isolated.
+    #[test]
+    fn test_worktree_migration_against_live_store_refused() {
+        panic!("stub: test_worktree_migration_against_live_store_refused not implemented yet");
+    }
 }
 
 /// Everything that is not one of those allowances still fails: an edit, a delete, and a
