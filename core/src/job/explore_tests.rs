@@ -236,7 +236,7 @@ impl Fixture {
             spec: Some(spec.to_path_buf()),
             needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
             draft,
-            waiting_on: None,
+            waiting_on: if draft { Some("lead".to_string()) } else { None },
             urgent: false,
             kind: Some(kind.to_owned()),
             workflow: WorkflowArg {
