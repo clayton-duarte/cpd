@@ -46,7 +46,7 @@ fn verify(fx: &Fx, key: &str, needs: &[&str], pr: &str, draft: bool) -> crate::c
         args.extend(["--needs", &needs]);
     }
     if draft {
-        args.push("--draft");
+        args.extend(["--draft", "--waiting-on", "lead"]);
     }
     fx.cpd(&args)
 }
@@ -102,6 +102,8 @@ fn a_verify_job_is_added_to_a_tdd_pr_when_it_needs_an_impl_job() {
         "--needs",
         "i",
         "--draft",
+        "--waiting-on",
+        "lead",
         "--workflow",
         "api",
         "--plan",

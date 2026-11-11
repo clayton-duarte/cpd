@@ -24,6 +24,9 @@ fn stub(fx: &Fx, key: &str, extra: &[&str]) -> Run {
     let mut args = vec![
         "job", "add", key, "--draft", "--title", &title, "--plan", "pl",
     ];
+    if !extra.iter().any(|a| a.starts_with("--waiting-on")) {
+        args.extend(["--waiting-on", "lead"]);
+    }
     args.extend(extra);
     fx.cpd(&args)
 }

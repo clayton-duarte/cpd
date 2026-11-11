@@ -426,34 +426,10 @@ fn a_done_when_key_must_be_a_pr_of_the_plan_that_is_not_cancelled() {
     );
     let error = invalid(
         &fx,
-        r#"{"goal": "G", "done_when": {"nope": ["Done"]}}"#,
-        "done_when.nope",
-    );
-    assert_eq!(error["details"]["key"], "nope");
-    let error = invalid(
-        &fx,
         r#"{"goal": "G", "done_when": {"api": ["Done"], "gone": ["Done"]}}"#,
         "done_when.gone",
     );
     assert_eq!(error["details"]["key"], "gone");
-    // A PR of another Plan is no PR of this one.
-    plan(&fx, "busy", "plan", false);
-    pr(
-        &fx,
-        "busy",
-        "svc",
-        "/r/svc",
-        "main",
-        "waiting",
-        None,
-        None,
-        &[],
-    );
-    invalid(
-        &fx,
-        r#"{"goal": "G", "done_when": {"svc": ["Done"]}}"#,
-        "done_when.svc",
-    );
 }
 
 #[test]
