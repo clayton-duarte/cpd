@@ -3890,6 +3890,8 @@ Each is one behaviour, with the contract as its assertion, against a mock core s
 - the ladder climbs an open escalation after 10 minutes, one tier per climb, and stops at the User;
 - the system prompt block is byte-identical across a turn boundary.
 
+Verification: Job `pi-extension-tools-ci-fix` verified that `node --test pi/test/tools.test.ts` passes cleanly against the mock core socket implementation.
+
 #### Open points
 
 1. **Framing** is decided above (NDJSON). The Lead confirms it; it resolves §5.8's open point 1 for `core.sock`.
