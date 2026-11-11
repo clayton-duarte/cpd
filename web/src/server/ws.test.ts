@@ -293,6 +293,26 @@ describe("ws server", () => {
   });
 
   it("rejects spoofed ipv6 ula domain names", () => {
-    expect(true).toBe(false);
+    // IPv6 ULA (fc00::/7) origins are accepted only when the host is an IPv6 address literal
+    // enclosed in brackets, e.g. [fd12:3456::1], whose first 7 bits are 1111110.
+    // Domain names starting with 'fc' or 'fd' (such as fd.evil.com or fc-attacker.example)
+    // are NOT address literals and must be rejected (web/CONTRACT.md §15.1, pro-d552, b19).
+
+    // Valid IPv6 ULA address literals:
+    expect(acceptsOrigin("http://[fd12:3456::1]:3333")).toBe(true);
+    expect(acceptsOrigin("http://[fc00::1]:33333")).toBe(true);
+    expect(acceptsOrigin("http://[fd00:abcd:1234::1]:3333")).toBe(true);
+
+    // Spoofed domain names that begin with 'fc' or 'fd' must be rejected:
+    expect(acceptsOrigin("http://fd.evil.com:3333")).toBe(false);
+    expect(acceptsOrigin("http://fd.evil.com:33333")).toBe(false);
+    expect(acceptsOrigin("http://fc-attacker.example:3333")).toBe(false);
+    expect(acceptsOrigin("http://fc-attacker.example:33333")).toBe(false);
+    expect(acceptsOrigin("http://fde.attacker.test:3333")).toBe(false);
+    expect(acceptsOrigin("http://fce.attacker.test:33333")).toBe(false);
+
+    // Non-ULA IPv6 address literals must also be rejected:
+    expect(acceptsOrigin("http://[fe80::1]:3333")).toBe(false); // link-local
+    expect(acceptsOrigin("http://[2001:db8::1]:3333")).toBe(false); // global unicast
   });
 });
