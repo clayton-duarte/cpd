@@ -174,8 +174,8 @@ fn the_binaries_are_those_of_the_area_table() {
     let table = area_table();
     assert_eq!(
         table.len(),
-        7,
-        "docs/implementing.md's area table: engine, workflow, flow, session, store, tui, tooling: {table:?}"
+        6,
+        "docs/implementing.md's area table: engine, workflow, flow, session, store, tooling: {table:?}"
     );
 
     let binaries = binaries();
@@ -290,17 +290,17 @@ fn has_module(src: &Path, name: &str) -> bool {
     src.join(format!("{name}.rs")).is_file() || src.join(name).join("mod.rs").is_file()
 }
 
-/// docs/implementing.md, Layout: four members; `cpd-engine` holds `watch` and `doctor` and depends on `cpd-core`;
-/// `cpd-tui` does not depend on `cpd-engine` (`watch::restart` is passed in); `cpd-core` has neither module.
+/// docs/implementing.md, Layout: three members; `cpd-engine` holds `watch` and `doctor` and depends on `cpd-core`;
+/// `cpd-core` has neither module.
 #[test]
-fn the_four_crates_cpd_engine_holds_watch_and_doctor_and_cpd_tui_does_not_depend_on_it() {
+fn the_crates_cpd_engine_holds_watch_and_doctor() {
     let packages = packages();
     let mut problems = Vec::new();
 
     let names: Vec<_> = packages.keys().map(String::as_str).collect();
-    if names != ["cpd", "cpd-core", "cpd-engine", "cpd-tui"] {
+    if names != ["cpd", "cpd-core", "cpd-engine"] {
         problems.push(format!(
-            "the workspace members are {names:?}, not cpd, cpd-core, cpd-engine and cpd-tui"
+            "the workspace members are {names:?}, not cpd, cpd-core and cpd-engine"
         ));
     }
 
@@ -317,15 +317,6 @@ fn the_four_crates_cpd_engine_holds_watch_and_doctor_and_cpd_tui_does_not_depend
             }
             if !deps.iter().any(|d| d == "cpd-core") {
                 problems.push("cpd-engine does not depend on cpd-core".to_owned());
-            }
-        }
-    }
-
-    match packages.get("cpd-tui") {
-        None => problems.push("cpd-tui is not a workspace member".to_owned()),
-        Some((_, deps)) => {
-            if deps.iter().any(|d| d == "cpd-engine") {
-                problems.push("cpd-tui depends on cpd-engine".to_owned());
             }
         }
     }

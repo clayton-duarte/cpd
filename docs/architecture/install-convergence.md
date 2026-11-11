@@ -1,6 +1,6 @@
 # Install convergence
 
-Decided by pro-d545 (`app::reload` signals Electron only when `preview-health.json` has `shell_abi` 2 or more; the shell release `app-v0.1.0` sets `CFBundleShortVersionString` to `0.1.0`) and pro-d553 (`cpd install` installs shell release `app-v0.1.0` to `/Applications/CPD.app` on macOS only; Linux, the homeserver, gets none). The normative rules are in `web/CONTRACT.md` §30, "Install convergence". This page states what one `cpd install` leaves on a machine, and where each part is built.
+Decided by pro-d545 (`app::reload` signals Electron only when `preview-health.json` has `shell_abi` 2 or more; the shell release `app-v0.1.0` sets `CFBundleShortVersionString` to `0.1.0`) and pro-d553 (`cpd install` installs shell release `app-v0.1.0` to `/Applications/CPD.app` on macOS only; Linux, the homeserver, gets none). The normative rules are in `web/CONTRACT.md` §31, "Install convergence". This page states what one `cpd install` leaves on a machine, and where each part is built.
 
 Status: the target. As of this document the code does not do this. Each part below says what the code does today, read from the source, and what the target adds. Nothing here was run on a machine (unverified).
 

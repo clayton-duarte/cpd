@@ -2694,28 +2694,47 @@ Normative for the target. **Status at this commit: not built.** `WorkflowView` (
 
 DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).
 
-## 30. Install convergence: the preview worktree, the prod assets and CPD.app (Plan `ports-everywhere`; pro-d545, pro-d553)
+## 30. ContextTreeModel.owners comes from core (Job `owners-docs`)
+
+Normative. Job `owners-docs` decides the points below from decisions pro-d513 and pro-d558 (core is the single source of truth for domain data) and assumptions A1 to A3. Where another section of this file, or docs/contract.md, says or implies that the web server reads the policy owners itself, this section wins.
+
+### 30.1 The source
+
+- `ContextTreeModel.owners` is `string[]`: the owner logins that core's `known_owners()` returns, sorted (docs/contract.md §5.5 for the cockpit serve panes, §5.8 for the `/cpd-ws` snapshot). Core is the only computer of this list (A1).
+- It is `[]` exactly when no `<owner>/owner.toml` exists under `$CPD_HOME/policy` (A3). An empty list is therefore a fact about the policy directory, never a read failure.
+
+### 30.2 The transports pass it through (A2)
+
+- **The cockpit stream** (§13): the serve snapshot's `owners` value is copied into `ContextTreeModel.owners` as it is received, on every tree the service builds.
+- **The core WebSocket** (§26.1): the `owners` of core's `snapshot` result is copied into `ContextTreeModel.owners` as it is received.
+- Neither transport makes a web server read of the policy directory to fill `owners`: no `$CPD_HOME/policy` listing, no `owner.toml` `stat`, in `web/src/server/`. The web-side `knownOwners` of `web/src/server/plugin.ts` is the duplicate this section removes; its removal is the implementation Job's, not this docs Job's.
+
+### 30.3 Status and limits
+
+- Design. Read from the source at this commit (unverified at run time): core has the function (`core/src/policy/known.rs`); the cockpit serve snapshot and the `/cpd-ws` listener do not yet carry `owners` (`core/src/cockpit/mod.rs` has no such pane; no `core/` source names `cpd-ws`); the web still reads the directory itself (`web/src/server/plugin.ts`, `knownOwners`).
+
+## 31. Install convergence: the preview worktree, the prod assets and CPD.app (Plan `ports-everywhere`; pro-d545, pro-d553)
 
 Normative target. The rules of one `cpd install --root <checkout>` on every machine, the part that is macOS only, and what the code does today. `docs/architecture/install-convergence.md` states the same with the reasons; where they differ, this section wins for the web contract and `docs/commands.md` §14.4 for the command. Recency: pro-d553 (2026-11-11) supersedes pro-d504 and pro-d505 (2026-11-10) on whether install installs CPD.app.
 
-### 30.1 Preview worktree
+### 31.1 Preview worktree
 
 - When `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` is missing, install creates it: `git worktree add -B preview/web <path> origin/main`, then `pnpm install --frozen-lockfile` in it. On a checkout at `~/projects/cpd` that path is `~/projects/cpd.preview.web`, on branch `preview/web`.
 - When it exists, install does not create it, and syncs it to `origin/main` as §28.1 states.
 - Today: creation is in `scripts/preview-web.sh` (`on` and `serve_only`). `cpd install` only syncs an existing worktree (`sync_preview_worktree`, `core/src/install/mod.rs`). Unverified: that install creates nothing on a machine that lacks the worktree (read from source, not run).
 
-### 30.2 Prod browser static assets
+### 31.2 Prod browser static assets
 
 - Install builds `<root>/web/dist` from the checkout on every machine: `pnpm --dir <root> --filter cpd-web-client run build` (`vite build`). The production server on `0.0.0.0:3333` serves it (`docs/architecture/webui-network-ports.md`).
 - Today: install builds only `web/dist-electron` (step 7a, `build:electron`). No install step runs `vite build`.
 
-### 30.3 CPD.app, macOS only
+### 31.3 CPD.app, macOS only
 
 - On macOS, install installs shell release `app-v0.1.0` to `/Applications/CPD.app`. On Linux it installs no shell (the homeserver gets none; pro-d553).
 - The shell is the GitHub Release, not built from the checkout: `scripts/release-shell.sh` builds it and `gh release create app-v0.1.0` publishes it (§14.4b of `docs/commands.md`).
 - Today: install does not install CPD.app. `cpd desktop` (`docs/commands.md` §14.4a) does: when the bundle is missing it runs `gh release download` for the latest release, not the tag `app-v0.1.0`, clears quarantine and opens the app (`core/src/app/mod.rs`, `install_and_open_release`).
 
-### 30.4 Idempotence and open points
+### 31.4 Idempotence and open points
 
 - A rerun on a converged machine changes nothing (`docs/commands.md` §14.4: install is idempotent). Assumption of this section, not in any record: a shell already at `app-v0.1.0` is not reinstalled.
 - Open, not decided here: whether install opens CPD.app after it installs it; what install does when `/Applications/CPD.app` is at another version; whether a failed worktree creation or prod build fails the install's exit or only prints.

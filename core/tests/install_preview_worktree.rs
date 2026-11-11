@@ -1,5 +1,5 @@
 //! Red tests for cpd install preview worktree creation and macOS CPD.app install
-//! (Plan `ports-everywhere`, pro-d545, pro-d553, web/CONTRACT.md §30).
+//! (Plan `ports-everywhere`, pro-d545, pro-d553, web/CONTRACT.md §31).
 //!
 //! - `creates_preview_worktree_if_missing`: cpd install creates ~/projects/cpd.preview.web if missing
 //!   (`git worktree add -B preview/web <path> origin/main`), runs `pnpm install --frozen-lockfile` in it,

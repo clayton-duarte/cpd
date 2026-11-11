@@ -148,7 +148,7 @@ fn anchors() {
         serde_json::json!(["Lead", "Manager"])
     );
     assert_eq!(find(&tree, "session open")["cockpit"], true);
-    for internal in ["session run", "plan decide", "tui view tree"] {
+    for internal in ["session run", "plan decide"] {
         assert_eq!(find(&tree, internal)["internal"], true, "{internal}");
     }
 }

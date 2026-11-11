@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ContextNode, ContextTreeModel, SessionNode } from "../../protocol/cockpit.ts";
 import { mount } from "../../testing/render.tsx";
+import { mapPanes } from "../../server/cockpit/readmodel.ts";
 import { ContextTree } from "./ContextTree.tsx";
 
 function session(
@@ -1285,3 +1286,48 @@ it("a row that is not selected has data-active false", () => {
   expect(q(m.container, rowSel["s-mgr"])?.getAttribute("data-active")).toBe("false");
   m.unmount();
 });
+
+it("a tree with two owners renders both in the dialog select over the core WebSocket path", () => {
+  const rawPanes = {
+    context: { ok: true, contexts: [{ id: "c1", title: "Context One", archived_at: null, records: 0, open_questions: 0 }], events_cursor: 1 },
+    plan: { ok: true, plans: [], events_cursor: 1 },
+    session: {
+      ok: true,
+      sessions: [
+        {
+          id: "s-mgr",
+          key: null,
+          name: null,
+          runner: "pi",
+          role: "manager",
+          state: "idle",
+          context: "c1",
+          plan: null,
+          plan_lead: false,
+          archived_at: null,
+          file: null,
+          tier: null,
+          title: null,
+          cwd: null,
+        },
+      ],
+      events_cursor: 1,
+    },
+    inbox: { ok: true, items: [], engine: { running: true }, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, events_cursor: 1 },
+    owners: ["clayton-duarte", "missionlane"],
+  };
+  const { tree } = mapPanes(rawPanes as any);
+  const m = mount(<ContextTree {...props({ tree, onAction: vi.fn() })} />);
+  const btn = q(treeHeader(m.container) ?? m.container, 'button[data-action="new-manager"]')
+    ?? q(treeHeader(m.container) ?? m.container, 'button[data-action="new-context"]')
+    ?? q(m.container, "header button");
+  click(btn);
+  expect(dialog(), "New Context dialog opens").not.toBeNull();
+  expect(dialog()?.textContent).not.toContain("No owner policy: add $CPD_HOME/policy/<owner>/owner.toml");
+  const select = dialog()?.querySelector('select[aria-label="Owner"]');
+  expect(select, "owner select renders").not.toBeNull();
+  const options = Array.from(select?.querySelectorAll("option") ?? []).map((o) => o.value);
+  expect(options).toEqual(["clayton-duarte", "missionlane"]);
+  m.unmount();
+});
+

@@ -7,41 +7,31 @@ use std::ffi::OsString;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser, Subcommand};
 
-use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host_repair as host;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
-use cpd_core::store::Store;
 use cpd_core::{
     ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp,
     metrics, models, plan, policy, pr, protocol, prune, resource, secret, session, swr, tag,
     testsel, version_sync,
 };
-use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
-use crate::{app, install};
+use crate::install;
 
 /// The build's version string: `<Cargo.toml version>-<commit>`: the short hash the build was given in `CPD_COMMIT`, `dev` when it was given none.
 pub fn version() -> &'static str {
     env!("CPD_VERSION")
 }
 
-/// cpd 2: every command prints exactly one JSON value on stdout. Without a
-/// command, in a terminal, it opens the cockpit (commands.md §13.3).
+/// cpd 2: every command prints exactly one JSON value on stdout.
 #[derive(Parser, Debug)]
 #[command(name = "cpd", version, color = clap::ColorChoice::Never)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum CockpitCommand {
-    /// Serve snapshots and Events as NDJSON on stdout until stdin ends (commands.md §11a)
-    Serve,
 }
 
 #[derive(Subcommand, Debug)]
@@ -94,8 +84,6 @@ pub enum Command {
     Inbox(inbox::cmd::Command),
     /// The engine, one per machine (commands.md §12)
     Watch(watch::Args),
-    /// Build the cockpit and start the engine (commands.md §13)
-    Tui(cpd_tui::Args),
     /// Check the machine (commands.md §14.1)
     Doctor(doctor::Args),
     /// Print the effective configuration (commands.md §14.2)
@@ -115,8 +103,6 @@ pub enum Command {
     Metrics(metrics::MetricsArgs),
     /// Install the cpd built from a checkout (commands.md §14.4)
     Install(install::Args),
-    /// The Electron app of the installed checkout and the web preview (commands.md §14.4a)
-    Desktop(app::Args),
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
@@ -136,9 +122,6 @@ pub enum Command {
     Prune(prune::Args),
     /// Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29)
     Janitor,
-    /// The WebUI backend's state and event stream (commands.md §11a)
-    #[command(subcommand)]
-    Cockpit(CockpitCommand),
     /// Tag the commit that set the workspace version (commands.md §26.1)
     Tag,
     /// The release plumbing (commands.md §26.2)
@@ -171,38 +154,17 @@ pub fn run_with(
     ports: &Ports,
     argv: impl IntoIterator<Item = OsString>,
 ) -> Result<Output, CpdError> {
-    run_on(ports, argv, cpd_tui::on_a_terminal())
+    Ports::scope(ports, || run_scoped(ports, argv))
 }
 
-/// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
-/// without a command open the cockpit; otherwise it is the usage error (A1).
-fn run_on(
-    ports: &Ports,
-    argv: impl IntoIterator<Item = OsString>,
-    terminal: bool,
-) -> Result<Output, CpdError> {
-    Ports::scope(ports, || run_scoped(ports, argv, terminal))
-}
-
-fn run_scoped(
-    ports: &Ports,
-    argv: impl IntoIterator<Item = OsString>,
-    terminal: bool,
-) -> Result<Output, CpdError> {
+fn run_scoped(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
-    // `cpd argv-check` (docs/contract.md §5.6): the web-to-CLI argv contract test's parse-only
-    // check. Handled before clap so it stays out of `cpd --help`, the root help tree and the two
-    // generated files a clap command would change (docs/interface.md, pi/test/cpd-usage.json).
-    if argv.get(1).and_then(|word| word.to_str()) == Some("argv-check") {
-        return crate::argv_check::run();
-    }
     let root_help =
         matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
         Ok(Cli {
             command: Some(command),
         }) => dispatch(ports, command),
-        Ok(Cli { command: None }) if terminal => cpd_tui::bare(version(), run_command, RESTART),
         Ok(Cli { command: None }) => {
             let required = Cli::command()
                 .subcommand_required(true)
@@ -241,9 +203,6 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Incident(c) => incident::run(c),
         Command::Inbox(c) => inbox::cmd::run_with(ports, c),
         Command::Watch(a) => watch::run(a),
-        Command::Tui(a) => {
-            cpd_tui::run_with(ports, a, version(), run_command, run_command_on, RESTART)
-        }
         Command::Doctor(a) => doctor::run(a, &ports.clock.zone()),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
@@ -252,7 +211,6 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Preset(c) => config::preset::run(c),
         Command::Metrics(a) => metrics::run(a),
         Command::Install(a) => install::run(ports, a),
-        Command::Desktop(a) => app::run(ports, a),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(ports, c)),
@@ -260,7 +218,6 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Resource(c) => resource::run(ports, c),
         Command::Prune(a) => prune::command(a),
         Command::Janitor => janitor::pass(&mut cpd_core::env::Env::open_with(ports)?),
-        Command::Cockpit(CockpitCommand::Serve) => cpd_core::cockpit::run_stdio(),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
         Command::Version(VersionCommand::Sync { print }) => {
             release_exit(version_sync::sync(&repo_root()?, print))
@@ -318,48 +275,6 @@ fn release_exit(result: Result<String, String>) -> ! {
             std::process::exit(1)
         }
     }
-}
-
-/// The engine's tmux restart, which `cpd tui` and bare `cpd` hand the cockpit (`cpd-tui` does not depend on `cpd-engine`).
-const RESTART: cpd_tui::Restart = cpd_tui::Restart {
-    failed: restart_failed,
-    clear: restart::clear,
-    mark: restart::mark,
-    now: restart_now,
-};
-
-/// [`cpd_tui::Restart::failed`]: the pending restart's line when it failed.
-fn restart_failed(
-    home: &CpdHome,
-    zone: &cpd_core::clock::TimeZone,
-) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?
-        .filter(|p| p.failed.is_some())
-        .map(|p| p.describe(zone)))
-}
-
-/// [`cpd_tui::Restart::now`]: the restart, logging nothing.
-fn restart_now(
-    home: &CpdHome,
-    config: &Config,
-    store: &mut Store,
-) -> Result<cpd_tui::RestartOutcome, CpdError> {
-    Ok(match restart::restart(home, config, store, &mut |_| ())? {
-        restart::Outcome::NotNeeded => cpd_tui::RestartOutcome::NotNeeded,
-        restart::Outcome::Running => cpd_tui::RestartOutcome::Running,
-        restart::Outcome::Busy(why) => cpd_tui::RestartOutcome::Busy(why),
-        restart::Outcome::Restarted { reopened } => cpd_tui::RestartOutcome::Restarted { reopened },
-    })
-}
-
-/// The runner `cpd tui` hands the cockpit, which runs commands in this process.
-fn run_command(argv: Vec<OsString>) -> Result<Output, CpdError> {
-    run(argv)
-}
-
-/// [`run_command`] on `ports`: what the merge action runs `pr merge` and `pr poll` through.
-fn run_command_on(ports: &Ports, argv: Vec<OsString>) -> Result<Output, CpdError> {
-    run_with(ports, argv)
 }
 
 /// What a clap parse failure prints. `--help` and `--version` are successes
@@ -450,7 +365,7 @@ mod tests {
     }
 
     fn fails(words: &[&str]) -> CpdError {
-        run_on(&Ports::real(), argv(words), false).expect_err("expected a failure")
+        run_with(&Ports::real(), argv(words)).expect_err("expected a failure")
     }
 
     #[test]

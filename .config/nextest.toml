@@ -92,8 +92,7 @@ tmux-restart = { max-threads = 4 }
 
 [[profile.default.overrides]]
 filter = '''
-  binary_id(cpd::tui) and test(/^bare::/)
-  | binary_id(cpd::tooling) and test(/^install_script::the_install_restarts_the_engine_of_a_real_cockpit/)
+  binary_id(cpd::tooling) and test(/^install_script::the_install_restarts_the_engine_of_a_real_cockpit/)
 '''
 test-group = "tmux-restart"
 slow-timeout = { period = "60s", terminate-after = 3 }

@@ -228,11 +228,6 @@ type JobKindStatus<'a> = (&'a str, &'a str);
 fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live() {
     let broken = [
         (
-            "mergeable = 'conflicting', merge_state = 'dirty'",
-            "conflict",
-            "updating",
-        ),
-        (
             "checks = 'failed', merge_state = 'blocked'",
             "failing",
             "fixing",
@@ -292,10 +287,6 @@ fn an_owned_broken_pr_is_white_while_its_lead_works_or_any_workflow_job_is_live(
 #[test]
 fn an_owned_broken_pr_is_white_while_its_lead_waits() {
     let broken = [
-        (
-            "mergeable = 'conflicting', merge_state = 'dirty'",
-            "updating",
-        ),
         ("checks = 'failed', merge_state = 'blocked'", "fixing"),
         (
             "review_decision = 'changes_requested', merge_state = 'blocked'",
@@ -497,9 +488,9 @@ fn an_unresolved_owner_policy_counts_as_post_disabled_and_fails_nothing() {
 #[test]
 fn every_row_links_its_owner_and_carries_the_pull_request_url() {
     let mut f = fixture();
-    f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
-    f.workflow(2, "mergeable = 'conflicting', merge_state = 'dirty'");
-    f.workflow(3, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.workflow(1, "checks = 'failed', merge_state = 'blocked'");
+    f.workflow(2, "checks = 'failed', merge_state = 'blocked'");
+    f.workflow(3, "checks = 'failed', merge_state = 'blocked'");
     f.own("pay", 1);
     f.idle();
     f.own("pay", 2);
@@ -538,7 +529,7 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
             if pay_works { "idle" } else { "working" },
             if pay_works { "working" } else { "idle" },
         ));
-        f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
+        f.workflow(1, "checks = 'failed', merge_state = 'blocked'");
         f.own("pay", 1);
         f.own("pay2", 1);
         let _ = f.rows(); // detection at NOW
@@ -668,12 +659,7 @@ fn stack_review_stacking_blocks_only_ready_to_merge() {
     is(&mut f, 2, Yellow, "ready to merge");
 }
 
-const BROKEN: [(&str, &str, &str); 3] = [
-    (
-        "mergeable = 'conflicting', merge_state = 'dirty'",
-        "conflict",
-        "updating",
-    ),
+const BROKEN: [(&str, &str, &str); 2] = [
     (
         "checks = 'failed', merge_state = 'blocked'",
         "failing",
@@ -885,4 +871,40 @@ fn a_clean_unposted_pr_behind_base_never_shows_waiting_with_no_reason() {
             "must never show 'waiting' with no reason"
         );
     }
+}
+
+#[test]
+fn a_clean_mergeable_pr_behind_base_raises_no_inbox_item() {
+    let mut f = fixture();
+    // An authored open PR with base_contained = 0 and merge_state = 'clean' (not conflicting)
+    f.workflow(1, "base_contained = 0, merge_state = 'clean'");
+    f.own("pay", 1);
+    f.idle();
+
+    // After 1 minute (or at any time), a clean PR behind base produces no pr-ready Inbox row
+    // (specifically no BehindMain / 'behind main' row, and no row at all under pro-d554).
+    let later = NOW + time::Duration::seconds(61);
+    let rows: Vec<_> = f.rows_at(later).into_iter().map(|c| c.subject).collect();
+    assert!(
+        !rows.iter().any(|s| s == "pr:acme/shop#1"),
+        "clean mergeable PR behind base raised an inbox item: {rows:?}"
+    );
+}
+
+#[test]
+fn a_conflicting_pr_raises_no_user_inbox_item_and_wakes_lead() {
+    let mut f = fixture();
+    // An authored open PR with merge_state = 'dirty' (conflicting)
+    f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.own("pay", 1);
+    f.idle();
+
+    // Under pro-d554, a conflicting PR never alerts the User via a red Inbox item,
+    // even after the 1-minute grace period has elapsed.
+    let later = NOW + time::Duration::seconds(61);
+    let rows: Vec<_> = f.rows_at(later).into_iter().map(|c| c.subject).collect();
+    assert!(
+        !rows.iter().any(|s| s == "pr:acme/shop#1"),
+        "conflicting PR raised an inbox item for user after 60s: {rows:?}"
+    );
 }

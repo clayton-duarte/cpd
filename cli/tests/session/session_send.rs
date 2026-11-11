@@ -782,7 +782,7 @@ fn a_send_to_a_stopped_lead_with_no_cockpit_is_refused_no_cockpit_and_writes_no_
         "no_cockpit",
         3,
     );
-    assert_eq!(error["details"]["next"], "cpd tui");
+    assert_eq!(error["details"]["next"], "cpd watch");
     assert!(messages(&fx).is_empty());
     assert!(show(&fx, "lead2")["tmux_pane"].is_null());
 }

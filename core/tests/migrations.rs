@@ -896,6 +896,33 @@ mod migrations {
         clone.commit();
         clone.check().unwrap();
     }
+
+    /// Evidence pro-n444: A worktree build applied an uncommitted draft migration
+    /// (20261110T2200-draft-waiting-on) to the live ~/.cpd store at 19:15 EST, causing install refusal.
+    /// Regression test must fail first. Reproduce the mechanism with mocks: simulate a command migrate
+    /// execution initiated from a worktree or development build against a default/live CPD_HOME store,
+    /// and verify that the store connection / migration runner refuses migration application against
+    /// the live store unless isolated.
+    #[test]
+    fn test_worktree_migration_against_live_store_refused() {
+        // Red regression test for worktree live-store migration guard (pro-n444, b23).
+        // Must fail until the guard is implemented in Store connection / migration runner.
+        let tmp = tempfile::tempdir().unwrap();
+        let home_dir = tmp.path().join("home");
+        let live_cpd_home = home_dir.join(".cpd");
+        fs::create_dir_all(&live_cpd_home).unwrap();
+
+        let home = CpdHome::resolve(None, Some(home_dir)).unwrap();
+        assert_eq!(home.root(), live_cpd_home);
+
+        // Attempting to open / migrate a default/live store from a development or worktree build
+        // without isolation must be refused by the migration runner or store connection.
+        let result = cpd_core::store::Store::open(&home, 5000);
+        assert!(
+            result.is_err(),
+            "expected migration runner / store connection to refuse migrating live store from worktree build"
+        );
+    }
 }
 
 /// Everything that is not one of those allowances still fails: an edit, a delete, and a
@@ -1188,7 +1215,7 @@ fn the_scanner_finds_what_it_is_for() {
 fn no_code_selects_star_or_inserts_without_a_column_list() {
     let root = repo_root();
     let mut files = Vec::new();
-    for krate in ["core", "cli", "tui"] {
+    for krate in ["core", "cli"] {
         rust_files(&root.join(krate).join("src"), &mut files);
     }
     assert!(

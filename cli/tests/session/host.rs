@@ -14,7 +14,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::fakes::tmux::TmuxRoute;
 use cpd_core::host::layout::{self, View};
 use cpd_core::host::runner::{Call, FakeRunner, Reply};
-use cpd_core::host::tmux::{BORDER_FORMAT, PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK};
+use cpd_core::host::tmux::{BORDER_FORMAT, PANE_DIED_HOOK};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, WindowId};
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 
@@ -231,28 +231,16 @@ fn assert_server_options(s: &Server) {
             "{feature} in {features}"
         );
     }
-    // A view is respawned; the engine's window (`watch`) starts the engine again, as does its window's loss (contract §6.6, hs-d328).
+    // A view is respawned; engine supervision hooks are retired (§6.23).
     // What the fake keeps is the command cpd set; tmux's own rendering of it (`pane-died[0] if-shell ...`) is tmux's.
     assert_eq!(
         s.state().hooks(),
-        [
-            ("pane-died".to_owned(), PANE_DIED_HOOK.to_owned()),
-            (
-                "window-unlinked".to_owned(),
-                WINDOW_UNLINKED_HOOK.to_owned()
-            )
-        ],
+        [("pane-died".to_owned(), PANE_DIED_HOOK.to_owned())],
     );
-    assert!(
-        PANE_DIED_HOOK.contains("if -F \"#{@cpd_view}\" \"respawn-pane\" "),
+    assert_eq!(
+        PANE_DIED_HOOK, r##"if -F "#{@cpd_view}" "respawn-pane""##,
         "a view is respawned: {PANE_DIED_HOOK}"
     );
-    for hook in [PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK] {
-        assert!(
-            hook.contains("run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'"),
-            "{hook}"
-        );
-    }
     assert_eq!(s.raw(&["show", "-sv", "exit-empty"]), "off\n");
     // tmux's own default: a click selects the pane, then passes the click on; the status line's click runs `cpd tui action`.
     // (The fake lists every binding of the table, in its own spelling of the commands.)
@@ -325,7 +313,7 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
         Some(View::Tree),
         "the view keeps its option"
     );
-    // The hook of the engine's window, run by the server (`run-shell`) when the engine died, is the only call it made.
+    // Engine supervision via tmux hooks is retired (§6.23); no sh calls were made.
     let started: Vec<_> = s
         .runner
         .calls()
@@ -333,10 +321,9 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
         .filter(|c| c.tool == "sh")
         .map(|c| c.args.join(" "))
         .collect();
-    assert_eq!(
-        started,
-        ["-c cpd watch --ensure --wait >/dev/null 2>&1"],
-        "the engine pane's death starts the engine again once"
+    assert!(
+        started.is_empty(),
+        "engine supervision hooks are retired: {started:?}"
     );
 }
 
@@ -975,7 +962,7 @@ fn apply_status_line_sets_the_global_cpd_version_option() {
 }
 
 /// The tmux calls of `cpd` itself, from the commands that make them, on the fake ports, for each locale: the `-V` probe
-/// of `doctor` and `watch --ensure`, `tui`, `tui --respawn`: every one starts `-u` (a bare call is the defect).
+/// of `doctor` and `watch --ensure`: every one starts `-u` (a bare call is the defect).
 #[test]
 fn every_tmux_call_of_cpd_is_a_utf8_client_whatever_the_callers_locale() {
     let mut bare = Vec::new();
@@ -992,17 +979,12 @@ fn every_tmux_call_of_cpd_is_a_utf8_client_whatever_the_callers_locale() {
             )
             .on("tmux", |_| true, Reply::exit(1, "", ""));
         fx.allow_unscripted();
-        for args in [
-            &["doctor"][..],
-            &["tui"],
-            &["tui", "--respawn"],
-            &["watch", "--ensure"],
-        ] {
+        for args in [&["doctor"][..], &["watch", "--ensure"]] {
             let _ = fx.cpd_with(fx.env.root(), args, locale.vars());
         }
         let calls = fx.calls("tmux");
         assert!(
-            calls.len() >= 4,
+            calls.len() >= 2,
             "{locale:?}: the fake tmux saw {} calls",
             calls.len()
         );
@@ -1038,7 +1020,7 @@ fn no_source_spawns_tmux_with_a_command_of_its_own() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
-    for dir in ["core/src", "cli/src", "tui/src"] {
+    for dir in ["core/src", "cli/src"] {
         sources(&root.join(dir), &mut files);
     }
     assert!(files.len() > 50, "found only {} sources", files.len());

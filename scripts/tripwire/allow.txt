@@ -34,17 +34,6 @@ cpd::tooling install_script::  # m-tooling: tooling test that may reach a real t
 cpd::tooling tripwire_script::  # m-tooling: tooling test that may reach a real tmux
 cpd::workflow git_guard::  # m-pr-b: pr commands that may reach a real tmux
 cpd::workflow git::  # m-pr-b: pr commands that may reach a real tmux
-cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui inbox_rules::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_logs::  # m-tui-r: view driven through a pane
-cpd::tui tui_merge::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_plan::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_tree_asleep::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_widgets::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_chat_pad::  # m-tui-r: view driven through a pane
-cpd::tui tui_history::  # m-tui-r: view driven through a pane
-cpd::tui tui_titles::  # m-tui-r: view driven through a pane
 cpd-core context::  # m-units: unit tests that may start a real tmux
 cpd-core host::  # m-units: unit tests that may start a real tmux
 cpd-core lock::  # m-units: unit tests that may start a real tmux
@@ -54,10 +43,3 @@ cpd-core pr::  # m-units: unit tests that may start a real tmux
 cpd-core workflow::  # m-units: unit tests that may start a real tmux
 cpd-core store::  # m-units: unit tests that may start a real tmux
 cpd-engine watch::  # m-units: unit tests that may start a real tmux
-cpd-tui background::  # m-units: unit tests that may start a real tmux
-cpd-tui cockpit::  # m-units: unit tests that may start a real tmux
-cpd-tui merge::  # m-units: unit tests that may start a real tmux
-cpd-tui pace_tests::  # m-units: unit tests that may start a real tmux
-cpd-tui plan::  # m-units: unit tests that may start a real tmux
-cpd-tui tree::  # m-units: unit tests that may start a real tmux
-cpd-tui widgets::  # m-units: unit tests that may start a real tmux

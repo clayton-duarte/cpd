@@ -1,6 +1,6 @@
 //! Shell app install for macOS in `cpd install`.
 //!
-//! Normative target: `web/CONTRACT.md` §30.3.
+//! Normative target: `web/CONTRACT.md` §31.3.
 
 use std::io::Write;
 use std::path::Path;
@@ -13,7 +13,7 @@ use crate::ports::Ports;
 const SHELL_RELEASE_TAG: &str = "app-v0.1.0";
 const GH_DEADLINE: Duration = Duration::from_secs(300);
 
-/// Ensures CPD.app shell is installed on macOS (web/CONTRACT.md §30.3).
+/// Ensures CPD.app shell is installed on macOS (web/CONTRACT.md §31.3).
 /// Skipped on Linux or non-macOS platforms.
 pub fn ensure_shell(ports: &Ports, install: &Install, err: &mut dyn Write) {
     if !install.macos {

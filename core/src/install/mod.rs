@@ -175,7 +175,7 @@ fn electron_step(ports: &Ports, install: &Install, err: &mut dyn Write) -> bool 
     if let Err(e) = app::ensure(ports, &app, true) {
         return fail("b", e);
     }
-    // Build production browser bundle (web/CONTRACT.md §30.2)
+    // Build production browser bundle (web/CONTRACT.md §31.2)
     if let Err(e) = app::pnpm(
         ports,
         &app.root,

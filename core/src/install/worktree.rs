@@ -1,6 +1,6 @@
 //! Preview worktree setup and synchronization for `cpd install`.
 //!
-//! Normative target: `web/CONTRACT.md` §30.1.
+//! Normative target: `web/CONTRACT.md` §31.1.
 
 use std::fs;
 use std::io::Write;
@@ -24,7 +24,7 @@ pub fn preview_worktree_path(install: &Install) -> PathBuf {
         })
 }
 
-/// Ensures the preview worktree exists and is synchronized (web/CONTRACT.md §30.1).
+/// Ensures the preview worktree exists and is synchronized (web/CONTRACT.md §31.1).
 ///
 /// If missing:
 /// - `git worktree add -B preview/web <path> origin/main`

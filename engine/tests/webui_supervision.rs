@@ -247,11 +247,6 @@ archive_sleep_seconds = 86400
             Reply::exit(0, "p12345\ncnode\nn*:3333\n", ""),
         );
 
-        // Create serve.ts so prod WebUI is supervised
-        let serve_ts = fx.home.root().join("web/src/server/serve.ts");
-        fs::create_dir_all(serve_ts.parent().unwrap()).expect("create web server dir");
-        fs::write(&serve_ts, "// mock server").expect("write serve.ts");
-
         // Verify detection on port 3333 (via lsof)
         let holder3333 = detect_port_holder(&fx.runner, 3333).expect("detect 3333 holder");
         assert_eq!(holder3333.process, "node");
