@@ -298,6 +298,7 @@ impl WsServer {
         let stop_unix = stop.clone();
         let hub_tx_unix = hub_tx.clone();
         let conn_unix = conn_arc.clone();
+        let home_unix = home.clone();
         let unix_handle = thread::spawn(move || {
             let _ = unix_listener.set_nonblocking(true);
             while !stop_unix.load(Ordering::SeqCst) {
@@ -306,8 +307,9 @@ impl WsServer {
                         let _ = stream.set_nonblocking(false);
                         let hub_tx = hub_tx_unix.clone();
                         let conn = conn_unix.clone();
+                        let home = home_unix.clone();
                         thread::spawn(move || {
-                            handle_unix_client(stream, hub_tx, conn);
+                            handle_unix_client(stream, hub_tx, conn, home);
                         });
                     }
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -322,6 +324,7 @@ impl WsServer {
         let stop_tcp = stop.clone();
         let hub_tx_tcp = hub_tx.clone();
         let conn_tcp = conn_arc;
+        let home_tcp = home.clone();
         let tcp_handle = thread::spawn(move || {
             let _ = tcp_listener.set_nonblocking(true);
             while !stop_tcp.load(Ordering::SeqCst) {
@@ -330,8 +333,9 @@ impl WsServer {
                         let _ = stream.set_nonblocking(false);
                         let hub_tx = hub_tx_tcp.clone();
                         let conn = conn_tcp.clone();
+                        let home = home_tcp.clone();
                         thread::spawn(move || {
-                            handle_tcp_client(stream, hub_tx, conn);
+                            handle_tcp_client(stream, hub_tx, conn, home);
                         });
                     }
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -543,6 +547,7 @@ fn handle_unix_client(
     stream: UnixStream,
     hub_tx: Sender<HubMsg>,
     conn: Arc<Mutex<rusqlite::Connection>>,
+    home: CpdHome,
 ) {
     let reader_stream = stream.try_clone().expect("clone unix stream");
     let writer = stream;
@@ -572,7 +577,7 @@ fn handle_unix_client(
         if line.trim().is_empty() {
             continue;
         }
-        let reply = process_json_rpc_line(&line, &hub_tx, &conn, &push_tx);
+        let reply = process_json_rpc_line(&line, &hub_tx, &conn, &push_tx, &home);
         if let Some(reply) = reply {
             let mut out = reply.to_string();
             out.push('\n');
@@ -591,6 +596,7 @@ fn handle_tcp_client(
     mut stream: TcpStream,
     hub_tx: Sender<HubMsg>,
     conn: Arc<Mutex<rusqlite::Connection>>,
+    home: CpdHome,
 ) {
     // 1. Perform HTTP / WebSocket handshake
     let mut reader = BufReader::new(stream.try_clone().expect("clone tcp stream"));
@@ -679,7 +685,7 @@ fn handle_tcp_client(
     loop {
         match read_ws_frame(&mut read_stream) {
             Ok(WsFrame::Text(text)) => {
-                let reply = process_json_rpc_line(&text, &hub_tx, &conn, &push_tx);
+                let reply = process_json_rpc_line(&text, &hub_tx, &conn, &push_tx, &home);
                 if let Some(reply) = reply {
                     let frame = make_ws_text_frame(&reply.to_string());
                     if let Ok(mut w) = writer_mutex.lock() {
@@ -727,6 +733,7 @@ fn process_json_rpc_line(
     hub_tx: &Sender<HubMsg>,
     conn: &Arc<Mutex<rusqlite::Connection>>,
     push_tx: &SyncSender<Value>,
+    home: &CpdHome,
 ) -> Option<Value> {
     let Ok(val) = serde_json::from_str::<Value>(line) else {
         return Some(json!({
@@ -780,11 +787,18 @@ fn process_json_rpc_line(
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
 
+                let owners: Vec<String> =
+                    cpd_core::policy::known_owners(&cpd_core::policy::policy_dir(home))
+                        .into_iter()
+                        .map(|o| o.as_str().to_owned())
+                        .collect();
+
                 Ok(json!({
                     "contexts": contexts,
                     "plans": plans,
                     "jobs": jobs,
-                    "cursor": cursor
+                    "cursor": cursor,
+                    "owners": owners
                 }))
             })();
             drop(c);

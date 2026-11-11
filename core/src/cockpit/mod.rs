@@ -195,12 +195,17 @@ fn panes(env: &mut Env) -> Result<Value, CpdError> {
         Err(e) if e.code() == ErrorCode::StoreTooNew => Err(e),
         other => Ok(printed(other)),
     };
+    let owners: Vec<String> = crate::policy::known_owners(&crate::policy::policy_dir(&env.home))
+        .into_iter()
+        .map(|o| o.as_str().to_owned())
+        .collect();
     Ok(json!({
         "context": pane(crate::context::list::list_in(env))?,
         "plan": pane(crate::plan::list::list_in(env, plan))?,
         "session": pane(crate::session::row::list_in(env, session))?,
         "inbox": pane(crate::inbox::cmd::list_in(env, inbox))?,
         "status": status_pane(env)?,
+        "owners": owners,
     }))
 }
 
