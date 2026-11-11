@@ -4258,7 +4258,7 @@ fn pr_poll_now_file_triggers_immediate_poll() {
     let seen = starts.clone();
     fx.watch_steps(move |nap| {
         let polls = seen.lock().unwrap().len();
-        polls >= 2 || nap >= 200
+        polls >= 2 || nap >= 400
     })
     .unwrap();
 

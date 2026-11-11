@@ -3,6 +3,7 @@
 //! Read-only, except the migration of a database's first open.
 
 mod check;
+pub mod cross_machine;
 mod host_runner;
 mod pi;
 mod state;
@@ -119,6 +120,7 @@ pub fn run(_args: Args, zone: &cpd_core::clock::TimeZone) -> Result<Output, CpdE
         &pi::lead_packages,
     ));
     checks.push(state::watch(&home, store.as_mut()));
+    checks.extend(cross_machine::check(&home, config.as_ref().ok()));
     checks.extend(tmux_restart(&home, zone));
 
     let failed: Vec<&str> = checks
