@@ -65,7 +65,7 @@ section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT l
         ├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
         └─ p[data-part="no-work"]                only when plan.workflows is empty AND there are no explore jobs AND plan.reviewedPr is null; text exactly "No workflows yet"; px-1 text-muted-foreground
 ```
-Order of children: the title row (the `TopPaneHeader`, fixed at the top), then the `plan-scroll` ScrollArea holding the plan body: the explore strip, the legend and the workflow cards (in topological order, 1e(iv)), Review PR card (1i), no-work note. Only the body scrolls.Order of children: the title row (the `TopPaneHeader`), then the plan body holding the explore strip, workflow cards (in `plan.workflows` order), Review PR card (1i), no-work note.
+Order of children: the title row (the `TopPaneHeader`, fixed at the top), then the `plan-scroll` ScrollArea holding the plan body: the explore strip, the legend and the workflow cards (in topological order, 1e(iv)), Review PR card (1i), no-work note. Only the body scrolls.Order of children: the title row (the `TopPaneHeader`), then the plan body holding the explore strip, the legend and the workflow cards (in topological order, 1e(iv)), Review PR card (1i), no-work note.
 
 The old bare `<p>{plan.phase}</p>` is replaced by the stepper (no test pins it). The old standalone `h3`/`p` lines become the card header (1f).
 
