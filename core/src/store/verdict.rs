@@ -789,11 +789,17 @@ mod tests {
     #[test]
     fn refusal_message_does_not_advise_rename_for_origin_main() {
         // Contract §4.5 O3: Never renumber a breaking migration already on main to a newer timestamp.
-        // A breaking migration on origin/main that sorts before applied ones must not advise renaming it.
+        // A breaking migration already on origin/main that is refused because of migration_order
+        // must not advise renaming it to a newer timestamp.
         let (_dir, home) = tmp_home();
+        // 20261108T0200-tier-letter-j is already on origin/main.
+        // If an applied migration causes it to be refused with migration_order, its message must not advise rename.
+        let tier = schema::NAMED
+            .iter()
+            .find(|n| n.name == "20261108T0200-tier-letter-j")
+            .expect("tier-letter-j is in NAMED");
         drop(open_named(&home, &[ADD_B]).unwrap());
-        let before = breaking(ADD_A);
-        let list = [before, ADD_B];
+        let list = [*tier, ADD_B];
         let verdict = judge(&home, &list);
         let err = verdict.refusal().expect("expected migration_order refusal");
         assert_eq!(err.code(), ErrorCode::MigrationOrder);

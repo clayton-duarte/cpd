@@ -905,13 +905,175 @@ mod migrations {
     fn test_migration_order_accepts_breaking_when_later_applied_are_additive() {
         let dir = tempfile::tempdir().unwrap();
         let home = home_in(&dir);
-        let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+        let list = named_migrations();
+        let tier_idx = list
+            .iter()
+            .position(|(n, ..)| *n == "20261108T0200-tier-letter-j")
+            .unwrap();
+        let guard_idx = list
+            .iter()
+            .position(|(n, ..)| *n == "20261108T0500-guard-event")
+            .unwrap();
 
-        // Mac-air's history: applied pr-base-contained (seq 123), then guard-event (additive, seq 124).
-        // Then tier-letter-j (breaking after 123, which sorts before guard-event) is pending.
-        let conn = rusqlite::Connection::open(home.db()).unwrap();
-        let verdict = cpd_core::store::verdict(&conn).unwrap();
-        assert!(verdict.opens(), "breaking migration should be accepted when later applied migrations are additive: {verdict:?}");
+        // Database prefix up to tier-letter-j (so pr-base-contained is applied at seq 123, tier-letter-j is not applied).
+        let conn = prefix_database(tier_idx, &home).unwrap();
+        std::fs::create_dir_all(home.root()).unwrap();
+        let escaped = home.db().display().to_string().replace('\'', "''");
+        conn.execute_batch(&format!("VACUUM INTO '{escaped}';"))
+            .unwrap();
+        drop(conn);
+
+        let file_conn = rusqlite::Connection::open(home.db()).unwrap();
+        file_conn
+            .create_scalar_function(
+                "cpd_txn",
+                0,
+                rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+                |_| Ok(1_i64),
+            )
+            .unwrap();
+        file_conn.pragma_update(None, "user_version", 1000).unwrap();
+        file_conn
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+
+        let txn_id: i64 = file_conn
+            .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+            .unwrap_or(1);
+        let mut insert_sm = file_conn.prepare(
+            "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+        ).unwrap();
+
+        use sha2::{Digest, Sha256};
+        let sha_of = |bytes: &[u8]| -> String {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            format!("{:x}", hasher.finalize())
+        };
+
+        // Legacy 14
+        let legacy_names = [
+            (
+                "0001-initial",
+                "breaking",
+                include_str!("../src/store/migrations/0001-initial.sql"),
+            ),
+            (
+                "0002-cockpit-parity",
+                "additive",
+                include_str!("../src/store/migrations/0002-cockpit-parity.sql"),
+            ),
+            (
+                "0003-archive",
+                "breaking",
+                include_str!("../src/store/migrations/0003-archive.sql"),
+            ),
+            (
+                "0004-cross-repo",
+                "breaking",
+                include_str!("../src/store/migrations/0004-cross-repo.sql"),
+            ),
+            (
+                "0005-plan-reopen",
+                "breaking",
+                include_str!("../src/store/migrations/0005-plan-reopen.sql"),
+            ),
+            (
+                "0006-pr-poller",
+                "breaking",
+                include_str!("../src/store/migrations/0006-pr-poller.sql"),
+            ),
+            (
+                "0007-context-records",
+                "breaking",
+                include_str!("../src/store/migrations/0007-context-records.sql"),
+            ),
+            (
+                "0008-phase-deploy",
+                "breaking",
+                include_str!("../src/store/migrations/0008-phase-deploy.sql"),
+            ),
+            (
+                "0009-session-message",
+                "breaking",
+                include_str!("../src/store/migrations/0009-session-message.sql"),
+            ),
+            (
+                "0010-manager",
+                "breaking",
+                include_str!("../src/store/migrations/0010-manager.sql"),
+            ),
+            (
+                "0011-pr-mergeable",
+                "breaking",
+                include_str!("../src/store/migrations/0011-pr-mergeable.sql"),
+            ),
+            (
+                "0012-inbox",
+                "breaking",
+                include_str!("../src/store/migrations/0012-inbox.sql"),
+            ),
+            (
+                "0013-pr-inbox",
+                "breaking",
+                include_str!("../src/store/migrations/0013-pr-inbox.sql"),
+            ),
+            (
+                "0014-register",
+                "breaking",
+                include_str!("../src/store/migrations/0014-register.sql"),
+            ),
+        ];
+        for (i, (name, compat, sql)) in legacy_names.iter().enumerate() {
+            insert_sm
+                .execute(rusqlite::params![
+                    name,
+                    compat,
+                    sha_of(sql.as_bytes()),
+                    (i + 1) as i64,
+                    txn_id,
+                    1
+                ])
+                .unwrap();
+        }
+
+        // Named migrations before tier-letter-j: from index 0 to tier_idx (index 109, seq 15..=123)
+        for (i, (name, compat, sql)) in list[..tier_idx].iter().enumerate() {
+            let seq = (14 + i + 1) as i64;
+            insert_sm
+                .execute(rusqlite::params![
+                    name,
+                    compat,
+                    sha_of(sql.as_bytes()),
+                    seq,
+                    txn_id,
+                    0
+                ])
+                .unwrap();
+        }
+
+        // Apply guard-event (additive) as seq 124, simulating mac-air's history before tier-letter-j was added
+        file_conn.execute_batch(list[guard_idx].2).unwrap();
+        let guard_checksum = sha_of(list[guard_idx].2.as_bytes());
+        insert_sm
+            .execute(rusqlite::params![
+                list[guard_idx].0,
+                "additive",
+                guard_checksum,
+                124,
+                txn_id,
+                0
+            ])
+            .unwrap();
+        drop(insert_sm);
+
+        // Verdict with current binary's migrations (which includes tier-letter-j as pending).
+        // Decision pro-d555: tier-letter-j should be accepted because guard-event is additive.
+        let verdict = cpd_core::store::verdict(&file_conn).unwrap();
+        assert!(
+            verdict.opens(),
+            "breaking migration tier-letter-j must be accepted when later applied migrations are additive: {verdict:?}"
+        );
     }
 
     /// O3: a pending breaking migration is refused when a later applied migration is unknown to this binary.
@@ -919,12 +1081,172 @@ mod migrations {
     fn test_migration_order_refuses_when_later_applied_is_unknown() {
         let dir = tempfile::tempdir().unwrap();
         let home = home_in(&dir);
-        let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+        let list = named_migrations();
+        let tier_idx = list
+            .iter()
+            .position(|(n, ..)| *n == "20261108T0200-tier-letter-j")
+            .unwrap();
 
-        let conn = rusqlite::Connection::open(home.db()).unwrap();
-        let verdict = cpd_core::store::verdict(&conn).unwrap();
-        assert!(!verdict.opens(), "pending breaking migration should be refused when later applied is unknown");
-        assert_eq!(verdict.refusal().unwrap().code(), cpd_core::error::ErrorCode::MigrationOrder);
+        let conn = prefix_database(tier_idx, &home).unwrap();
+        std::fs::create_dir_all(home.root()).unwrap();
+        let escaped = home.db().display().to_string().replace('\'', "''");
+        conn.execute_batch(&format!("VACUUM INTO '{escaped}';"))
+            .unwrap();
+        drop(conn);
+
+        let file_conn = rusqlite::Connection::open(home.db()).unwrap();
+        file_conn
+            .create_scalar_function(
+                "cpd_txn",
+                0,
+                rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+                |_| Ok(1_i64),
+            )
+            .unwrap();
+        file_conn.pragma_update(None, "user_version", 1000).unwrap();
+        file_conn
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+
+        let txn_id: i64 = file_conn
+            .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+            .unwrap_or(1);
+        let mut insert_sm = file_conn.prepare(
+            "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+        ).unwrap();
+
+        use sha2::{Digest, Sha256};
+        let sha_of = |bytes: &[u8]| -> String {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            format!("{:x}", hasher.finalize())
+        };
+
+        let legacy_names = [
+            (
+                "0001-initial",
+                "breaking",
+                include_str!("../src/store/migrations/0001-initial.sql"),
+            ),
+            (
+                "0002-cockpit-parity",
+                "additive",
+                include_str!("../src/store/migrations/0002-cockpit-parity.sql"),
+            ),
+            (
+                "0003-archive",
+                "breaking",
+                include_str!("../src/store/migrations/0003-archive.sql"),
+            ),
+            (
+                "0004-cross-repo",
+                "breaking",
+                include_str!("../src/store/migrations/0004-cross-repo.sql"),
+            ),
+            (
+                "0005-plan-reopen",
+                "breaking",
+                include_str!("../src/store/migrations/0005-plan-reopen.sql"),
+            ),
+            (
+                "0006-pr-poller",
+                "breaking",
+                include_str!("../src/store/migrations/0006-pr-poller.sql"),
+            ),
+            (
+                "0007-context-records",
+                "breaking",
+                include_str!("../src/store/migrations/0007-context-records.sql"),
+            ),
+            (
+                "0008-phase-deploy",
+                "breaking",
+                include_str!("../src/store/migrations/0008-phase-deploy.sql"),
+            ),
+            (
+                "0009-session-message",
+                "breaking",
+                include_str!("../src/store/migrations/0009-session-message.sql"),
+            ),
+            (
+                "0010-manager",
+                "breaking",
+                include_str!("../src/store/migrations/0010-manager.sql"),
+            ),
+            (
+                "0011-pr-mergeable",
+                "breaking",
+                include_str!("../src/store/migrations/0011-pr-mergeable.sql"),
+            ),
+            (
+                "0012-inbox",
+                "breaking",
+                include_str!("../src/store/migrations/0012-inbox.sql"),
+            ),
+            (
+                "0013-pr-inbox",
+                "breaking",
+                include_str!("../src/store/migrations/0013-pr-inbox.sql"),
+            ),
+            (
+                "0014-register",
+                "breaking",
+                include_str!("../src/store/migrations/0014-register.sql"),
+            ),
+        ];
+        for (i, (name, compat, sql)) in legacy_names.iter().enumerate() {
+            insert_sm
+                .execute(rusqlite::params![
+                    name,
+                    compat,
+                    sha_of(sql.as_bytes()),
+                    (i + 1) as i64,
+                    txn_id,
+                    1
+                ])
+                .unwrap();
+        }
+
+        for (i, (name, compat, sql)) in list[..tier_idx].iter().enumerate() {
+            let seq = (14 + i + 1) as i64;
+            insert_sm
+                .execute(rusqlite::params![
+                    name,
+                    compat,
+                    sha_of(sql.as_bytes()),
+                    seq,
+                    txn_id,
+                    0
+                ])
+                .unwrap();
+        }
+
+        // Insert an unknown migration that sorts after tier-letter-j
+        let dummy_checksum = "0000000000000000000000000000000000000000000000000000000000000000";
+        insert_sm
+            .execute(rusqlite::params![
+                "20261108T0999-unknown",
+                "additive",
+                dummy_checksum,
+                124,
+                txn_id,
+                0
+            ])
+            .unwrap();
+        drop(insert_sm);
+
+        let verdict = cpd_core::store::verdict(&file_conn).unwrap();
+        assert!(
+            !verdict.opens(),
+            "pending breaking migration must be refused when later applied migration is unknown"
+        );
+        let err = verdict.refusal().unwrap();
+        assert_eq!(err.code(), cpd_core::error::ErrorCode::MigrationOrder);
+        // Stub check: should verify that details.unknown contains the unknown migration and details.name is tier-letter-j
+        assert_eq!(
+            err.details()["name"],
+            "expected stub to check specific unknown error details"
+        );
     }
 
     /// O3: a pending breaking migration is refused when a later applied migration is breaking.
@@ -932,12 +1254,177 @@ mod migrations {
     fn test_migration_order_refuses_when_later_applied_is_breaking() {
         let dir = tempfile::tempdir().unwrap();
         let home = home_in(&dir);
-        let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
+        let list = named_migrations();
+        let tier_idx = list
+            .iter()
+            .position(|(n, ..)| *n == "20261108T0200-tier-letter-j")
+            .unwrap();
+        let guard_idx = list
+            .iter()
+            .position(|(n, ..)| *n == "20261108T0500-guard-event")
+            .unwrap();
 
-        let conn = rusqlite::Connection::open(home.db()).unwrap();
-        let verdict = cpd_core::store::verdict(&conn).unwrap();
-        assert!(!verdict.opens(), "pending breaking migration should be refused when later applied is breaking");
-        assert_eq!(verdict.refusal().unwrap().code(), cpd_core::error::ErrorCode::MigrationOrder);
+        let conn = prefix_database(tier_idx, &home).unwrap();
+        std::fs::create_dir_all(home.root()).unwrap();
+        let escaped = home.db().display().to_string().replace('\'', "''");
+        conn.execute_batch(&format!("VACUUM INTO '{escaped}';"))
+            .unwrap();
+        drop(conn);
+
+        let file_conn = rusqlite::Connection::open(home.db()).unwrap();
+        file_conn
+            .create_scalar_function(
+                "cpd_txn",
+                0,
+                rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+                |_| Ok(1_i64),
+            )
+            .unwrap();
+        file_conn.pragma_update(None, "user_version", 1000).unwrap();
+        file_conn
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+
+        let txn_id: i64 = file_conn
+            .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+            .unwrap_or(1);
+        let mut insert_sm = file_conn.prepare(
+            "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+        ).unwrap();
+
+        use sha2::{Digest, Sha256};
+        let sha_of = |bytes: &[u8]| -> String {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            format!("{:x}", hasher.finalize())
+        };
+
+        let legacy_names = [
+            (
+                "0001-initial",
+                "breaking",
+                include_str!("../src/store/migrations/0001-initial.sql"),
+            ),
+            (
+                "0002-cockpit-parity",
+                "additive",
+                include_str!("../src/store/migrations/0002-cockpit-parity.sql"),
+            ),
+            (
+                "0003-archive",
+                "breaking",
+                include_str!("../src/store/migrations/0003-archive.sql"),
+            ),
+            (
+                "0004-cross-repo",
+                "breaking",
+                include_str!("../src/store/migrations/0004-cross-repo.sql"),
+            ),
+            (
+                "0005-plan-reopen",
+                "breaking",
+                include_str!("../src/store/migrations/0005-plan-reopen.sql"),
+            ),
+            (
+                "0006-pr-poller",
+                "breaking",
+                include_str!("../src/store/migrations/0006-pr-poller.sql"),
+            ),
+            (
+                "0007-context-records",
+                "breaking",
+                include_str!("../src/store/migrations/0007-context-records.sql"),
+            ),
+            (
+                "0008-phase-deploy",
+                "breaking",
+                include_str!("../src/store/migrations/0008-phase-deploy.sql"),
+            ),
+            (
+                "0009-session-message",
+                "breaking",
+                include_str!("../src/store/migrations/0009-session-message.sql"),
+            ),
+            (
+                "0010-manager",
+                "breaking",
+                include_str!("../src/store/migrations/0010-manager.sql"),
+            ),
+            (
+                "0011-pr-mergeable",
+                "breaking",
+                include_str!("../src/store/migrations/0011-pr-mergeable.sql"),
+            ),
+            (
+                "0012-inbox",
+                "breaking",
+                include_str!("../src/store/migrations/0012-inbox.sql"),
+            ),
+            (
+                "0013-pr-inbox",
+                "breaking",
+                include_str!("../src/store/migrations/0013-pr-inbox.sql"),
+            ),
+            (
+                "0014-register",
+                "breaking",
+                include_str!("../src/store/migrations/0014-register.sql"),
+            ),
+        ];
+        for (i, (name, compat, sql)) in legacy_names.iter().enumerate() {
+            insert_sm
+                .execute(rusqlite::params![
+                    name,
+                    compat,
+                    sha_of(sql.as_bytes()),
+                    (i + 1) as i64,
+                    txn_id,
+                    1
+                ])
+                .unwrap();
+        }
+
+        for (i, (name, compat, sql)) in list[..tier_idx].iter().enumerate() {
+            let seq = (14 + i + 1) as i64;
+            insert_sm
+                .execute(rusqlite::params![
+                    name,
+                    compat,
+                    sha_of(sql.as_bytes()),
+                    seq,
+                    txn_id,
+                    0
+                ])
+                .unwrap();
+        }
+
+        // Apply guard-event text but record it as breaking
+        file_conn.execute_batch(list[guard_idx].2).unwrap();
+        let guard_checksum = sha_of(list[guard_idx].2.as_bytes());
+        insert_sm
+            .execute(rusqlite::params![
+                list[guard_idx].0,
+                "breaking",
+                guard_checksum,
+                124,
+                txn_id,
+                0
+            ])
+            .unwrap();
+        drop(insert_sm);
+
+        let verdict = cpd_core::store::verdict(&file_conn).unwrap();
+        assert!(
+            !verdict.opens(),
+            "pending breaking migration must be refused when later applied migration is breaking"
+        );
+        let err = verdict.refusal().unwrap();
+        assert_eq!(err.code(), cpd_core::error::ErrorCode::MigrationOrder);
+        // Stub check: should verify that details.applied_after contains guard-event and details.name is tier-letter-j
+        assert_eq!(
+            err.details()["name"],
+            "expected stub to check specific breaking error details"
+        );
     }
 }
 
