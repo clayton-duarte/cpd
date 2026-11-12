@@ -713,7 +713,16 @@ pub(crate) fn start_parked(
         row.plan.as_ref(),
         Path::new(&row.cwd),
     );
-    let (window, pane) = tmux.new_window(&cockpit, &parked_window(row), &spawn)?;
+    let window_name = parked_window(row);
+    let created = if tmux.has_session(&cockpit)? {
+        None
+    } else {
+        tmux.create_session(&cockpit, &window_name, &spawn)?
+    };
+    let (window, pane) = match created {
+        Some(ids) => ids,
+        None => tmux.new_window(&cockpit, &window_name, &spawn)?,
+    };
     let started = kill_window_on_error(&tmux, &window, || {
         row.set_pill(&tmux, &pane)?;
         let won = env.store.write(command, |tx| {
