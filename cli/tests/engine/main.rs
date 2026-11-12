@@ -45,10 +45,10 @@ mod main {
         let json: Value = serde_json::from_slice(&stdout).expect("valid JSON from --help");
         let help = json["help"].as_str().expect("help string");
 
-        // Retained binary footprint (pi-native-core.md §6.2):
-        // watch, install, gate, host, doctor, ask, attempt
+        // Retained binary footprint (pi-native-core.md §6.2, pro-d577):
+        // watch, install, gate, host, doctor, ask, attempt, cockpit
         for retained in [
-            "watch", "install", "gate", "host", "doctor", "ask", "attempt",
+            "watch", "install", "gate", "host", "doctor", "ask", "attempt", "cockpit",
         ] {
             assert!(
                 help.contains(&format!("  {retained}"))
@@ -58,8 +58,8 @@ mod main {
         }
 
         // Dropped surfaces (pi-native-core.md §6.1, commands.md §2 "Removed"):
-        // tui, desktop, cockpit, argv-check
-        for dropped in ["tui", "desktop", "cockpit"] {
+        // tui, desktop
+        for dropped in ["tui", "desktop"] {
             assert!(
                 !help.contains(&format!("  {dropped}"))
                     && !help.contains(&format!("\n  {dropped} ")),
