@@ -4,11 +4,8 @@
 //! CLI rejects `cpd desktop release` and `cpd install shell` subcommands,
 //! and prevents any attempt to fetch legacy app-v* release assets.
 
-#[path = "common/mod.rs"]
-mod common;
-
 mod retire_app_test {
-    use super::common::fx::Fx;
+    use crate::common::fx::Fx;
     use cpd_core::home::CpdHome;
 
     /// Tests `retire_app_test::desktop_release_command_removed`.
