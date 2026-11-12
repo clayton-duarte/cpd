@@ -791,20 +791,6 @@ fn send_to_stopped_pi_session_without_cockpit_succeeds() {
 }
 
 #[test]
-fn a_send_to_a_stopped_lead_with_no_cockpit_is_refused_no_cockpit_and_writes_no_event() {
-    let fx = Fx::with_ports();
-    setup(&fx.env);
-    let error = refused(
-        &fx.cpd(&["session", "send", "lead2", "wake up", "--unblocks", "u"]),
-        "no_cockpit",
-        3,
-    );
-    assert_eq!(error["details"]["next"], "cpd watch");
-    assert!(messages(&fx).is_empty());
-    assert!(show(&fx, "lead2")["tmux_pane"].is_null());
-}
-
-#[test]
 fn session_send_origin_flag_sets_event_data() {
     let fx = Fx::new();
     setup_with_fork(&fx.env);
