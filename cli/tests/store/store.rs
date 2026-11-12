@@ -328,6 +328,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     // Described in §4.4's prose, written like `dependencies_hist_del`.
     expected.insert("workflow_needs_hist_del".to_owned());
     expected.insert("pull_requests_hist_del".to_owned());
+    expected.insert("swr_deploy_lists".to_owned());
     let found = names(
         &raw(&env),
         "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -340,7 +341,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     );
     assert_eq!(
         tables.len(),
-        47, // 32 (33 less `jira_transitions`, dropped by `jira-swr`), the 13 tables of `swr`, `bug_records` and `test_replacements`
+        48, // 32 (33 less `jira_transitions`, dropped by `jira-swr`), the 14 tables of `swr`, `bug_records` and `test_replacements`
         "§4.4's tables, the three lookup tables and schema_migrations"
     );
     for table in tables {
