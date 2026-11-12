@@ -2817,3 +2817,34 @@ Normative target. The rules of one `cpd install --root <checkout>` on every mach
 - Whether the probe should run in the engine's tick as well as in `cpd doctor`. Not decided; the doctor is the only caller in this section.
 - Whether `host` should accept a DNS name that resolves to several addresses and probe each. Not decided; one address is what the probe uses today (the OS resolver's first answer).
 - The timeout is 10 s by analogy with §14.1, not measured on the fleet. Unverified against a real slow link.
+
+## 32. Composer keys: Esc aborts a working turn, and line deletion (Plan `esc-abort`; Job `web-docs`)
+
+Decided work (Plan `esc-abort`, accepted decision). Citations: `$CPD_HOME/run/esc-abort/explore/scout.md` and `scout-abort.md`. Status: not yet implemented. As of the base commit the Composer handles only Enter (`scout.md` §1); this section is the contract for the change that adds these keys.
+
+### 32.1 Escape in the chat composer
+
+Escape in the Composer's `textarea[aria-label="Message"]` (6.9) is resolved by the first rule that applies:
+
+1. **A popup or dropdown is open** (the Tier, Model or Thinking level menu of `TierSelector`, 6.9): Escape closes it. It does not abort, shows no notice and leaves the text and attachments unchanged.
+2. **The session is working** (`session.status` `busy: true`) **and `capabilities.abort.supported` is true**: Escape sends `session.abort {sessionId}` (4.1), the same frame as the Stop button (6.9).
+3. **The session is working and abort is unsupported** (`capabilities.abort` is `{supported:false, reason}`, for example a pi-runner session, A4): Escape shows a short notice carrying `reason`. It is never a silent no-op.
+4. **The session is idle**: Escape does nothing. The text and attachments stay as they are.
+
+Escape never submits, never clears the draft and never changes the Tier, model or thinking level. Rule 3 reads "a short notice is displayed rather than a silent no-op" of the accepted decision as applying to a working session only, because rule 4 makes an idle Escape a no-op by decision. Where the notice is shown is an open item (32.4).
+
+### 32.2 Line deletion in the composer
+
+- **macOS: Cmd+Backspace. Linux: Ctrl+U.** Each deletes the text from the caret to the start of the current line.
+- On a multi-line draft only the current line is affected: the lines above and below are kept. With the caret at the start of a line, nothing is deleted.
+- No other keyboard shortcut changes. Enter, Shift+Enter and the Ctrl+T and Ctrl+O toggles of `ChatPane` are unaffected.
+
+### 32.3 Limits
+
+- The decision names only the two combinations above. Ctrl+U on macOS, Cmd+Backspace on Linux and Windows are not decided here (32.4).
+
+### 32.4 Open items (not decided here)
+
+- **Notice surface.** The accepted decision requires a short notice for rule 3 of 32.1 but does not say where it appears or how long it stays.
+- **Other platforms.** The shortcut for line deletion on Windows, and the cross-platform combinations listed in 32.3, are not decided.
+- **Failed abort is not shown.** A `session.abort` that the hub reports as session-scoped is stored in `SessionView.error`, which no UI component renders (`scout-abort.md` §3 and `scout.md` §2). Read from source, unverified by running. A failed Escape abort may therefore be invisible to the User.
