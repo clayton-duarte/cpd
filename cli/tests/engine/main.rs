@@ -6,6 +6,7 @@ mod common;
 
 mod doctor;
 mod shaping_engine;
+mod upgrade_test;
 mod watch;
 mod watch_auto_merge;
 mod watch_curate_docs_gone;
