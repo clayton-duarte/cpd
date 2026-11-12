@@ -1,5 +1,5 @@
 import { ExternalLinkIcon } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import type { CockpitAction, JobView, PlanViewModel, WorkflowView } from "../../protocol/cockpit.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../components/button.tsx";
@@ -8,7 +8,7 @@ import { ExternalLink } from "../components/ExternalLink.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { glyphClass, jobDisplay, parseJobStatus, parsePhase, phaseLabel, toneClasses, type Phase, type Tone } from "../dango-status.ts";
 import { TopPaneHeader } from "./TopPaneHeader.tsx";
-import { computeWorkflowEdges, layoutDag, NODE_H, NODE_W, topoOrder, type DagNode, type WorkflowEdge } from "./plan/layout.ts";
+import { computeWorkflowEdges, layoutDag, NODE_H, NODE_W, topoOrder, allocateLanes, type DagNode, type WorkflowEdge } from "./plan/layout.ts";
 
 const phaseOrder: readonly Phase[] = ["grounding", "plan", "dispatch", "deploy", "done"];
 
@@ -329,9 +329,86 @@ function WorkflowCanvas(props: {
   }, [orderedWorkflows, edges]);
 
   const hasEdges = edges.length > 0;
+  const laneAlloc = useMemo(() => allocateLanes(orderedWorkflows, edges), [orderedWorkflows, edges]);
+  const gutterWidth = laneAlloc.laneCount > 0 ? (laneAlloc.laneCount + 1) * 10 : 0;
+
+  // Compute attachment points per card
+  // Map wfKey -> sorted list of attachment point entries { edgeIdx, isSource, otherKey, otherTopoIdx }
+  const attachments = useMemo(() => {
+    const topoIdxMap = new Map<string, number>();
+    orderedWorkflows.forEach((wf, i) => topoIdxMap.set(wf.key, i));
+
+    type CardAttachment = {
+      edgeIdx: number;
+      isSource: boolean;
+      otherKey: string;
+      otherTopoIdx: number;
+    };
+
+    const map = new Map<string, CardAttachment[]>();
+    for (const wf of orderedWorkflows) {
+      map.set(wf.key, []);
+    }
+
+    edges.forEach((e, edgeIdx) => {
+      const uTopo = topoIdxMap.get(e.fromKey) ?? 0;
+      const dTopo = topoIdxMap.get(e.toKey) ?? 0;
+      map.get(e.fromKey)?.push({
+        edgeIdx,
+        isSource: true,
+        otherKey: e.toKey,
+        otherTopoIdx: dTopo,
+      });
+      map.get(e.toKey)?.push({
+        edgeIdx,
+        isSource: false,
+        otherKey: e.fromKey,
+        otherTopoIdx: uTopo,
+      });
+    });
+
+    // Sort each card's attachments:
+    // ordered by the topological index of the other end of their edge, ascending,
+    // ties by the edge order of computeWorkflowEdges
+    for (const [_, list] of map.entries()) {
+      list.sort((a, b) => {
+        if (a.otherTopoIdx !== b.otherTopoIdx) return a.otherTopoIdx - b.otherTopoIdx;
+        return a.edgeIdx - b.edgeIdx;
+      });
+    }
+
+    // Map: edgeIdx -> { sourceK: number; sourceN: number; targetK: number; targetN: number }
+    // A card with n attachment points places the k-th one (k = 1..n) at y = top + k * h / (n + 1).
+    const edgeYs = new Map<number, { sourceK: number; sourceN: number; targetK: number; targetN: number }>();
+    edges.forEach((_, edgeIdx) => {
+      edgeYs.set(edgeIdx, { sourceK: 1, sourceN: 1, targetK: 1, targetN: 1 });
+    });
+
+    for (const [wfKey, list] of map.entries()) {
+      const n = list.length;
+      list.forEach((att, idx) => {
+        const k = idx + 1;
+        const ey = edgeYs.get(att.edgeIdx)!;
+        if (att.isSource) {
+          ey.sourceK = k;
+          ey.sourceN = n;
+        } else {
+          ey.targetK = k;
+          ey.targetN = n;
+        }
+      });
+    }
+
+    return edgeYs;
+  }, [orderedWorkflows, edges]);
 
   return (
-    <div ref={canvasRef} data-part="wf-canvas" className="relative flex flex-col gap-2.5">
+    <div
+      ref={canvasRef}
+      data-part="wf-canvas"
+      className="relative flex flex-col gap-2.5"
+      style={gutterWidth > 0 ? { paddingLeft: `${gutterWidth}px` } : undefined}
+    >
       {hasEdges ? (
         <svg
           data-part="wf-edges"
@@ -342,21 +419,30 @@ function WorkflowCanvas(props: {
           fill="none"
         >
           {edges.map((e, idx) => {
+            const lane = laneAlloc.lanes[idx] ?? 0;
             const uBox = layoutState.boxes.get(e.fromKey);
             const dBox = layoutState.boxes.get(e.toKey);
-            const x1 = uBox ? uBox.left + uBox.width / 2 : 0;
-            const y1 = uBox ? uBox.top + uBox.height : 0;
-            const x2 = dBox ? dBox.left + dBox.width / 2 : 0;
-            const y2 = dBox ? dBox.top : 0;
-            const ym = (y1 + y2) / 2;
-            const d = `M${x1} ${y1}C${x1} ${ym} ${x2} ${ym} ${x2} ${y2}`;
-            const arrowD = `M${x2 - 4} ${y2 - 6}L${x2} ${y2}L${x2 + 4} ${y2 - 6}`;
+            const attY = attachments.get(idx);
+
+            const xL = gutterWidth;
+            const lx = gutterWidth - (lane + 1) * 10;
+
+            const ys = Math.max(0, uBox && attY
+              ? uBox.top + (attY.sourceK * uBox.height) / (attY.sourceN + 1)
+              : (attY ? attY.sourceK * 10 : 0));
+            const yt = Math.max(4, dBox && attY
+              ? dBox.top + (attY.targetK * dBox.height) / (attY.targetN + 1)
+              : (attY ? attY.targetK * 10 : 10));
+
+            const d = `M${xL} ${ys}H${lx}V${yt}H${xL}`;
+            const arrowD = `M${xL - 6} ${yt - 4}L${xL} ${yt}L${xL - 6} ${yt + 4}`;
 
             return (
               <g key={`${e.fromKey}>${e.toKey}-${e.kind}-${idx}`}>
                 <path
                   data-wf-edge={`${e.fromKey}>${e.toKey}`}
                   data-edge-kind={e.kind}
+                  data-lane={lane}
                   fill="none"
                   strokeWidth={1.5}
                   className="stroke-line"

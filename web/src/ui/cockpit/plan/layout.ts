@@ -18,6 +18,80 @@ export interface WorkflowEdge {
   readonly kind: "base" | "needs";
 }
 
+export interface LaneAllocation {
+  readonly lanes: readonly number[];
+  readonly laneCount: number;
+}
+
+export function allocateLanes(
+  order: readonly WorkflowView[],
+  edges: readonly WorkflowEdge[],
+): LaneAllocation {
+  if (edges.length === 0) {
+    return { lanes: [], laneCount: 0 };
+  }
+
+  const indexMap = new Map<string, number>();
+  order.forEach((wf, idx) => {
+    indexMap.set(wf.key, idx);
+  });
+
+  // Edge with its original index, source index, target index
+  type EdgeEntry = {
+    origIdx: number;
+    iu: number;
+    id: number;
+  };
+
+  const edgeEntries: EdgeEntry[] = edges.map((e, idx) => {
+    const iu = indexMap.get(e.fromKey) ?? 0;
+    const id = indexMap.get(e.toKey) ?? 0;
+    return {
+      origIdx: idx,
+      iu: Math.min(iu, id),
+      id: Math.max(iu, id),
+    };
+  });
+
+  // Sort edges by (iu, id) ascending, ties by origIdx
+  const sorted = [...edgeEntries].sort((a, b) => {
+    if (a.iu !== b.iu) return a.iu - b.iu;
+    if (a.id !== b.id) return a.id - b.id;
+    return a.origIdx - b.origIdx;
+  });
+
+  // Assigned lane per original edge index
+  const assignedLanes = new Array<number>(edges.length);
+  // Placed edges per lane: list of [iu, id] intervals
+  const lanesEdges: Array<Array<{ iu: number; id: number }>> = [];
+
+  for (const entry of sorted) {
+    let lane = 0;
+    while (true) {
+      if (lane >= lanesEdges.length) {
+        lanesEdges.push([]);
+        break;
+      }
+      // Check conflict with already-placed edges in this lane
+      // Conflict: closed spans intersect [iu1, id1] and [iu2, id2] -> !(id1 < iu2 || id2 < iu1)
+      const hasConflict = lanesEdges[lane]!.some(
+        (span) => !(entry.id < span.iu || entry.iu > span.id),
+      );
+      if (!hasConflict) {
+        break;
+      }
+      lane++;
+    }
+    lanesEdges[lane]!.push({ iu: entry.iu, id: entry.id });
+    assignedLanes[entry.origIdx] = lane;
+  }
+
+  return {
+    lanes: assignedLanes,
+    laneCount: lanesEdges.length,
+  };
+}
+
 export function computeWorkflowEdges(planId: string, workflows: readonly WorkflowView[]): WorkflowEdge[] {
   const byKey = new Map(workflows.map((w) => [w.key, w]));
   const edges: WorkflowEdge[] = [];
