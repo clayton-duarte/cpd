@@ -7,7 +7,7 @@ use serde_json::json;
 use super::moves::start_parked;
 use super::row::{self, Role, Row};
 use super::state::scoped;
-use super::{Env, SendArgs, archive, no_cockpit};
+use super::{Env, SendArgs, archive};
 use crate::args::Text;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -193,8 +193,9 @@ pub fn tell(tx: &WriteTxn<'_>, target: &SessionId, text: &str) -> Result<i64, Cp
     write(tx, &row::load(tx, target)?, &None, text, None, true, None)
 }
 
-/// Whether `target`, a stopped Lead or Manager with no live pane, is to be started after its message commits (hs-d725);
-/// `no_cockpit` when it is and there is no cockpit to start it in.
+/// Whether `target`, a stopped Lead or Manager with no live pane, is to be started after its message commits (hs-d725).
+/// Returns true when a pane should be started (the target is stopped, has runner pi, has no live pane, and the cockpit exists).
+/// When no cockpit exists, returns false (no window is made; the engine supervises or wakes the Session).
 fn needs_pane(env: &Env, target: &Row) -> Result<bool, CpdError> {
     // A durable Session has no pane by design: the message is only an Event.
     if target.runner == row::Runner::Durable {
@@ -208,7 +209,7 @@ fn needs_pane(env: &Env, target: &Row) -> Result<bool, CpdError> {
             .iter()
             .any(|p| !p.dead && p.cpd_session.as_ref() == Some(&target.id));
     if wake && !tmux.has_session(&env.config.tmux.cockpit_session)? {
-        return Err(no_cockpit(&env.config.tmux.cockpit_session));
+        return Ok(false);
     }
     Ok(wake)
 }
@@ -251,7 +252,7 @@ pub(crate) fn deliver_with_origin(
     unblocks: Option<&str>,
     origin: Option<&str>,
 ) -> Result<(i64, SessionId, Option<crate::host::PaneId>), CpdError> {
-    // A stopped Lead or Manager with no live pane is started after the Event commits (hs-d725); no cockpit refuses first.
+    // A stopped Lead or Manager with no live pane is started after the Event commits (hs-d725) if a cockpit exists.
     let needs_pane = {
         let target = env.store.read(|conn| row::load(conn, id))?;
         check(&target)?;
