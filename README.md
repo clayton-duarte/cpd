@@ -17,14 +17,54 @@ The levels (Jira's words, as an analogy), the cpd objects and their roles are in
 
 ## Install and attach
 
+Each item says whether it is on `main` (**merged**) or only decided (**pending**).
+
+### Install on a host (macOS or Linux) (merged)
+
 ```sh
-sh scripts/install-cpd.sh   # ~/.local/bin/cpd and ~/.local/share/cpd/pi
-cpd tui --attach            # open the cockpit
-sh scripts/preview-tui.sh on   # preview this checkout's cockpit views (the status line shows 'preview: <worktree> <sha>')
-sh scripts/preview-tui.sh off  # back to the installed cpd
+sh scripts/install-cpd.sh                 # build cpd and install it
+sh scripts/install-cpd.sh --no-follow-up  # write the files, skip the follow-ups
 ```
 
-State lives in `$CPD_HOME` (default `~/.cpd`).
+The script builds `cpd` in release mode from this checkout and runs `cpd install`, which writes:
+
+- `~/.local/bin/cpd`: the binary
+- `~/.local/share/cpd/pi`: the pi adapter
+
+It needs `cargo` on `PATH` (or `$CARGO`, or `~/.cargo/bin`). It is safe to rerun. Without `--no-follow-up`, the install starts the engine (`cpd watch --ensure`).
+
+### Start the server: not working yet
+
+`cpd serve` is the production server of a host: the engine and the WebUI on port 3333, in one process (commands.md §12a). Status on `main`:
+
+- **Merged:** the `cpd serve` command is in the CLI.
+- **Broken:** it panics at start, exit 101, for every user. `ServeConfig::default()` resolves the home with neither `CPD_HOME` nor `HOME` (`core/src/serve.rs:38`), before it takes the lock or checks the port. Run by hand, it fails with `resolve default cpd home`.
+- **Pending:** the server itself. Even past the panic, `run_serve` stops after its lock and port checks and does not bind 3333, open the store or run the engine's ticks. Until that lands, nothing serves the WebUI.
+- **Pending:** the OS user service, launchd on macOS and systemd on Linux. It belongs to the dotfiles services workflow, and this repo has no unit or plist for it.
+
+### Open the WebUI
+
+- **Port 3333, the official interface: pending** (it needs the server above). Open `http://<host>:3333`. No login is needed in the browser (docs/architecture/serve.md, pro-d567). The `/cpd-ws` endpoint accepts a page only from `localhost`, a private IPv4 or IPv6 ULA address, or a `.local` name, on port 3333 or 33333 (web/CONTRACT.md §15.1).
+- **Port 33333, UI-only preview: partly merged.** `sh scripts/preview-web.sh on [<worktree>]` runs the Vite dev server of a worktree on `0.0.0.0:33333`, with no fallback port. Today that server hosts its own `/cpd-ws` backend. **Pending (pro-d570):** the preview becomes UI only, forwarding `/cpd-ws` to the production engine on 3333, with no store, binary or engine of its own.
+
+### Upgrade
+
+Merged, by hand: update the checkout to the commit you want (`git pull --ff-only` on `main`), then rerun `sh scripts/install-cpd.sh`.
+
+**Pending (pro-d569):** `cpd upgrade` and the WebUI Upgrade button. The plan is to fetch CI-green `origin/main`, build it in `~/.cpd/upgrade-build`, dry-run the database migration, back up, and roll back automatically when the health check fails. Nothing of this is on `main`: there is no `upgrade` command.
+
+### Repair: `cpd host repair` (merged)
+
+A Manager command (commands.md §9.11). The User runs it from a terminal with no approval. An agent Manager needs a live approval from the User first. It does two things:
+
+1. If the store has diverged migrations, it lists them and asks before it repairs (`-y` skips the question). A repair takes a store backup.
+2. It saves the checkout's HEAD as a ref `refs/cpd-host/<stamp>` and its uncommitted diff under `$CPD_HOME/run/cpd-install-backups/`. Then it resets `main` in `~/projects/cpd` to `origin/main`, which discards those uncommitted changes.
+
+It does not repair worktrees.
+
+### State
+
+State lives in `$CPD_HOME`, default `~/.cpd`: the database `cpd.db` (with its `-wal` and `-shm` files), the locks in `locks/` and the runtime files in `run/`. `CPD_HOME` must be an absolute path.
 
 ## Layout
 
