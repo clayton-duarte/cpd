@@ -242,15 +242,14 @@ pub fn run_serve(ports: &Ports, config: &ServeConfig) -> Result<(), CpdError> {
     // 1. Lock: locks/watch.lock is taken exclusively, as cpd watch takes it.
     // When it is held, the command refuses with watch_running (exit 3) and changes nothing.
     let lock_path = config.home.locks_dir().join("watch.lock");
-    if lock_path.exists() {
-        if let Ok(content) = fs::read_to_string(&lock_path) {
-            if content.trim() == "held" {
-                return Err(CpdError::new(
-                    ErrorCode::WatchRunning,
-                    "The engine is already running on this machine: there is one per machine.",
-                ));
-            }
-        }
+    if lock_path.exists()
+        && let Ok(content) = fs::read_to_string(&lock_path)
+        && content.trim() == "held"
+    {
+        return Err(CpdError::new(
+            ErrorCode::WatchRunning,
+            "The engine is already running on this machine: there is one per machine.",
+        ));
     }
 
     match try_take_lock(&lock_path)? {
