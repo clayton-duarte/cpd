@@ -307,3 +307,158 @@ fn repair_preserves_append_only_ledger() {
         "schema_migration_repairs must reject deletes: {repair_delete_err}"
     );
 }
+
+/// Acceptance:
+/// - Clean install compatibility: clean installation on empty store applies all migrations
+///   without needing repair, and `repair` on a clean store is a no-op that reports not repaired
+///   and creates no backup files.
+#[test]
+fn clean_install_compatibility_and_no_op_repair() {
+    let env = Home::empty();
+    let h = home(&env);
+
+    // Clean install: Store::open initializes all migrations cleanly
+    let store = Store::open(&h, 5000).expect("clean Store::open must succeed");
+    drop(store);
+
+    // Verify verdict on clean store is opens
+    let conn = Connection::open(h.db()).unwrap();
+    let v = verdict(&conn).unwrap();
+    assert!(
+        v.opens(),
+        "clean install verdict must open: {:?}",
+        v.outcome
+    );
+    drop(conn);
+
+    // Run repair on clean store
+    let options = RepairOptions {
+        dry_run: false,
+        confirmed: true,
+        reason: "clean store check".to_owned(),
+    };
+    let res = repair(&h, &options).expect("repair on clean store must succeed as no-op");
+    assert!(!res.repaired, "clean store must not require repair");
+    assert!(
+        res.backup_path.is_none(),
+        "clean store repair must not create any backup"
+    );
+
+    // Backups directory should not exist or be empty
+    let backups_dir = env.cpd_home().join("run/backups");
+    if backups_dir.exists() {
+        let count = fs::read_dir(&backups_dir).unwrap().count();
+        assert_eq!(count, 0, "no backups should be created for clean store");
+    }
+
+    // Post-repair Store::open must still succeed cleanly
+    let mut store2 = Store::open(&h, 5000).expect("Store::open must succeed after no-op repair");
+    let count: i64 = store2
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))?))
+        .unwrap();
+    assert!(count > 0, "schema_migrations must have entries");
+}
+
+/// Acceptance:
+/// - Pre-repair backup file integrity and post-repair Store::open compatibility:
+///   Verifies that the pre-repair backup file created at `run/backups/<ts>/cpd.db` is an exact
+///   valid SQLite database holding the pre-repair diverged state, and post-repair Store::open
+///   and store read/write operations work without any errors.
+#[test]
+fn pre_repair_backup_integrity_and_post_repair_store_operations() {
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_diverged_store(&env);
+
+    let pre_repair_bytes = fs::read(h.db()).unwrap();
+
+    let options = RepairOptions {
+        dry_run: false,
+        confirmed: true,
+        reason: "end-to-end lifecycle verification".to_owned(),
+    };
+    let res = repair(&h, &options).expect("repair must succeed");
+    assert!(res.repaired);
+
+    let backup_path = res.backup_path.expect("backup must be returned");
+    assert!(backup_path.is_file(), "backup file must exist");
+
+    // Pre-repair backup integrity:
+    // 1. Content matches pre-repair database
+    let backup_bytes = fs::read(&backup_path).unwrap();
+    assert_eq!(
+        pre_repair_bytes, backup_bytes,
+        "backup file content must be byte-for-byte identical to the pre-repair database"
+    );
+
+    // 2. Backup database can be opened directly as SQLite and still has the diverged checksum
+    let backup_conn = Connection::open(&backup_path).unwrap();
+    let backup_checksum: String = backup_conn
+        .query_row(
+            "SELECT checksum FROM schema_migrations WHERE name = ?1",
+            [DIVERGED_MIGRATION],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        backup_checksum, MAC_PRO_RECORDED_CHECKSUM,
+        "backup file must retain the pre-repair diverged checksum"
+    );
+    // And backup has no schema_migration_repairs table yet
+    let has_repairs: bool = backup_conn
+        .query_row(
+            "SELECT count(*) > 0 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migration_repairs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        !has_repairs,
+        "backup database must not contain schema_migration_repairs"
+    );
+    drop(backup_conn);
+
+    // Post-repair Store::open compatibility:
+    // Can open Store, read, and write transactions normally
+    let mut store = Store::open(&h, 5000).expect("Store::open must succeed post-repair");
+
+    let repair_entry = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT name, recorded_checksum, accepted_checksum, reason FROM schema_migration_repairs WHERE name = ?1",
+                [DIVERGED_MIGRATION],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(repair_entry.0, DIVERGED_MIGRATION);
+    assert_eq!(repair_entry.1, MAC_PRO_RECORDED_CHECKSUM);
+    assert_eq!(repair_entry.2, ORIGIN_MAIN_CHECKSUM);
+    assert_eq!(repair_entry.3, "end-to-end lifecycle verification");
+
+    // Perform a write transaction on post-repair store
+    store
+        .write("test post-repair write", |c| {
+            c.execute(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx-test', 'Test Context', '2026-11-12T00:00:00Z', 'mac-pro')",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO plans (id, context, title, phase, created_at) VALUES ('plan-test', 'ctx-test', 'Test Plan', 'shaping', '2026-11-12T00:00:00Z')",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("write to post-repair store must succeed");
+
+    let plan_title: String = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT title FROM plans WHERE id = 'plan-test'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
+    assert_eq!(plan_title, "Test Plan");
+}
