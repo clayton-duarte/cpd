@@ -32,3 +32,4 @@ mod testkit_hosts;
 mod tripwire_script;
 mod usage_grammar;
 mod version;
+mod argv_parity;
