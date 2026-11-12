@@ -450,7 +450,6 @@ fn approve(a: ApproveArgs) -> Result<Output, CpdError> {
     let (env, who) = identify()?;
     rules::check(who.role, Action::Approve, a.vault.as_str())
         .map_err(|c| refusal(c, &who, Action::Approve, &a.vault))?;
-    op::check()?;
     let approval = Approval {
         session: who.session.to_string(),
         action: name.to_owned(),
