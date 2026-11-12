@@ -149,7 +149,7 @@ it("dropping files on ChatPane while a dialog is open does not throw", async () 
 
 // The durable request must map to the same answerable approval card as other approvals.
 it("ChatPane swaps composer for dialog card when session is waiting on dialog", () => {
-  const mapped = dialogFromRequest({ type: "ui_request", id: "external-1", method: "select", purpose: "external_approve", title: "Publish release?", options: ["Allow once", "Deny"] }, []);
+  const mapped = dialogFromRequest({ type: "ui_request", id: "external-1", created_at: 0, method: "select", purpose: "external_approve", title: "Publish release?", options: ["Allow once", "Deny"] }, []);
   expect(mapped).not.toHaveProperty("kind", "unsupported");
   if ("kind" in mapped) throw new Error("external approval must be a dialog");
   const c = setup(mapped);
