@@ -27,6 +27,10 @@ A review Plan (a Plan of Context `codereview`, made by `inbox claim`) reviews on
 - **The menu gets two entries.** **Open Link** and **Copy Link** come first on the row, before Snooze and Dismiss, and show only when `url` is set. Open Link opens `url` in the default browser: the TUI through `link::open_url`, the web in a new tab (`noopener,noreferrer`). Copy Link copies `url`: the TUI with `tmux set-buffer` (`Opener::copy_link`), the web to the clipboard. The menus themselves are in [commands §13.2](../commands.md) ("The Inbox's right-click menu") and [DESIGN-panes §2.3](../../web/src/ui/DESIGN-panes.md); this section is the rule they follow.
 - **The wake of the review Lead.** The Lead of a review Plan is woken, not only when the User re-claims the item (contract [§2.2](../contract.md) "The team review rule", commands [§21.7](../commands.md)), but also by the GitHub pass that sees the claimed pull request's head move. The pass appends one `session-message` to the Lead (`data.from` null, `wake` true) in the transaction that stores the new head, when the head differs from the head the item was claimed at (`inbox_items.head_oid`) and the pull request's checks are `passed`. Its `data.head_oid` is the new head, so one head wakes the Lead once and a second check run on the same head wakes nothing. The rule and its test are [swr-github.md](swr-github.md) §10 (b).
 
+## Approval dialogs
+
+<!-- skeleton: filled in the next commit -->
+
 ## Related notes
 
 - [[knowledge-plane]] — the curation this Inbox decides (`curate-retire`; `curate-docs` is history-only, pro-d327).
