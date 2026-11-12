@@ -55,6 +55,7 @@ pub mod protocol;
 pub mod prune;
 pub mod resource;
 pub mod secret;
+pub mod serve;
 pub mod session;
 pub mod slack;
 pub mod spec;
