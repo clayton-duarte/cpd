@@ -404,3 +404,145 @@ fn a_clean_checkout_writes_no_patch_but_still_saves_the_old_head() {
         "the repair consumed the approval"
     );
 }
+
+/// Helper that sets up a diverged applied migration in `fx.env`'s store.
+fn setup_diverged_store(fx: &Fx) {
+    let db_path = fx.env.cpd_home().join("cpd.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let txn: i64 = conn
+        .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+        .unwrap();
+    conn.create_scalar_function(
+        "cpd_txn",
+        0,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        move |_| Ok(txn),
+    )
+    .unwrap();
+
+    let has_waiting_on: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info('jobs') WHERE name = 'waiting_on'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    if !has_waiting_on {
+        conn.execute_batch("ALTER TABLE jobs ADD COLUMN waiting_on TEXT;")
+            .unwrap();
+    }
+
+    let diverged_migration = "20261110T2200-draft-waiting-on";
+    let mac_pro_checksum = "d0e0badbbd9c0000000000000000000000000000000000000000000000000000";
+
+    let row_exists: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM schema_migrations WHERE name = ?1",
+            [diverged_migration],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    if row_exists {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS schema_migrations_no_update;
+             UPDATE schema_migrations SET checksum = 'd0e0badbbd9c0000000000000000000000000000000000000000000000000000'
+             WHERE name = '20261110T2200-draft-waiting-on';
+             CREATE TRIGGER schema_migrations_no_update BEFORE UPDATE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;",
+        ).unwrap();
+    } else {
+        conn.execute(
+            "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+             VALUES (?1, 'additive', ?2, (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
+            rusqlite::params![diverged_migration, mac_pro_checksum, txn],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn diverged_store_repair_yes_succeeds_and_backs_up() {
+    let fx = Fx::new();
+    git_fake(&fx, "", false);
+
+    // Set up a diverged store in the test environment
+    setup_diverged_store(&fx);
+
+    // Run `cpd host repair --yes` as User (Nobody) through CLI harness
+    let r = fx.run(Who::Nobody, &["host", "repair", "--yes"], None);
+    let out = r.ok();
+
+    // Asserts command succeeds, output JSON contains store_repaired and store_backup
+    assert_eq!(
+        out["store_repaired"],
+        json!(true),
+        "output must indicate store_repaired: {out:?}"
+    );
+    let backup_str = out["store_backup"]
+        .as_str()
+        .expect("output must contain store_backup path");
+    let backup_path = PathBuf::from(backup_str);
+    assert!(
+        backup_path.exists(),
+        "backup file must exist at {backup_str}"
+    );
+    assert!(
+        backup_str.contains("run/backups/"),
+        "backup must be under run/backups/<ts>/cpd.db: {backup_str}"
+    );
+    assert!(
+        backup_path.ends_with("cpd.db"),
+        "backup path must end with cpd.db: {backup_str}"
+    );
+
+    // Records repair in schema_migration_repairs
+    let db_path = fx.env.cpd_home().join("cpd.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let repair_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM schema_migration_repairs WHERE name = '20261110T2200-draft-waiting-on'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("schema_migration_repairs must be readable");
+    assert_eq!(repair_count, 1, "exactly one repair row must be recorded");
+    drop(conn);
+
+    // The store can subsequently be opened normally
+    let home = cpd_core::home::CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+    let store = cpd_core::store::Store::open(&home, 5000);
+    assert!(
+        store.is_ok(),
+        "store must open normally after repair: {:?}",
+        store.err()
+    );
+}
+
+#[test]
+fn diverged_store_repair_no_leaves_store_byte_identical() {
+    let fx = Fx::new();
+    git_fake(&fx, "", false);
+
+    // Set up diverged store
+    setup_diverged_store(&fx);
+
+    let db_path = fx.env.cpd_home().join("cpd.db");
+    let pre_bytes = fs::read(&db_path).unwrap();
+
+    // Runs `cpd host repair` with 'N' input via stdin
+    let r = fx.run(Who::Nobody, &["host", "repair"], Some("N\n"));
+
+    // Asserts command fails with host_approval_required
+    assert_eq!(
+        r.error()["code"],
+        "host_approval_required",
+        "repair with N must fail with host_approval_required: {r:?}"
+    );
+
+    // Leaves the store byte-identical to before the run
+    let post_bytes = fs::read(&db_path).unwrap();
+    assert_eq!(
+        pre_bytes, post_bytes,
+        "store must remain byte-identical after N"
+    );
+}
