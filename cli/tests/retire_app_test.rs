@@ -18,7 +18,9 @@ mod retire_app_test {
     /// and no `gh release create app-v*` release command is run.
     #[test]
     fn desktop_release_command_removed() {
-        panic!("desktop_release_command_removed: stub red test for pro-d567 retiring desktop release");
+        panic!(
+            "desktop_release_command_removed: stub red test for pro-d567 retiring desktop release"
+        );
     }
 
     /// Tests `retire_app_test::shell_install_removed`.
