@@ -69,6 +69,35 @@ impl Env {
             catalog: None,
         })
     }
+
+    /// Opens `$CPD_HOME` for `cpd host repair`: tolerates `migration_changed` without running
+    /// migrations or writing to the store, so repair can reach divergence detection, confirmation,
+    /// and reconciliation.
+    pub fn open_for_repair() -> Result<Env, CpdError> {
+        Env::open_for_repair_with(&Ports::current())
+    }
+
+    /// [`Env::open_for_repair`] on `ports`.
+    pub fn open_for_repair_with(ports: &Ports) -> Result<Env, CpdError> {
+        Env::open_home_for_repair_with(ports, CpdHome::from_env()?)
+    }
+
+    /// [`Env::open_for_repair`] for a specific `home` on `ports`.
+    pub fn open_home_for_repair_with(ports: &Ports, home: CpdHome) -> Result<Env, CpdError> {
+        let config = Config::load(&home)?;
+        let store = Store::open_for_repair_with(
+            &*ports.clock,
+            &home,
+            u64::from(config.timeouts.store_busy_ms),
+        )?;
+        Ok(Env {
+            home,
+            config,
+            store,
+            ports: ports.clone(),
+            catalog: None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +143,90 @@ mod tests {
         assert!(
             !home.root().join("cpd.db").exists(),
             "the store is opened after the config"
+        );
+    }
+
+    #[test]
+    fn open_for_repair_tolerates_diverged_migration_while_standard_open_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
+        std::fs::write(
+            home.config(),
+            "version = 1\nmachine = \"test\"\n[timeouts]\nstore_busy_ms = 1234\n",
+        )
+        .unwrap();
+
+        // First, create the store with standard open
+        {
+            let _env = Env::open_home(home.clone()).unwrap();
+        }
+
+        // Now introduce a diverged checksum into schema_migrations
+        {
+            let conn = rusqlite::Connection::open(home.db()).unwrap();
+            let txn: i64 = conn
+                .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+                .unwrap();
+            conn.create_scalar_function(
+                "cpd_txn",
+                0,
+                rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+                move |_| Ok(txn),
+            )
+            .unwrap();
+
+            let diverged_migration = "20261110T2200-draft-waiting-on";
+            let fake_checksum = "d0e0badbbd9c0000000000000000000000000000000000000000000000000000";
+
+            let row_exists: bool = conn
+                .query_row(
+                    "SELECT count(*) > 0 FROM schema_migrations WHERE name = ?1",
+                    [diverged_migration],
+                    |r| r.get(0),
+                )
+                .unwrap();
+
+            if row_exists {
+                conn.execute_batch(&format!(
+                    "DROP TRIGGER IF EXISTS schema_migrations_no_update;
+                     UPDATE schema_migrations SET checksum = '{fake_checksum}' WHERE name = '{diverged_migration}';
+                     CREATE TRIGGER schema_migrations_no_update BEFORE UPDATE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;"
+                )).unwrap();
+            } else {
+                conn.execute(
+                    "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+                     VALUES (?1, 'additive', ?2, (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
+                    rusqlite::params![diverged_migration, fake_checksum, txn],
+                )
+                .unwrap();
+            }
+        }
+
+        // Standard Env::open_home must fail with MigrationChanged per contract §4.5a
+        let err = Env::open_home(home.clone())
+            .err()
+            .expect("must fail on diverged migration");
+        assert_eq!(err.code(), ErrorCode::MigrationChanged);
+
+        // Standard Store::open must also fail with MigrationChanged
+        let err = Store::open(&home, 1234)
+            .err()
+            .expect("must fail on diverged migration");
+        assert_eq!(err.code(), ErrorCode::MigrationChanged);
+
+        // Env::open_home_for_repair_with must succeed
+        let env = Env::open_home_for_repair_with(&Ports::current(), home.clone()).unwrap();
+        assert_eq!(env.home, home);
+
+        // Store::open_for_repair must also succeed
+        let mut store = Store::open_for_repair(&home, 1234).unwrap();
+        assert!(
+            store
+                .read(
+                    |c| Ok(c.query_row("SELECT count(*) FROM plans", [], |r| r.get::<_, i64>(0))?)
+                )
+                .is_ok()
         );
     }
 

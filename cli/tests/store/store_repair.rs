@@ -13,12 +13,12 @@ use cpd_core::store::{Store, verdict};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 
-const DIVERGED_MIGRATION: &str = "20261110T2200-draft-waiting-on";
+pub(crate) const DIVERGED_MIGRATION: &str = "20261110T2200-draft-waiting-on";
 /// Mac-pro applied draft checksum (from bug b23 / pro-n444 / pro-d562 / pro-d568)
-const MAC_PRO_RECORDED_CHECKSUM: &str =
+pub(crate) const MAC_PRO_RECORDED_CHECKSUM: &str =
     "d0e0badbbd9c0000000000000000000000000000000000000000000000000000";
 /// Expected checksum on origin/main (with column jobs.waiting_on added)
-const ORIGIN_MAIN_CHECKSUM: &str =
+pub(crate) const ORIGIN_MAIN_CHECKSUM: &str =
     "ce607fabfb0036c67828eb91f400d3bdf848b7da5ce221c1704a1367588bd2af";
 
 fn home(env: &impl HasCpdHome) -> CpdHome {
@@ -26,14 +26,8 @@ fn home(env: &impl HasCpdHome) -> CpdHome {
 }
 
 /// Sets up a database that applied all standard migrations plus the draft migration
-/// with mac-pro's diverged checksum.
-fn setup_mac_pro_diverged_store(env: &impl HasCpdHome) {
-    let h = home(env);
-    // Initialize standard database
-    drop(Store::open(&h, 5000).unwrap());
-
-    // Connect raw and simulate mac-pro's diverged draft migration application
-    let conn = Connection::open(h.db()).unwrap();
+/// with mac-pro's diverged checksum on a raw SQLite connection.
+pub(crate) fn setup_diverged_store_conn(conn: &Connection) {
     let txn: i64 = conn
         .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
         .unwrap();
@@ -78,6 +72,18 @@ fn setup_mac_pro_diverged_store(env: &impl HasCpdHome) {
         )
         .unwrap();
     }
+}
+
+/// Sets up a database that applied all standard migrations plus the draft migration
+/// with mac-pro's diverged checksum.
+pub(crate) fn setup_mac_pro_diverged_store(env: &impl HasCpdHome) {
+    let h = home(env);
+    // Initialize standard database
+    drop(Store::open(&h, 5000).unwrap());
+
+    // Connect raw and simulate mac-pro's diverged draft migration application
+    let conn = Connection::open(h.db()).unwrap();
+    setup_diverged_store_conn(&conn);
 }
 
 /// Acceptance:

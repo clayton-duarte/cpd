@@ -116,7 +116,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 
 /// `cpd host approve` (commands.md §9.11): one private approval for the calling Manager.
 fn approve() -> Result<Output, CpdError> {
-    let mut env = crate::env::Env::open()?;
+    let mut env = crate::env::Env::open_for_repair()?;
     let Some((session, role)) = caller(&mut env)? else {
         return Err(not_a_manager());
     };
@@ -149,7 +149,7 @@ fn save_patch(home: &CpdHome, ts: &str, patch: &str) -> Result<PathBuf, CpdError
 
 /// `cpd host repair` (commands.md §9.11): save the diff and the old HEAD, then reset `main`.
 fn repair(args: RepairArgs) -> Result<Output, CpdError> {
-    let mut env = crate::env::Env::open()?;
+    let mut env = crate::env::Env::open_for_repair()?;
     let waiting = match caller(&mut env)? {
         None => None,
         Some((session, role)) => {
