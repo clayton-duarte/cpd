@@ -122,6 +122,9 @@ error_codes! {
     InstallStateInvalid = "install_state_invalid" => Failure,
     // The install (commands.md §14.4).
     InstallFailed = "install_failed" => Failure,
+    // The upgrade (docs/architecture/upgrade.md, commands.md §14.4c, contract §3.7c).
+    UpgradeFailed = "upgrade_failed" => Failure,
+    UpgradeRollbackFailed = "upgrade_rollback_failed" => Failure,
     // `cpd desktop` finds no checkout: `cpd install` never wrote `app-root` (commands.md §14.4a).
     AppNotInstalled = "desktop_not_installed" => Failure,
     // A `durable` Worker's transcript has not grown for `timeouts.stall_minutes` (contract §3.4 A4, hs-d798):
