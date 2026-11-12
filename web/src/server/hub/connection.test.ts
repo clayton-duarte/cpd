@@ -139,8 +139,12 @@ describe("hub connection", () => {
   });
 
   it("session abort routes to the attached backend", async () => {
-    // Red test skeleton
-    expect(false).toBe(true);
+    const t = setup();
+    await t.hub.handle({ type: "session.attach", sessionId: "dur-1" });
+    const handle = t.durable.attaches[0]?.handle as FakeHandle;
+
+    await t.hub.handle({ type: "session.abort", sessionId: "dur-1" });
+    expect(handle.calls).toContainEqual(["abort"]);
   });
 
   it("session attach selects the backend by session runner", async () => {
