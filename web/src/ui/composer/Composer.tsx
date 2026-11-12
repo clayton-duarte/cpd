@@ -75,6 +75,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
     setSaveFailed(!saveDraft(props.sessionId, text, attachments));
   }, [props.sessionId, text, attachments]);
   const [rejections, setRejections] = useState<AttachmentRejection[]>([]);
+  const [abortNotice, setAbortNotice] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -108,10 +109,69 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
     setText("");
     setAttachments([]);
     setRejections([]);
+    setAbortNotice(null);
+  };
+
+  const deleteToLineStart = (target: HTMLTextAreaElement): void => {
+    const selStart = target.selectionStart;
+    const selEnd = target.selectionEnd;
+    const val = target.value;
+    if (selStart !== selEnd) {
+      // If there's an active selection, delete the selection or line start?
+      // Native behavior or just range deletion
+    }
+    const lastNewline = val.lastIndexOf("\n", selStart - 1);
+    const lineStart = lastNewline === -1 ? 0 : lastNewline + 1;
+    if (lineStart >= selStart && selStart === selEnd) return;
+    const deleteFrom = lineStart;
+    const deleteTo = selEnd;
+    // Use document.execCommand('insertText', false, '') if possible to preserve undo
+    target.focus();
+    target.setSelectionRange(deleteFrom, deleteTo);
+    const success = typeof document !== "undefined" && typeof document.execCommand === "function"
+      && document.execCommand("insertText", false, "");
+    if (!success) {
+      const next = val.slice(0, deleteFrom) + val.slice(deleteTo);
+      setText(next);
+      // Update caret position after state update
+      setTimeout(() => {
+        target.setSelectionRange(deleteFrom, deleteFrom);
+      }, 0);
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.nativeEvent.isComposing || e.key !== "Enter" || e.shiftKey) return;
+    if (e.nativeEvent.isComposing) return;
+
+    if (e.key === "Escape") {
+      // If any popup is open, close it; else if session is working and abort is supported, trigger abort;
+      // if working but abort is unsupported, show a short notice; if idle, no-op.
+      const hasPopup = typeof document !== "undefined" && Boolean(
+        document.querySelector('[role="menu"], [role="dialog"], [data-radix-popper-content-wrapper]')
+      );
+      if (hasPopup) {
+        return;
+      }
+      if (props.busy) {
+        if (capabilities?.abort?.supported) {
+          e.preventDefault();
+          props.onAbort();
+        } else {
+          e.preventDefault();
+          const reason = capabilities?.abort && !capabilities.abort.supported ? capabilities.abort.reason : "Abort is not supported for this session";
+          setAbortNotice(reason);
+        }
+      }
+      return;
+    }
+
+    if ((e.key === "Backspace" && e.metaKey) || (e.key.toLowerCase() === "u" && e.ctrlKey && !e.metaKey && !e.altKey)) {
+      e.preventDefault();
+      deleteToLineStart(e.currentTarget);
+      return;
+    }
+
+    if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     send();
   };
@@ -141,6 +201,11 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
       {!saveFailed ? null : (
         <p role="alert" className="m-0 font-mono text-xs text-destructive">
           Draft not saved: browser storage is full or unavailable.
+        </p>
+      )}
+      {!abortNotice ? null : (
+        <p role="alert" data-part="abort-notice" className="m-0 font-mono text-xs text-destructive">
+          {abortNotice}
         </p>
       )}
       {rejections.length === 0 ? null : (

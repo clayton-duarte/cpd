@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Attachment, Capabilities, QueuedSubmission, WhenBusy } from "../../protocol/domain.ts";
 import { mount } from "../../testing/render.tsx";
 import { Composer } from "./Composer.tsx";
+import { TierSelector } from "./TierSelector.tsx";
 import type { FileReaderBoundary } from "./attachments.ts";
 
 const base: Capabilities = {
@@ -17,13 +18,13 @@ const base: Capabilities = {
 const reader: FileReaderBoundary = { readBase64: async () => "QUJD", readText: async () => "txt" };
 
 type Submit = { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy };
-function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queued?: QueuedSubmission[] } = {}) {
+function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queued?: QueuedSubmission[]; settings?: React.ReactNode } = {}) {
   const submits: Submit[] = [];
   const onAbort = vi.fn();
   const onCancelQueued = vi.fn();
   const m = mount(
     <Composer sessionId="s1" capabilities={over.capabilities === undefined ? base : over.capabilities} busy={over.busy ?? false} queued={over.queued ?? []}
-      reader={reader} onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={onCancelQueued} />,
+      reader={reader} onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={onCancelQueued} settings={over.settings} />,
   );
   return { m, submits, onAbort, onCancelQueued };
 }
@@ -319,3 +320,89 @@ it("a draft save quota error is shown", async () => {
   expect(alert!.textContent).toMatch(/draft|storage|quota/i);
   m.unmount();
 });
+
+it("Escape while busy calls onAbort", () => {
+  const { m, onAbort } = setup({ busy: true });
+  const t = textarea(m.container);
+  press(t, "Escape");
+  expect(onAbort).toHaveBeenCalledTimes(1);
+  m.unmount();
+});
+
+it("Escape while idle leaves draft intact", () => {
+  const { m, onAbort } = setup({ busy: false });
+  const t = textarea(m.container);
+  typeText(t, "draft message");
+  press(t, "Escape");
+  expect(onAbort).not.toHaveBeenCalled();
+  expect(t.value).toBe("draft message");
+  m.unmount();
+});
+
+it("Escape closes open popup before aborting", () => {
+  const settings = <TierSelector capabilities={base} footer={null} models={null} busy={true} onConfigure={() => {}} onRequestModels={() => {}} />;
+  const { m, onAbort } = setup({ busy: true, settings });
+  const tierBtn = m.container.querySelector<HTMLButtonElement>('button[aria-label="Tier"]')!;
+  expect(tierBtn).not.toBeNull();
+  act(() => {
+    tierBtn.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+  });
+  const menu = document.querySelector('[role="menu"]');
+  expect(menu).not.toBeNull();
+
+  // First Escape while popup is open closes popup and does not call onAbort
+  act(() => {
+    (menu ?? textarea(m.container)).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  expect(onAbort).not.toHaveBeenCalled();
+
+  // Second Escape after popup is closed calls onAbort
+  const t = textarea(m.container);
+  press(t, "Escape");
+  expect(onAbort).toHaveBeenCalledTimes(1);
+
+  m.unmount();
+});
+
+it("Escape shows notice when abort is unsupported", () => {
+  const capsNoAbort: Capabilities = {
+    ...base,
+    abort: { supported: false, reason: "cpd has no command to abort a pi session turn" },
+  };
+  const { m, onAbort } = setup({ busy: true, capabilities: capsNoAbort });
+  const t = textarea(m.container);
+  press(t, "Escape");
+  expect(onAbort).not.toHaveBeenCalled();
+  const notice = m.container.querySelector('[role="alert"], [data-part="notice"], [data-part="abort-notice"]');
+  expect(notice).not.toBeNull();
+  expect(notice!.textContent).toContain("cpd has no command to abort a pi session turn");
+  m.unmount();
+});
+
+it("Cmd+Backspace deletes to start of current line", () => {
+  const { m } = setup();
+  const t = textarea(m.container);
+  typeText(t, "line one\nline two\nline three");
+  // Position caret in the middle of line two: "line two" starts at index 9. Let caret be at 9 + 4 = 13 ("line")
+  t.setSelectionRange(13, 13);
+  act(() => {
+    t.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true, cancelable: true }));
+  });
+  expect(t.value).toBe("line one\n two\nline three");
+  m.unmount();
+});
+
+it("Ctrl+U deletes to start of current line", () => {
+  const { m } = setup();
+  const t = textarea(m.container);
+  typeText(t, "first line\nsecond line");
+  // Position caret at end of second line: index 22
+  t.setSelectionRange(22, 22);
+  act(() => {
+    t.dispatchEvent(new KeyboardEvent("keydown", { key: "u", ctrlKey: true, bubbles: true, cancelable: true }));
+  });
+  expect(t.value).toBe("first line\n");
+  m.unmount();
+});
+
+
