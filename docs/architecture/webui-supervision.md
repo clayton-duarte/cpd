@@ -45,3 +45,11 @@ The preview server relies on Vite's `strictPort: true`, which fails on a taken p
 ## Not an access control
 
 Supervision is about process lifetime and ports only. The origin rule that governs `/cpd-ws` on both ports is in `web/CONTRACT.md` §15.1.
+
+## Takeover of port holders
+
+Skeleton. The takeover rule is pending the Lead's answer to attempt webui-adopt-docs-a1; it is not decided here yet.
+
+## Supervisor lifecycle with takeover
+
+Skeleton. Follows the takeover rule above.
