@@ -111,9 +111,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.nativeEvent.isComposing || e.key !== "Enter" || e.shiftKey) return;
-    e.preventDefault();
-    send();
+    if (e.nativeEvent.isComposing) return;
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
