@@ -7,6 +7,7 @@ import type { Connection, SubmitInput } from "../state/connection.ts";
 import { emptyTranscript } from "../state/transcript.ts";
 import type { SessionView } from "../state/store.ts";
 import { mount } from "../testing/render.tsx";
+import { dialogFromRequest } from "../server/durable/frames.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import type { FileReaderBoundary } from "./composer/attachments.ts";
 
@@ -144,4 +145,16 @@ it("dropping files on ChatPane while a dialog is open does not throw", async () 
   await act(async () => { zone.dispatchEvent(drop); });
   expect(askOf(c)).not.toBeNull();
   expect(composerOf(c)).toBeNull();
+});
+
+// The durable request must map to the same answerable approval card as other approvals.
+it("ChatPane swaps composer for dialog card when session is waiting on dialog", () => {
+  const mapped = dialogFromRequest({ type: "ui_request", id: "external-1", method: "select", purpose: "external_approve", title: "Publish release?", options: ["Allow once", "Deny"] }, []);
+  expect(mapped).not.toHaveProperty("kind", "unsupported");
+  if ("kind" in mapped) throw new Error("external approval must be a dialog");
+  const c = setup(mapped);
+  expect(composerOf(c)).toBeNull();
+  expect(c.textContent).toContain("Publish release?");
+  expect(c.textContent).toContain("Allow once");
+  expect(c.textContent).toContain("Deny");
 });

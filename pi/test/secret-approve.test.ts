@@ -22,7 +22,7 @@ function setup(t: TestContext, role: string | undefined, ui = true) {
   const tool = f.pi.tools.find((x) => x.name === "cpd_secret_approve");
   assert.ok(tool, "the tool cpd_secret_approve is registered");
   const secretCalls = () => f.argvs().filter((a) => a[0] === "secret");
-  return { f, tool, secretCalls };
+  return { f, tool, secretCalls, host };
 }
 
 test("cpd_secret_approve is refused for a Worker and for no run", async (t) => {
@@ -82,5 +82,19 @@ test("cpd_secret_approve refuses cpd and homeserver", async (t) => {
 test("cpd_secret_approve with no dialog is an error", async (t) => {
   const { f, tool, secretCalls } = setup(t, "lead", false);
   await assert.rejects(f.pi.runTool(tool, ARGS), (e: any) => e.code === "no_ui");
+  assert.deepEqual(secretCalls(), []);
+});
+
+ test("cpd_secret_approve fails fast when op is not signed in", async (t) => {
+  const { f, tool, host, secretCalls } = setup(t, "lead");
+  host.call = async () => { throw Object.assign(new Error("sign in with op signin"), { code: "secret_not_signed_in" }); };
+  const running = f.pi.runTool(tool, ARGS);
+  // Give the async tool a turn, then release any incorrectly opened prompt before asserting.
+  await Promise.resolve();
+  const dialog = f.pi.openDialog("select");
+  if (dialog) dialog.answer("Deny");
+  const outcome = await running.then(() => null, (e: unknown) => e);
+  assert.equal(dialog, undefined, "no approval prompt should open without a signed-in op");
+  assert.equal((outcome as { code?: string } | null)?.code, "secret_not_signed_in");
   assert.deepEqual(secretCalls(), []);
 });
