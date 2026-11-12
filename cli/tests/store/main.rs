@@ -6,6 +6,7 @@ mod common;
 
 mod events;
 mod home;
+mod repair;
 mod scripted;
 mod store;
 mod store_asleep;

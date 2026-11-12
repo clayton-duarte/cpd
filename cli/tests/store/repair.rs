@@ -1,23 +1,309 @@
 //! Store repair tests (bug b23, Plan `store-repair`).
-//! Tests cover mac-pro's diverged migration case, dry-run on copy,
-//! user confirmation abort, and append-only ledger preservation.
+//!
+//! Tests mac-pro's exact diverged migration case, copy dry-run,
+//! backup creation, ledger append, and verdict acceptance.
 
+use std::fs;
+
+use crate::home::{HasCpdHome, Home};
+use cpd_core::error::ErrorCode;
+use cpd_core::home::CpdHome;
+use cpd_core::store::repair::{RepairOptions, repair};
+use cpd_core::store::{Store, verdict};
+use rusqlite::Connection;
+use rusqlite::functions::FunctionFlags;
+
+const DIVERGED_MIGRATION: &str = "20261110T2200-draft-waiting-on";
+/// Mac-pro applied draft checksum (from bug b23 / pro-n444 / pro-d562 / pro-d568)
+const MAC_PRO_RECORDED_CHECKSUM: &str =
+    "d0e0badbbd9c0000000000000000000000000000000000000000000000000000";
+/// Expected checksum on origin/main (with column jobs.waiting_on added)
+const ORIGIN_MAIN_CHECKSUM: &str =
+    "ce607fabfb0036c67828eb91f400d3bdf848b7da5ce221c1704a1367588bd2af";
+
+fn home(env: &impl HasCpdHome) -> CpdHome {
+    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
+}
+
+/// Sets up a database that applied all standard migrations plus the draft migration
+/// with mac-pro's diverged checksum.
+fn setup_mac_pro_diverged_store(env: &impl HasCpdHome) {
+    let h = home(env);
+    // Initialize standard database
+    drop(Store::open(&h, 5000).unwrap());
+
+    // Connect raw and simulate mac-pro's diverged draft migration application
+    let conn = Connection::open(h.db()).unwrap();
+    let txn: i64 = conn
+        .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+        .unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn))
+        .unwrap();
+
+    // Check if jobs already has waiting_on; if not, add it
+    let has_waiting_on: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM pragma_table_info('jobs') WHERE name = 'waiting_on'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    if !has_waiting_on {
+        conn.execute_batch("ALTER TABLE jobs ADD COLUMN waiting_on TEXT;")
+            .unwrap();
+    }
+
+    // Now update or insert the row in schema_migrations with mac-pro's checksum
+    // Note: schema_migrations has append-only triggers, so we drop them or insert
+    let row_exists: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM schema_migrations WHERE name = ?1",
+            [DIVERGED_MIGRATION],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    if row_exists {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS schema_migrations_no_update;
+             UPDATE schema_migrations SET checksum = 'd0e0badbbd9c0000000000000000000000000000000000000000000000000000'
+             WHERE name = '20261110T2200-draft-waiting-on';
+             CREATE TRIGGER schema_migrations_no_update BEFORE UPDATE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;",
+        ).unwrap();
+    } else {
+        conn.execute(
+            "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+             VALUES (?1, 'additive', ?2, (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
+            rusqlite::params![DIVERGED_MIGRATION, MAC_PRO_RECORDED_CHECKSUM, txn],
+        )
+        .unwrap();
+    }
+}
+
+/// Acceptance:
+/// - Tests reproduce mac-pro's exact checksum divergence and verify that Store::open fails
+///   with MigrationChanged before repair.
+/// - Tests verify that repair creates a backup file before writing, appends to
+///   schema_migration_repairs, and Store::open succeeds after repair.
 #[test]
 fn repair_diverged_draft_migration_mac_pro() {
-    panic!("stub");
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_diverged_store(&env);
+
+    // Verify Store::open fails with MigrationChanged before repair
+    let err = Store::open(&h, 5000)
+        .err()
+        .expect("store with diverged checksum must fail to open");
+    assert_eq!(err.code(), ErrorCode::MigrationChanged, "error: {err:?}");
+    assert_eq!(err.details()["name"], DIVERGED_MIGRATION);
+    assert_eq!(
+        err.details()["recorded"],
+        MAC_PRO_RECORDED_CHECKSUM,
+        "recorded checksum must match mac-pro"
+    );
+    assert_eq!(
+        err.details()["embedded"],
+        ORIGIN_MAIN_CHECKSUM,
+        "embedded checksum must match origin/main"
+    );
+
+    // Verify read-only verdict also refuses before repair
+    let conn = Connection::open(h.db()).unwrap();
+    let v = verdict(&conn).unwrap();
+    assert!(
+        v.outcome.is_err(),
+        "verdict must refuse before repair: {:?}",
+        v.outcome
+    );
+    drop(conn);
+
+    // Run repair with confirmation
+    let options = RepairOptions {
+        dry_run: false,
+        confirmed: true,
+        reason: "mac-pro b23 diverged draft repair".to_owned(),
+    };
+    let res = repair(&h, &options).expect("repair should succeed when implemented");
+    assert!(res.repaired, "result must indicate repair was performed");
+
+    // Verify backup file was created before writing to the live store
+    let backup_path = res.backup_path.expect("repair must create a backup file");
+    assert!(
+        backup_path.exists(),
+        "backup file must exist at {}",
+        backup_path.display()
+    );
+    assert!(
+        backup_path.to_string_lossy().contains("run/backups/"),
+        "backup must be stored under run/backups/<ts>/: {}",
+        backup_path.display()
+    );
+
+    // Verify schema_migration_repairs table was appended to
+    let conn = Connection::open(h.db()).unwrap();
+    let repair_count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM schema_migration_repairs WHERE name = ?1 AND recorded_checksum = ?2 AND accepted_checksum = ?3",
+            [DIVERGED_MIGRATION, MAC_PRO_RECORDED_CHECKSUM, ORIGIN_MAIN_CHECKSUM],
+            |r| r.get(0),
+        )
+        .expect("schema_migration_repairs must exist and be readable");
+    assert_eq!(
+        repair_count, 1,
+        "exactly one repair row must be appended for diverged migration"
+    );
+
+    // Verify Store::open succeeds after repair
+    drop(conn);
+    let mut store = Store::open(&h, 5000).unwrap();
+    let count: i64 = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT count(*) FROM schema_migration_repairs", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
+    assert!(count >= 1);
 }
 
+/// Acceptance:
+/// - Tests verify that dry-run operates on a copy and does not alter the original store file.
 #[test]
 fn repair_dry_run_does_not_modify_live_db() {
-    panic!("stub");
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_diverged_store(&env);
+
+    let original_bytes = fs::read(h.db()).unwrap();
+
+    let options = RepairOptions {
+        dry_run: true,
+        confirmed: true,
+        reason: "dry run test".to_owned(),
+    };
+    let res = repair(&h, &options).expect("dry run repair must succeed");
+    assert!(res.repaired, "dry-run on copy should report repair success");
+
+    // The original database file must remain byte-identical
+    let after_bytes = fs::read(h.db()).unwrap();
+    assert_eq!(
+        original_bytes, after_bytes,
+        "dry-run must not modify the live database file"
+    );
+
+    // Store::open must still fail because the live DB was not touched
+    let err = Store::open(&h, 5000)
+        .err()
+        .expect("live store must still fail after dry-run");
+    assert_eq!(err.code(), ErrorCode::MigrationChanged);
 }
 
+/// Acceptance:
+/// - Tests verify that repair aborts without user confirmation.
 #[test]
 fn repair_aborts_without_user_confirmation() {
-    panic!("stub");
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_diverged_store(&env);
+
+    let original_bytes = fs::read(h.db()).unwrap();
+
+    let options = RepairOptions {
+        dry_run: false,
+        confirmed: false, // User did not confirm
+        reason: "unconfirmed repair".to_owned(),
+    };
+    let err = repair(&h, &options).expect_err("repair must abort without user confirmation");
+    // Verify an appropriate refusal or error is returned
+    assert!(
+        err.code() == ErrorCode::HostApprovalRequired
+            || err.code() == ErrorCode::Usage
+            || err.to_string().contains("confirm"),
+        "error must indicate missing confirmation: {err:?}"
+    );
+
+    // Live store must remain untouched
+    let after_bytes = fs::read(h.db()).unwrap();
+    assert_eq!(
+        original_bytes, after_bytes,
+        "unconfirmed repair must not touch the database"
+    );
+
+    // No backup should be created
+    let backups_dir = env.cpd_home().join("run/backups");
+    if backups_dir.exists() {
+        let entries = fs::read_dir(&backups_dir).unwrap().count();
+        assert_eq!(entries, 0, "no backup directory should be created on abort");
+    }
 }
 
+/// Acceptance:
+/// - Tests verify that schema_migrations is never modified (append-only ledger preserved)
+///   and schema_migration_repairs itself is append-only.
 #[test]
 fn repair_preserves_append_only_ledger() {
-    panic!("stub");
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_diverged_store(&env);
+
+    let options = RepairOptions {
+        dry_run: false,
+        confirmed: true,
+        reason: "preservation test".to_owned(),
+    };
+    repair(&h, &options).expect("repair must succeed");
+
+    let conn = Connection::open(h.db()).unwrap();
+
+    // Verify schema_migrations row for the diverged migration still holds the original recorded checksum
+    let recorded: String = conn
+        .query_row(
+            "SELECT checksum FROM schema_migrations WHERE name = ?1",
+            [DIVERGED_MIGRATION],
+            |r| r.get(0),
+        )
+        .expect("schema_migrations row must still exist");
+    assert_eq!(
+        recorded, MAC_PRO_RECORDED_CHECKSUM,
+        "schema_migrations must NOT be modified by repair"
+    );
+
+    // Verify schema_migrations update trigger still active and rejects updates
+    let update_err = conn.execute(
+        "UPDATE schema_migrations SET checksum = '0000000000000000000000000000000000000000000000000000000000000000' WHERE name = ?1",
+        [DIVERGED_MIGRATION],
+    ).unwrap_err();
+    assert!(
+        update_err
+            .to_string()
+            .contains("append_only: schema_migrations"),
+        "schema_migrations must remain append-only: {update_err}"
+    );
+
+    // Verify schema_migration_repairs has append-only triggers (rejects UPDATE and DELETE)
+    let repair_update_err = conn
+        .execute(
+            "UPDATE schema_migration_repairs SET reason = 'tampered'",
+            [],
+        )
+        .unwrap_err();
+    assert!(
+        repair_update_err
+            .to_string()
+            .contains("append_only: schema_migration_repairs"),
+        "schema_migration_repairs must be append-only: {repair_update_err}"
+    );
+
+    let repair_delete_err = conn
+        .execute("DELETE FROM schema_migration_repairs", [])
+        .unwrap_err();
+    assert!(
+        repair_delete_err
+            .to_string()
+            .contains("append_only: schema_migration_repairs"),
+        "schema_migration_repairs must reject deletes: {repair_delete_err}"
+    );
 }
