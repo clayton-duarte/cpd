@@ -24,6 +24,8 @@ mod comments_tests;
 #[cfg(test)]
 mod deploys_active_tests;
 #[cfg(test)]
+mod deploys_budget_tests;
+#[cfg(test)]
 mod deploys_tests;
 #[cfg(test)]
 mod gh_runner_tests;
