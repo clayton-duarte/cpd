@@ -195,19 +195,19 @@ export function App(props: AppProps): ReactElement {
   }, [cockpit.inbox, visiblePlan]);
   const inboxRows = cockpit.inbox?.rows;
   useEffect(() => {
-    if (activeSessionId === null || inboxRows === undefined) return;
+    if (selectedSessionId === null || inboxRows === undefined) return;
     for (const r of inboxRows) {
-      if (r.kind !== "unread" || r.sessionId !== activeSessionId || r.id < 0 || dismissedUnread.has(r.id)) continue;
+      if (r.kind !== "unread" || r.sessionId !== selectedSessionId || r.id < 0 || dismissedUnread.has(r.id)) continue;
       dismissedUnread.add(r.id);
       onAction({ kind: "inbox.dismiss", itemId: r.id });
     }
-  }, [activeSessionId, inboxRows, onAction]);
+  }, [selectedSessionId, inboxRows, onAction]);
   const inboxModel = useMemo(() => {
     const inbox = cockpit.inbox;
-    if (inbox === null || activeSessionId === null) return inbox;
-    const rows = inbox.rows.filter((r) => !(r.kind === "unread" && (r.sessionId === activeSessionId || dismissedUnread.has(r.id))));
+    if (inbox === null || selectedSessionId === null) return inbox;
+    const rows = inbox.rows.filter((r) => !(r.kind === "unread" && (r.sessionId === selectedSessionId || dismissedUnread.has(r.id))));
     return rows.length === inbox.rows.length ? inbox : { ...inbox, rows, openCount: rows.length };
-  }, [cockpit.inbox, activeSessionId]);
+  }, [cockpit.inbox, selectedSessionId]);
 
   return (
     <>
