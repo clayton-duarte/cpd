@@ -8435,7 +8435,7 @@ One bug record, every field (contract §2.2 "Bug record"), so **mitigation appli
 
 ## 34. The refactor protocol
 
-Status: **designed, not yet built.** Decisions pro-d579 and pro-d581 (Context `cpd`), planned in Plan `refactor-protocol`; its Job `protocol-impl` builds it. Until that Job merges, the binary knows neither shape (`workflow add --shape` lists `tdd`, `docs` and `config`, §9.4), and no check below runs. The **Open points** (§34.5) are what the decisions leave to that Job. Evidence: **docs** (the decision records and the Plan's Jobs).
+Decisions pro-d579 and pro-d581 (Context `cpd`) define the coverage and refactor workflow protocol.
 
 The protocol makes a refactor safe by its tests: coverage is proven before the code changes, and the tests do not change while it does. [protocols.md](protocols.md) lists it in the registry.
 
@@ -8477,10 +8477,8 @@ The three codes are the protocol's error codes. A refusal exits 3, as the state 
 3. The coverage Workflow is green or merged again. The refactor Workflow takes the amended base. A stacked Workflow never rebases (§9.3, `stacked_rebase`), so the Lead runs `git -C <lead worktree> merge --no-edit origin/<coverage-branch>` and then `cpd pr push --workflow <refactor-key>` (§9.3).
 4. The stopped Job reruns: `cpd job retry <job> --tier <T>` (§5.4).
 
-### 34.5 Open points
+### 34.5 Coverage measurement
 
-The decisions do not settle these. `protocol-impl` settles them and removes this list:
+A `coverage` workflow uses a work Job for tests passing against existing code; a `refactor` workflow uses an implementation Job. A coverage base is green when merged, or when all its Jobs are merged and its PR checks are not failing.
 
-- **Job kinds of the two shapes.** A `test` Job's red tests must fail before its implementation exists (§5.1, §7.5). Coverage tests pass on the code as it is, by design. So the kind of a coverage Job, and of a refactor's code Job, is open.
-- **Green.** The decisions say "green" and do not define it.
-- **Coverage tool.** None is configured in the repo (no coverage or mutation tool in any tracked config). The baseline's measuring tool is open. Mutation testing is omitted (A2).
+A repo can configure `[coverage-commands] measure` as a command producing JSON with aggregate `line` and `branch` numbers and, optionally, `files` mapping paths to the same two numbers. At refactor workflow creation, cpd measures and stores the coverage base commit and report; a failed measurement refuses creation. Once an amended coverage base is incorporated, cpd refreshes the baseline. At push, cpd measures the refactor commit and refuses `coverage_below_baseline` if either value drops. When per-file data is present, the comparison applies to touched files; otherwise it uses aggregate values. A failed measurement also refuses the push. If no measure command is configured, coverage checking is skipped. Mutation testing is omitted (A2).

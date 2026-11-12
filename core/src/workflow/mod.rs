@@ -210,3 +210,113 @@ pub(crate) fn guard_refactor_tests(
     }
     Ok(())
 }
+
+/// Run a configured coverage command at an immutable commit in a temporary worktree.
+pub(crate) fn measure_coverage(
+    repo: &std::path::Path,
+    plan: &crate::ids::PlanId,
+    key: &WorkflowKey,
+    commit: &str,
+    command: &str,
+) -> Result<CoverageReport, CpdError> {
+    use crate::error::ErrorCode;
+    // Do not collide with an enclosing `pr rebase` worktree for this workflow.
+    let scratch_key = WorkflowKey::parse(if key.as_str() == "cpd-coverage" {
+        "cpd-coverage-2"
+    } else {
+        "cpd-coverage"
+    })
+    .map_err(|e| CpdError::bad_row(e.to_string()))?;
+    let worktree = crate::git::RebaseWorktree::add(repo, plan, &scratch_key, commit)?;
+    let call = crate::host::runner::Call {
+        tool: "coverage".into(),
+        program: "sh".into(),
+        args: vec!["-c".into(), command.into()],
+        envs: vec![],
+        cwd: Some(worktree.path().to_path_buf()),
+        deadline: std::time::Duration::from_secs(3600),
+        stdin: None,
+        stderr_to: None,
+    };
+    let output = crate::ports::Ports::current().runner.run(&call);
+    worktree.remove()?;
+    let output = output.map_err(|e| {
+        CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            format!("Coverage measurement failed: {e:?}"),
+        )
+    })?;
+    if !output.status.success() {
+        return Err(CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            "Coverage measurement failed.",
+        ));
+    }
+    let report: CoverageReport = serde_json::from_slice(&output.stdout).map_err(|e| {
+        CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            format!("Invalid coverage report: {e}"),
+        )
+    })?;
+    report.validate()?;
+    Ok(report)
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct CoverageReport {
+    line: f64,
+    branch: f64,
+    files: Option<std::collections::BTreeMap<String, CoverageMetrics>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct CoverageMetrics {
+    line: f64,
+    branch: f64,
+}
+
+impl CoverageReport {
+    fn validate(&self) -> Result<(), CpdError> {
+        let valid = |line: f64, branch: f64| {
+            line.is_finite() && branch.is_finite() && line >= 0.0 && branch >= 0.0
+        };
+        if !valid(self.line, self.branch)
+            || self
+                .files
+                .as_ref()
+                .is_some_and(|files| files.values().any(|v| !valid(v.line, v.branch)))
+        {
+            return Err(CpdError::new(
+                crate::error::ErrorCode::CoverageBelowBaseline,
+                "Invalid coverage values.",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn check(&self, current: &Self, touched: &[String]) -> Result<(), CpdError> {
+        let below = if let Some(base_files) = &self.files {
+            let current_files = current.files.as_ref().ok_or_else(|| {
+                CpdError::new(
+                    crate::error::ErrorCode::CoverageBelowBaseline,
+                    "Coverage report omitted per-file data.",
+                )
+            })?;
+            touched.iter().any(
+                |path| match (base_files.get(path), current_files.get(path)) {
+                    (Some(base), Some(now)) => now.line < base.line || now.branch < base.branch,
+                    (Some(_), None) => true,
+                    _ => false,
+                },
+            )
+        } else {
+            current.line < self.line || current.branch < self.branch
+        };
+        if below {
+            return Err(CpdError::new(
+                crate::error::ErrorCode::CoverageBelowBaseline,
+                "Refactor coverage is below the baseline.",
+            ));
+        }
+        Ok(())
+    }
+}

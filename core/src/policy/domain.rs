@@ -250,6 +250,42 @@ impl HasText for Option<RepoTests> {
     }
 }
 
+/// Optional repo command producing a JSON coverage report.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageCommands {
+    pub measure: Option<String>,
+}
+
+impl HasText for CoverageCommands {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageCommandsSet {
+    pub measure: Option<String>,
+}
+
+impl Set for CoverageCommandsSet {
+    type Value = CoverageCommands;
+    fn fill(&self, _base: &CoverageCommands) -> (CoverageCommands, Vec<&'static str>) {
+        (
+            CoverageCommands {
+                measure: self.measure.clone(),
+            },
+            Vec::new(),
+        )
+    }
+    fn complete(&self) -> Option<CoverageCommands> {
+        Some(CoverageCommands {
+            measure: self.measure.clone(),
+        })
+    }
+}
+
 /// The `protected` domain (repo scope only, no `text`): the Workflow's protected paths of §7.5.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1048,6 +1084,7 @@ domains! {
     model, Model, [], [Machine, Owner, Repo], Models, ModelSet;
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
+    coverage_commands = "coverage-commands", CoverageCommands, [], [Repo], CoverageCommands, CoverageCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
     generated, Generated, [], [Repo], Generated, GeneratedSet;
     resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;

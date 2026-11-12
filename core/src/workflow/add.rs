@@ -711,7 +711,23 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
             needs,
             true,
         ),
-        Decision::Insert { .. } => {
+        Decision::Insert {
+            base: base_branch, ..
+        } => {
+            // Capture the coverage base before creating the refactor workflow.
+            let coverage_baseline = if wanted.shape == "refactor" {
+                if let Some(command) = &policy.coverage_commands.measure {
+                    let sha = crate::git::run::rev_parse(&repo, &base_branch)?;
+                    let report = super::measure_coverage(&repo, &plan, &wanted.key, &sha, command)?;
+                    let json = serde_json::to_string(&report)
+                        .map_err(|e| CpdError::bad_row(e.to_string()))?;
+                    Some((sha, json))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             // git, outside any transaction.
             no_branch_clash(&repo, &plan, &workflow_branch(&plan, &wanted.key))?;
             if let Some(jobs) = &wanted.jobs {
@@ -736,6 +752,9 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         )?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
+                    if let Some((sha, report)) = &coverage_baseline {
+                        tx.execute("INSERT INTO refactor_coverage_baselines (plan, workflow, base_sha, report) VALUES (?1, ?2, ?3, ?4)", rusqlite::params![plan.as_str(), wanted.key.as_str(), sha, report])?;
+                    }
                     let stubs = insert_stubs(tx, &home, &plan, &wanted, appended)?;
                     let with = if needs.is_empty() { String::new() } else { format!(", needs {}", needs.join(", ")) };
                     let text = format!(

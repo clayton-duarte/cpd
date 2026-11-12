@@ -106,6 +106,18 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
         super::post::check(post)
             .map_err(|(name, why)| policy_invalid(file, Some(&format!("pr.post.{name}")), why))?;
     }
+    if let Some(set) = &scope.coverage_commands
+        && set
+            .measure
+            .as_ref()
+            .is_some_and(|command| command.trim().is_empty())
+    {
+        return Err(policy_invalid(
+            file,
+            Some("coverage-commands.measure"),
+            "`measure` must be a non-empty command",
+        ));
+    }
     if let Some(set) = &scope.test_commands {
         set.commands()
             .map_err(|why| policy_invalid(file, Some("test-commands"), why))?;

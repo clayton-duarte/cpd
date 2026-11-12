@@ -179,10 +179,32 @@ mod refactor_protocol {
 
         fx.add_workflow("cov", &["--shape", "coverage"]).ok();
         fx.env.sql("UPDATE jobs SET status = 'queued', tier = 'S2', goal = 'goal', context = 'context', touches = '[\"src/**\"]', acceptance = '[\"works\"]', out_of_scope = '[]', fingerprint = printf('%064d', 0) WHERE workflow = 'cov'; UPDATE jobs SET status = 'running' WHERE workflow = 'cov'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE workflow = 'cov';");
+        fx.git(&fx.repo, &["branch", "pay-1/cov"]);
+        fx.env.repo_policy(
+            "acme",
+            "pay",
+            &format!("{TESTS_TABLE}\n[coverage-commands]\nmeasure = \"mock-coverage\"\n"),
+        );
+        use cpd_core::host::runner::Reply;
+        let _ = (*fx.fakes.runner)
+            .clone()
+            .once(
+                "sh",
+                |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                Reply::ok(r#"{"line": 90.0, "branch": 80.0}"#),
+            )
+            .once(
+                "sh",
+                |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                Reply::ok(r#"{"line": 70.0, "branch": 80.0}"#),
+            );
+
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
         fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay-1'; UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch', lead_worktree = '/tmp/lead', started_at = 't' WHERE plan = 'pay-1';");
 
+        fx.git(&fx.repo, &["checkout", "-b", "pay-1/refact"]);
+        fx.commit_file(&fx.repo, "src/lib.rs", "implementation", "refactor");
         // When gate runs for the refactor workflow (e.g. during pr push or gate check),
         // if coverage is below the baseline of the coverage workflow, gate fails with coverage_below_baseline
         let run = fx.cpd(&["pr", "push", "--workflow", "refact", "--plan", "pay-1"]);

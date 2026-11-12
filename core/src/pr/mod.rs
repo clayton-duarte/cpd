@@ -412,6 +412,40 @@ fn gate_hooks<'a>(
     }
 }
 
+/// Check the stored baseline for a refactor at every local workflow Gate.
+fn coverage_gate(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    sha: &str,
+) -> Result<(), CpdError> {
+    use rusqlite::OptionalExtension;
+    if workflow.shape != "refactor" {
+        return Ok(());
+    }
+    let Some(command) = &policy.coverage_commands.measure else {
+        return Ok(());
+    };
+    let mut gate_env = Env::open_with(&env.ports)?;
+    let stored: Option<(String, String)> = gate_env.store.read(|conn| Ok(conn.query_row(
+        "SELECT base_sha, report FROM refactor_coverage_baselines WHERE plan = ?1 AND workflow = ?2",
+        [plan.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))
+    ).optional()?))?;
+    let (base, report) = stored.ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            "Coverage baseline was not captured at workflow creation.",
+        )
+    })?;
+    let baseline: crate::workflow::CoverageReport = serde_json::from_str(&report)
+        .map_err(|e| CpdError::bad_row(format!("invalid coverage baseline: {e}")))?;
+    let repo = std::path::Path::new(&workflow.repo);
+    let current = crate::workflow::measure_coverage(repo, plan, &workflow.key, sha, command)?;
+    let touched = crate::git::tamper::changed_paths(repo, &base, sha)?;
+    baseline.check(&current, &touched)
+}
+
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
 fn gate(
     env: &Env,
@@ -443,6 +477,7 @@ fn gate_in(
     if policy.gate.workflow != Gate::Local {
         return Ok(());
     }
+    coverage_gate(env, policy, plan, workflow, sha)?;
     let hooks = gate_hooks(env, policy, plan, workflow);
     let then =
         format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");
