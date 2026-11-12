@@ -26,7 +26,12 @@ impl Handler for Gh {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
         match args[..] {
             ["api", "user", "--jq", ".login"] => Reply::ok(&format!("{}\n", self.me)),
-            ["api", path] => {
+            _ if args.starts_with(&["api"]) => {
+                let path = args
+                    .iter()
+                    .find(|a| a.starts_with("repos/"))
+                    .copied()
+                    .unwrap_or("");
                 let parts: Vec<&str> = path.split('/').collect();
                 match parts[..] {
                     ["repos", owner, repo, "actions", "workflows", file, query]
@@ -384,17 +389,21 @@ fn one_runs_call_per_declared_workflow() {
         .filter(|c| c.contains("runs?status="))
         .collect();
     runs_calls.sort();
-    let expected: Vec<String> = [
+    let mut expected: Vec<String> = [
         "pay/actions/workflows/build.yaml",
         "pay/actions/workflows/main.yml",
         "web/actions/workflows/deploy.yml",
     ]
     .iter()
     .flat_map(|w| {
-        ["in_progress", "queued", "waiting"]
-            .map(|s| format!("api repos/acme/{w}/runs?status={s}&per_page=100"))
+        [
+            format!("api repos/acme/{w}/runs?status=in_progress&per_page=100"),
+            format!("api repos/acme/{w}/runs?status=queued&per_page=100"),
+            format!("api --include repos/acme/{w}/runs?status=waiting&per_page=100"),
+        ]
     })
     .collect();
+    expected.sort();
     assert_eq!(runs_calls, expected);
     assert_eq!(cached(&home)["runs"].as_array().unwrap().len(), 1);
 
