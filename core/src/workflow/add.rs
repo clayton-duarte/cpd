@@ -396,6 +396,16 @@ pub(super) fn resolve_refs(
     base: &BaseWanted,
     needs: &[String],
 ) -> Result<Resolved, CpdError> {
+    resolve_refs_with_merged(conn, subject, base, needs, false)
+}
+
+fn resolve_refs_with_merged(
+    conn: &Connection,
+    subject: &Subject<'_>,
+    base: &BaseWanted,
+    needs: &[String],
+    allow_merged: bool,
+) -> Result<Resolved, CpdError> {
     let plan = subject.plan;
     if let BaseWanted::Workflow(base_plan, base_key) = base
         && base_plan != plan
@@ -420,7 +430,9 @@ pub(super) fn resolve_refs(
                 .with("plan", plan.as_str())
                 .with("workflow", base_key.as_str()));
             };
-            check_base_workflow_state(workflow)?;
+            if !(allow_merged && workflow.status == "merged") {
+                check_base_workflow_state(workflow)?;
+            }
             if workflow.repo != subject.repo {
                 return Err(CpdError::new(
                     ErrorCode::BaseWorkflowOtherRepo,
@@ -430,7 +442,14 @@ pub(super) fn resolve_refs(
                 .with("repo", subject.repo)
                 .with("base_repo", workflow.repo.as_str()));
             }
-            (workflow.lead_branch.clone(), Some(workflow))
+            (
+                if allow_merged && workflow.status == "merged" {
+                    workflow.base.clone()
+                } else {
+                    workflow.lead_branch.clone()
+                },
+                Some(workflow),
+            )
         }
         BaseWanted::Branch(branch) => {
             // A branch that is already a Lead Branch of a Workflow of the Plan is stacked all the same.
@@ -948,7 +967,7 @@ fn decide(
         }
         None => Vec::new(),
     };
-    let resolved = resolve_refs(
+    let resolved = resolve_refs_with_merged(
         conn,
         &Subject {
             plan,
@@ -957,6 +976,7 @@ fn decide(
         },
         &wanted.base,
         &needs,
+        wanted.shape == "refactor",
     )?;
     if let Some(error) = unconfigured {
         return Err(error.clone());
