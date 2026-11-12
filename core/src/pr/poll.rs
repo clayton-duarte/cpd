@@ -519,6 +519,19 @@ fn poll_pass(
         || !follows.is_empty()
         || contained.iter().any(|c| !c.held)
         || env.store.read(|conn| {
+            let open_workflow_pr_merged: bool = conn.query_row(
+                "SELECT EXISTS (
+                    SELECT 1 FROM pull_requests r
+                    JOIN workflows w ON w.pull_request = r.id AND w.status = 'open'
+                    JOIN plans p ON p.id = w.plan AND p.archived_at IS NULL
+                    WHERE r.state = 'merged'
+                )",
+                [],
+                |r| r.get(0),
+            )?;
+            if open_workflow_pr_merged {
+                return Ok(true);
+            }
             let conflict_needs_update: bool = conn.query_row(
                 "SELECT EXISTS (
                     SELECT 1 FROM pull_requests r
@@ -810,7 +823,7 @@ fn apply(
             }));
         }
         for (plan, key, _) in owned.iter().filter(|(_, _, row)| row.id == after.id) {
-            if polled.state == PrState::Merged {
+            if after.state == "merged" {
                 out.merged.push((plan.clone(), key.clone()));
                 if merge(tx, plan, key, &after)? {
                     out.done.push(plan.clone());
@@ -882,6 +895,20 @@ fn apply(
                     )?;
                 }
             }
+        }
+    }
+    // Reconcile open workflows whose pull request is already stored as merged (b26).
+    // When a pull request was already stored as merged, it may not be in `seen` (if search returned no hits
+    // or absent reads did not query it) or its `change_opt` was None. Reconcile any open workflows whose
+    // PR is stored merged.
+    for (plan, key, row) in owned {
+        if row.state == "merged" && !out.merged.iter().any(|(p, k)| p == plan && k == key) {
+            out.merged.push((plan.clone(), key.clone()));
+            if merge(tx, plan, key, row)? {
+                out.done.push(plan.clone());
+            }
+            crate::incident::end_if_until_workflow_merged(tx)?;
+            unstack_stacked_on(tx, plan, key)?;
         }
     }
     for follow in follows {
