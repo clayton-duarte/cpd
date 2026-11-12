@@ -24,7 +24,7 @@ Status: **decided** by pro-d567 (upgrade by button or command; the version tag s
 - **How it is built.** The same command as the bootstrap `scripts/install-cpd.sh` uses, run in the clone: `CPD_COMMIT=<short sha> scripts/cargo.sh build --release --locked -p cpd` (commands.md §14.4). `--locked` makes the build use the committed `Cargo.lock`. The result is `$CPD_HOME/upgrade/target/release/cpd`.
 - **Idempotence.** A build of a green SHA that already exists in the target directory is reused by the same SHA; `cpd upgrade` never builds the same SHA twice in one run.
 
-**Open point 1 (CI-green on main).** `.github/workflows/ci.yml` runs on `pull_request` and `workflow_dispatch` only (verified, lines 4-9). No CI run is attached to a commit on `main`, so "CI-green for origin/main's head" has no source of truth today. The implementing Job must either add a `push` trigger for `main` to `ci.yml`, or define green as the last successful CI run of the pull request that merged the commit. The Lead decides which; this page does not choose.
+**Open point 1 (CI-green on main).** `.github/workflows/ci.yml` runs on `pull_request` and `workflow_dispatch` only (verified, lines 4-6). No CI run is attached to a commit on `main`, so "CI-green for origin/main's head" has no source of truth today. The implementing Job must either add a `push` trigger for `main` to `ci.yml`, or define green as the last successful CI run of the pull request that merged the commit. The Lead decides which; this page does not choose.
 
 ## 3. Migration dry run on a copy of cpd.db
 
