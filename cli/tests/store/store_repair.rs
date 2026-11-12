@@ -468,3 +468,27 @@ fn pre_repair_backup_integrity_and_post_repair_store_operations() {
         .unwrap();
     assert_eq!(plan_title, "Test Plan");
 }
+
+/// Acceptance:
+/// - Reconciles drifted table schemas (jobs CHECK constraint, incident column order)
+///   via cpd host repair --yes / store::repair into main's form.
+/// - Validates schema hash and preserves data values.
+#[test]
+fn repair_reconciles_drifted_table_schemas() {
+    assert!(
+        cpd_core::store::repair::is_table_reconciliation_supported(),
+        "store repair does not yet support table schema reconciliation (red stub)"
+    );
+}
+
+/// Acceptance:
+/// - Populates rows in drifted tables, runs repair, verifies data preservation,
+///   and verifies subsequent cpd install copy migration succeeds.
+#[test]
+fn repair_preserves_rows_and_allows_install_copy_migration() {
+    assert!(
+        cpd_core::store::repair::is_table_reconciliation_supported(),
+        "store repair does not yet support table schema reconciliation (red stub)"
+    );
+}
+

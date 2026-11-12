@@ -301,3 +301,10 @@ pub fn repair(home: &CpdHome, options: &RepairOptions) -> Result<RepairResult, C
         backup_path: Some(backup_path),
     })
 }
+
+/// Stub indicator for table schema reconciliation support in store repair.
+/// Returns false until implemented.
+pub fn is_table_reconciliation_supported() -> bool {
+    false
+}
+
