@@ -774,6 +774,23 @@ fn a_send_to_a_lead_with_a_live_pane_starts_no_window() {
 }
 
 #[test]
+fn send_to_stopped_pi_session_without_cockpit_succeeds() {
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    let out = fx
+        .cpd(&["session", "send", "lead2", "wake up", "--unblocks", "u"])
+        .ok();
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["started"], false, "{out}");
+    assert_eq!(out["pane"], Value::Null, "{out}");
+    let events = messages(&fx);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["data"]["text"], "wake up");
+    assert_eq!(events[0]["session"], "lead2");
+    assert!(show(&fx, "lead2")["tmux_pane"].is_null());
+}
+
+#[test]
 fn a_send_to_a_stopped_lead_with_no_cockpit_is_refused_no_cockpit_and_writes_no_event() {
     let fx = Fx::with_ports();
     setup(&fx.env);
