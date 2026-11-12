@@ -513,10 +513,14 @@ export function createDurableBackend(deps: {
             } else if (response.outcome === "reject") {
               await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
             } else if (response.outcome === "changes") {
-              if (deps.fs === undefined || deps.cpdHome === undefined) throw invalid("feedback file boundary is unavailable");
-              const feedbackFile = `${deps.cpdHome}/run/${plan}/feedback-${review}.md`;
-              await deps.fs.write(feedbackFile, new TextEncoder().encode(response.feedback));
-              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan, feedbackFile }));
+              if (deps.fs !== undefined && deps.cpdHome !== undefined) {
+                const feedbackFile = `${deps.cpdHome}/run/${plan}/feedback-${review}.md`;
+                await deps.fs.write(feedbackFile, new TextEncoder().encode(response.feedback));
+                await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan, feedbackFile }));
+              } else {
+                await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
+                await client.submit({ text: response.feedback, whenBusy: "followUp", requestId: `feedback:${dialogId}` });
+              }
             }
             dialogs.delete(dialogId);
             send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });
