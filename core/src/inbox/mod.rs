@@ -18,6 +18,8 @@ mod approve_tests;
 #[cfg(test)]
 mod blue_tests;
 #[cfg(test)]
+mod bug_tests;
+#[cfg(test)]
 mod claim_refusal_tests;
 #[cfg(test)]
 mod claim_reuse_tests;
