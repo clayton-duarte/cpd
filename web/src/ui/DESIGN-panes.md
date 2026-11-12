@@ -225,6 +225,8 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 
 5. **Plans without Workflow dependencies.** No overlay, no legend, cards in `plan.workflows` order. The `wf-canvas` wrapper still renders, with the same gap, so the layout is as today.
 
+6. **Left-gutter routing (Bug b46).** TODO skeleton: to be specified.
+
 ### 1f. PR link and Post PR
 
 `p[data-part="pr"]` renders only when `wf.pr !== null` (KEPT behaviour), `flex items-center gap-2 font-mono text-[11.5px]`:
