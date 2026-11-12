@@ -265,7 +265,9 @@ function submit(c: HTMLElement) {
   it("dialog_submission_is_blocked_when_questions_remain_unanswered_without_explicit_skip", () => {
     const { container, responses, unmount } = setup([q(0), q(1)]);
     click(input(container, 0, "A0"));
-    submit(container);
+    act(() => {
+      container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
     expect(responses).toEqual([]);
     unmount();
   });

@@ -39,7 +39,7 @@ function extractAnswer(
   const custom =
     values
       .find((v) => !optionLabels.has(v) && v.trim() !== "")
-      ?.trim() ?? "";
+      ?? "";
 
   if (q.multiSelect) {
     if (selected.length === 0 && custom === "") return null;
@@ -82,6 +82,7 @@ export function AskCard(props: {
   }[];
 }): React.JSX.Element {
   const { dialog, readOnly, onRespond, recommended } = props;
+  const [customByQ, setCustomByQ] = useState<Record<number, string>>({});
   const [focusedByQ, setFocusedByQ] = useState<Record<number, string>>({});
 
   if (readOnly) {
@@ -172,6 +173,7 @@ export function AskCard(props: {
             if (ans !== null) out.push(ans);
             else unanswered.push(i);
           });
+          if (unanswered.some((i) => event.currentTarget.querySelector(`[data-question="${i}"]`)?.getAttribute("data-status") !== "skipped")) return;
           onRespond({
             method: "ask_user_question",
             outcome: "answered",
@@ -252,6 +254,11 @@ export function AskCard(props: {
                     );
                   })}
                   <QuestionnaireInput
+                    value={customByQ[i] ?? ""}
+                    onInput={(event) => {
+                      const value = event.currentTarget.value;
+                      setCustomByQ((prev) => ({ ...prev, [i]: value }));
+                    }}
                     aria-label={question.input.label}
                     placeholder={question.input.placeholder}
                   />

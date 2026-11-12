@@ -113,7 +113,9 @@ async function setup(initial: HostFrame[], opts: { windowSize?: number; show?: O
   const host = new FakeHost(initial);
   const { show, ...backendOpts } = opts;
   const cpd = { json: vi.fn(async (args: readonly string[]) => (show !== undefined && args.includes("show") ? { session: show } : {}) as Readonly<Record<string, unknown>>) };
+  const fs = { write: vi.fn(async (_path: string, _data: Uint8Array) => {}) };
   const backend = createDurableBackend({
+    fs, cpdHome: "/cpd",
     connect: async (path) => {
       expect(path).toBe("/run/host/s1.sock");
       return host.client();
@@ -126,7 +128,7 @@ async function setup(initial: HostFrame[], opts: { windowSize?: number; show?: O
   const messages: SessionServerMessage[] = [];
   const handle: SessionHandle = await backend.attach(SESSION, (m) => messages.push(m));
   await tick();
-  return { host, cpd, handle, messages };
+  return { host, cpd, fs, handle, messages };
 }
 
 function ofType<T extends SessionServerMessage["type"]>(messages: SessionServerMessage[], type: T) {
@@ -527,8 +529,9 @@ describe("durable backend", () => {
         kind: "cpd-plan-review",
         data: { review: n, status: "pending" },
       });
-      const { cpd, handle } = await setup([viewFrame([reviewEntry(1, "7")])]);
+      const { cpd, fs, handle } = await setup([viewFrame([reviewEntry(1, "7")])]);
       await handle.respond("review:7", { method: "cpd_plan_review", outcome: "changes", feedback: "rename the step" });
+      expect(fs.write).toHaveBeenCalledWith("/cpd/run/plan/feedback-7.md", new TextEncoder().encode("rename the step"));
       expect(cpd.json).toHaveBeenCalledWith([
         "plan",
         "decide",
