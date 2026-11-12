@@ -63,6 +63,7 @@ pub mod store;
 pub mod swr;
 pub mod tag;
 pub mod testsel;
+pub mod upgrade;
 pub mod version_sync;
 pub mod workflow;
 
