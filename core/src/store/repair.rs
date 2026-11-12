@@ -36,7 +36,10 @@ pub struct MigrationRepairRow {
 }
 
 /// Repairs a diverged store at `home`.
-pub fn repair(home: &CpdHome, _options: &RepairOptions) -> Result<RepairResult, CpdError> {
-    let _ = home;
-    panic!("store repair not yet implemented");
+pub fn repair(_home: &CpdHome, _options: &RepairOptions) -> Result<RepairResult, CpdError> {
+    // Skeleton implementation
+    Err(CpdError::new(
+        crate::error::ErrorCode::Internal,
+        "store repair skeleton",
+    ))
 }
