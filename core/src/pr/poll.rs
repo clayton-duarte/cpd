@@ -1806,8 +1806,11 @@ mod due_reads_tests {
     }
 
     #[test]
-    fn null_feedback_with_an_unmoved_updated_at_is_not_due() {
-        assert!(due_reads(&[row("1", None)], &[listed("1", PrState::Open)]).is_empty());
+    fn null_feedback_on_an_owned_open_pr_is_due() {
+        assert_eq!(
+            due_reads(&[row("1", None)], &[listed("1", PrState::Open)]),
+            key()
+        );
     }
 
     #[test]
