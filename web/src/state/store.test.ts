@@ -318,6 +318,19 @@ describe("optimistic merge race", () => {
   const ids = (s: AppState): number[] => (s.cockpit.inbox?.rows ?? []).map((r) => r.id);
   const changed = (n: number): InboxModel["rows"] => [rows[0]!, { ...rows[1]!, label: `l${n}` }];
 
+  it("action_result_ok_keeps_optimistic_hide_until_snapshot_drops_item", () => {
+    const ok = run(loaded(), merge("a1"), server({ type: "action.result", actionId: "a1", ok: true, output: {} }));
+    expect(ids(ok)).toEqual([2]);
+    const stalePatch = run(ok, patch(at(2, changed(2))));
+    expect(ids(stalePatch)).toEqual([2]);
+    const staleSnapshot = run(stalePatch, server({ type: "cockpit.snapshot", tree: tree(3), plan, inbox: at(3, changed(3)) }));
+    expect(ids(staleSnapshot)).toEqual([2]);
+    const fresh = run(staleSnapshot, server({ type: "cockpit.snapshot", tree: tree(4), plan, inbox: at(4, [rows[1]!]) }));
+    expect(ids(fresh)).toEqual([2]);
+    const later = run(fresh, patch(at(5, rows)));
+    expect(ids(later)).toEqual([1, 2]);
+  });
+
   it("patch_keeps_optimistic_merge_row_hidden", () => {
     let s = run(loaded(), merge("a1"));
     for (const n of [2, 3]) {
@@ -416,4 +429,3 @@ describe("archive navigation", () => {
   });
 });
 
-// Regression: action_result_ok_keeps_optimistic_hide_until_snapshot_drops_item.

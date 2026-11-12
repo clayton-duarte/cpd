@@ -112,4 +112,33 @@ it("a remounted app does not re-hide an already dismissed unread row", () => {
   mounted = null;
 });
 
-// Regression: unread_row_hides_and_dismisses_immediately_on_session_selection_before_attach.
+it("unread_row_hides_and_dismisses_immediately_on_session_selection_before_attach", () => {
+  const transport = new FakeTransport();
+  let n = 0;
+  const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => `immediate${++n}`} />);
+  mounted = view;
+  act(() => transport.emitStatus("open"));
+  act(() => transport.emitMessage(snapshot([unread(401, "target", "s1"), unread(402, "other", "s2")])));
+  expect(rowIds(view.container)).toEqual(["401", "402"]);
+  expect(dismissals(transport)).toEqual([]);
+  const row = view.container.querySelector<HTMLElement>('aside[aria-label="Inbox"] [data-kind="unread"][data-id="401"]');
+  expect(row).not.toBeNull();
+  act(() => { row!.click(); });
+  expect(transport.sent).toContainEqual({ type: "session.attach", sessionId: "s1" });
+  // No session.attached message has been delivered.
+  expect(rowIds(view.container)).toEqual(["402"]);
+  expect(dismissals(transport)).toEqual([401]);
+
+  // A fresh mount with no restored selection must not resurrect a dismissed row
+  // while the engine still includes it in its snapshot.
+  view.unmount();
+  mounted = null;
+  window.sessionStorage.clear();
+  const next = new FakeTransport();
+  const remount = mount(<App transport={next} scheduler={new FakeScheduler()} reader={reader} newId={() => `next${++n}`} />);
+  mounted = remount;
+  act(() => next.emitStatus("open"));
+  act(() => next.emitMessage(snapshot([unread(401, "target", "s1"), unread(402, "other", "s2")])));
+  expect(rowIds(remount.container)).toEqual(["402"]);
+  expect(dismissals(next)).toEqual([]);
+});
