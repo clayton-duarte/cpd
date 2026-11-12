@@ -845,6 +845,50 @@ fn repair_preserves_rows_and_allows_install_copy_migration() {
     let res = repair(&h, &options).expect("repair should succeed");
     assert!(res.repaired, "repair must report repaired: true");
 
+    // Verify pre-repair backup file integrity on diverged schema store
+    let backup_path = res
+        .backup_path
+        .as_ref()
+        .expect("repair must create a pre-repair backup");
+    assert!(
+        backup_path.is_file(),
+        "backup file must exist on filesystem"
+    );
+    assert!(
+        backup_path.to_string_lossy().contains("run/backups/"),
+        "backup must be stored under run/backups/<ts>/: {}",
+        backup_path.display()
+    );
+
+    // Verify backup database content is a valid SQLite DB preserving the drifted state
+    let backup_conn = Connection::open(backup_path).unwrap();
+    let backup_jobs_sql: String = backup_conn
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'jobs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        backup_jobs_sql.contains("waiting_on IN ('lead', 'user')"),
+        "pre-repair backup must preserve original diverged jobs schema: {backup_jobs_sql}"
+    );
+    let backup_jobs_count: i64 = backup_conn
+        .query_row("SELECT count(*) FROM jobs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        backup_jobs_count, 2,
+        "pre-repair backup must preserve all jobs rows"
+    );
+    let backup_inc_count: i64 = backup_conn
+        .query_row("SELECT count(*) FROM incident", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        backup_inc_count, 1,
+        "pre-repair backup must preserve incident rows"
+    );
+    drop(backup_conn);
+
     // Staged via stub check so that red test fails cleanly on stub until impl Job
     assert!(
         is_table_reconciliation_supported(),
