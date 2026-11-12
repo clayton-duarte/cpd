@@ -430,6 +430,8 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                     seat.who,
                     &seat.state_label[VERDICT_PREFIX.len()..]
                 )
+            } else if let Some(approval) = seat.state_label.strip_prefix("approval: ") {
+                format!("{} waits for your approval: {}", seat.who, approval)
             } else {
                 format!("{} asks you", seat.who)
             };

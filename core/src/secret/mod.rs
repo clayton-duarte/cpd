@@ -88,6 +88,9 @@ pub enum Command {
     /// Record the User's approval for another vault (adapter) (§24.7)
     #[command(hide = true)]
     Approve(ApproveArgs),
+    /// Check the 1Password session before asking for approval.
+    #[command(hide = true)]
+    Check,
 }
 
 #[derive(Args, Debug)]
@@ -162,6 +165,10 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Delete(a) => operate(Op::Delete, &a.vault, Some(&a.item), None),
         Command::Allow(a) => allow(a),
         Command::Approve(a) => approve(a),
+        Command::Check => {
+            op::check()?;
+            Ok(Output::success(json!({})))
+        }
     }
 }
 
@@ -443,6 +450,7 @@ fn approve(a: ApproveArgs) -> Result<Output, CpdError> {
     let (env, who) = identify()?;
     rules::check(who.role, Action::Approve, a.vault.as_str())
         .map_err(|c| refusal(c, &who, Action::Approve, &a.vault))?;
+    op::check()?;
     let approval = Approval {
         session: who.session.to_string(),
         action: name.to_owned(),

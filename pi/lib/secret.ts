@@ -45,6 +45,7 @@ export function registerSecretTool(host: Host): void {
       if (OPEN.includes(vault)) throw new CpdError("bad_vault", "these vaults need no approval; use cpd secret get|list|create|edit|delete (commands.md §24)");
       const ui = host.ctx?.ui;
       if (!ui) throw new CpdError("no_ui", "the cockpit chat is needed to ask the User; there is no dialog in this session");
+      await host.call(["secret", "check"]);
       const title = `${r.info.name} asks to ${action} in vault ${vault}: item ${item ?? ""}, field ${field ?? ""}. Reason: ${reason}`;
       const choice = await r.facts.ownPrompt(() => ui.select(title, ["Allow once", "Deny"]));
       if (choice !== "Allow once") return { content: [{ type: "text" as const, text: "The User denied it. Do not try again." }], details: {} };
