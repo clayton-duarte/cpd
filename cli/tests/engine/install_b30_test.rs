@@ -84,6 +84,8 @@ mod install_b30_test {
 
             let _ = (*fx.fakes.runner)
                 .clone()
+                .on("pnpm", |_| true, Reply::ok(""))
+                .on("git", |c| c.args.iter().any(|a| a == "diff"), Reply::ok(""))
                 .on(
                     "cpd",
                     at(built.clone(), &["--version"]),
@@ -111,17 +113,7 @@ mod install_b30_test {
                 )
                 .on(
                     "cpd",
-                    at(installed.clone(), &["tui", "--respawn"]),
-                    Reply::ok(r#"{"ok":true,"respawned":[]}"#),
-                )
-                .on(
-                    "cpd",
-                    at(installed.clone(), &["watch", "--mark-restart"]),
-                    Reply::ok(r#"{"ok":true}"#),
-                )
-                .on(
-                    "cpd",
-                    at(installed, &["watch", "--ensure"]),
+                    at(installed, &["watch", "--mark-restart"]),
                     Reply::ok(r#"{"ok":true}"#),
                 )
                 .on("tag-version.sh", at(tag, &[]), Reply::ok(""));
@@ -195,6 +187,15 @@ mod install_b30_test {
     #[test]
     fn install_followup_does_not_call_tui_respawn() {
         let rig = Rig::new();
+        let installed = rig.fx.env.home().join(".local/bin/cpd");
+        let at = |path: PathBuf, args: &'static [&'static str]| {
+            move |c: &Call| Path::new(&c.program) == path && (args.is_empty() || c.args == args)
+        };
+        let _ = (*rig.fx.fakes.runner).clone().on(
+            "cpd",
+            at(installed, &["watch", "--ensure"]),
+            Reply::ok(r#"{"ok":true}"#),
+        );
 
         // Setup cockpit session and main window so follow-up would consider respawning views
         rig.fx.tmux(&["new-session", "-d", "-s", "cpd"]);
@@ -227,28 +228,62 @@ mod install_b30_test {
         rig.fx
             .tmux(&["new-window", "-t", "cpd-work:", "-n", "watch"]);
 
-        // Engine restart runs watch --ensure; simulate ensure completing and holding the lock,
-        // but watch window having no live pane (pane is dead or gone).
-        // Under current code, it only probes lock_free(&lock) == Ok(false) and succeeds without
-        // verifying process liveness in the watch window.
-        // The contract requires:
-        // "cpd watch --ensure answered <out>, and <lock> is held, but the engine's window <work>:watch has no live pane: a process holds the lock outside its window and is not supervised; run cpd watch --ensure"
-        // And the install must fail loud (exit 1).
-
-        // Mark the pane in watch window as dead
-        rig.fx.tmux(&["kill-pane", "-t", "cpd-work:watch"]);
-
-        // Lock file exists and is held (lock_free returns false)
         let lock_file = rig.install.cpd_home.watch_lock();
         fs::create_dir_all(lock_file.parent().unwrap()).unwrap();
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&lock_file)
-            .unwrap();
-        cpd_core::lock::try_lock(&file).unwrap();
+
+        // Simulate watch --ensure acquiring the lock (e.g. by a process outside tmux)
+        let lock_file_for_ensure = lock_file.clone();
+        let holder = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let installed = rig.fx.env.home().join(".local/bin/cpd");
+        struct EnsureHandler {
+            lock: PathBuf,
+            holder: std::sync::Arc<std::sync::Mutex<Option<fs::File>>>,
+        }
+        impl cpd_core::host::runner::Handler for EnsureHandler {
+            fn handle(&self, _call: &Call) -> Reply {
+                let file = fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .read(true)
+                    .write(true)
+                    .open(&self.lock)
+                    .unwrap();
+                cpd_core::lock::try_lock(&file).unwrap();
+                *self.holder.lock().unwrap() = Some(file);
+                Reply::ok(r#"{"ok":true}"#)
+            }
+        }
+        let ensure_handler = std::sync::Arc::new(EnsureHandler {
+            lock: lock_file_for_ensure,
+            holder,
+        });
+
+        // Register a route for cpd that handles watch --ensure by taking the lock
+        let original_routes = (*rig.fx.fakes.runner).clone();
+        let _ = original_routes.route(
+            "cpd",
+            std::sync::Arc::new({
+                struct EnsureRoute {
+                    installed: PathBuf,
+                    ensure: std::sync::Arc<EnsureHandler>,
+                }
+                impl cpd_core::host::runner::Handler for EnsureRoute {
+                    fn handle(&self, call: &Call) -> Reply {
+                        if Path::new(&call.program) == self.installed
+                            && call.args == ["watch", "--ensure"]
+                        {
+                            self.ensure.handle(call)
+                        } else {
+                            Reply::ok(r#"{"ok":true}"#)
+                        }
+                    }
+                }
+                EnsureRoute {
+                    installed,
+                    ensure: ensure_handler,
+                }
+            }),
+        );
 
         let (exit, stderr) = rig.run();
 

@@ -139,6 +139,9 @@ impl Handler for Tmux {
             .and_then(|i| args.get(i + 1))
             .and_then(|t| t.strip_prefix('='))
             .unwrap_or("");
+        if args.contains(&"list-panes") {
+            return Reply::ok("0\n");
+        }
         if args.contains(&"list-windows") {
             let names: Vec<String> = self
                 .windows
@@ -524,12 +527,7 @@ fn lines_with<'a>(log: &'a [String], word: &str) -> Vec<&'a String> {
     log.iter().filter(|l| l.contains(word)).collect()
 }
 
-const ALL_FOUR: [&str; 4] = [
-    "watch --check",
-    "tui --respawn",
-    "watch --mark-restart",
-    "watch --ensure",
-];
+const ALL_FOUR: [&str; 3] = ["watch --check", "watch --mark-restart", "watch --ensure"];
 
 #[test]
 fn a_failing_config_is_printed_and_makes_the_script_exit_non_zero() {
@@ -560,7 +558,7 @@ fn a_failing_config_is_printed_and_makes_the_script_exit_non_zero() {
 #[test]
 fn a_failing_follow_up_is_printed_and_the_later_ones_still_run() {
     let rig = Rig::with(Script {
-        respawn: Reply::exit(3, "", "no cockpit"),
+        mark: Reply::exit(3, MARK_FAILS, "no engine"),
         ..Script::default()
     });
     rig.cockpit_and_work_windows();
@@ -570,7 +568,7 @@ fn a_failing_follow_up_is_printed_and_the_later_ones_still_run() {
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(
         run.stderr
-            .contains("cpd install follow-up failed: cpd tui --respawn exited 3"),
+            .contains("cpd install follow-up failed: cpd watch --mark-restart: "),
         "{}",
         run.stderr
     );
@@ -638,10 +636,7 @@ fn an_old_engine_that_never_frees_its_lock_fails_the_install_with_the_reason() {
         "{}",
         run.stderr
     );
-    assert_eq!(
-        rig.follow_ups(),
-        ["watch --check", "tui --respawn", "watch --mark-restart"]
-    );
+    assert_eq!(rig.follow_ups(), ["watch --check", "watch --mark-restart"]);
 }
 
 #[test]
@@ -892,13 +887,12 @@ fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_a
     };
     let steps = [
         at("cpd watch --check"),
-        at("cpd tui --respawn"),
         at("kill-window"),
         at("cpd watch --ensure"),
     ];
     assert!(
         steps.windows(2).all(|w| w[0] < w[1]),
-        "the order is --check, --respawn, kill-window, --ensure: {steps:?} in {log:?}"
+        "the order is --check, kill-window, --ensure: {steps:?} in {log:?}"
     );
     assert!(
         !rig.work_windows().iter().any(|w| w == "watch"),

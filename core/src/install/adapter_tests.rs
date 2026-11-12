@@ -838,6 +838,10 @@ fn the_installer_goes_on_to_the_views_and_the_engine_after_migrating_without_ren
             |a| a.iter().any(|x| x == "list-windows") && a.iter().any(|x| x.contains("work")),
             Reply::ok("watch\n"),
         )
+        .script(
+            |a| a.iter().any(|x| x == "list-panes") && a.iter().any(|x| x.contains("watch")),
+            Reply::ok("0\n"),
+        )
         .script(|a| a.iter().any(|x| x == "kill-window"), Reply::ok(""));
     let engine = Arc::new(NewCpd {
         lock: rig.install.cpd_home.watch_lock(),
@@ -860,13 +864,8 @@ fn the_installer_goes_on_to_the_views_and_the_engine_after_migrating_without_ren
     rig.linked_version();
     assert_eq!(
         follow_ups(&rig),
-        [
-            "watch --check",
-            "tui --respawn",
-            "watch --mark-restart",
-            "watch --ensure"
-        ],
-        "the views are respawned and the engine restarted: {}",
+        ["watch --check", "watch --mark-restart", "watch --ensure"],
+        "the engine is restarted: {}",
         run.stderr
     );
     assert!(lock_held(&rig), "the new engine holds the lock");

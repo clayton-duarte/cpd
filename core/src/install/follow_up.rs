@@ -74,11 +74,10 @@ pub(super) fn describe(text: &str) -> String {
     }
 }
 
-/// The tmux part of `cpd config`: the socket and the two sessions; an answer that has none leaves them empty.
+/// The tmux part of `cpd config`: the socket and the work session; an answer that has none leaves them empty.
 #[derive(Default)]
 struct TmuxConf {
     socket: String,
-    cockpit: String,
     work: String,
 }
 
@@ -96,7 +95,6 @@ fn tmux_conf(config: &str) -> TmuxConf {
     };
     TmuxConf {
         socket: field("socket"),
-        cockpit: field("cockpit_session"),
         work: field("work_session"),
     }
 }
@@ -144,6 +142,12 @@ impl FollowUps<'_> {
         listed.ok() && listed.stdout.lines().any(|l| l == window)
     }
 
+    fn has_live_pane(&self, socket: &str, session: &str, window: &str) -> bool {
+        let target = format!("={session}:{window}");
+        let out = self.tmux(socket, &["list-panes", "-t", &target, "-F", "#{pane_dead}"]);
+        out.ok() && out.stdout.lines().any(|l| l.trim() == "0")
+    }
+
     /// Whether nobody holds the lock on `path` (the lock cpd takes, `crate::lock`).
     fn lock_free(path: &Path) -> io::Result<bool> {
         let file = OpenOptions::new()
@@ -171,22 +175,6 @@ impl FollowUps<'_> {
                 checked.stderr
             ));
             return;
-        }
-        if !conf.socket.is_empty()
-            && !conf.cockpit.is_empty()
-            && self.has_window(&conf.socket, &conf.cockpit, "main")
-        {
-            let out = self.cpd(&["tui", "--respawn"]);
-            if out.ok() {
-                let _ = writeln!(self.err, "{}", out.stdout);
-            } else {
-                self.fail(format!(
-                    "cpd tui --respawn exited {}: {} {}; the views still run the old binary",
-                    out.code,
-                    describe(&out.stdout),
-                    out.stderr
-                ));
-            }
         }
         if !conf.socket.is_empty()
             && !conf.work.is_empty()
@@ -269,6 +257,15 @@ impl FollowUps<'_> {
                 lock.display()
             )),
             Ok(false) => {
+                if !self.has_live_pane(&conf.socket, &conf.work, "watch") {
+                    self.fail(format!(
+                        "cpd watch --ensure answered {}, and {} is held, but the engine's window {}:watch has no live pane: a process holds the lock outside its window and is not supervised; run cpd watch --ensure",
+                        ensured.stdout,
+                        lock.display(),
+                        conf.work
+                    ));
+                    return;
+                }
                 let _ = writeln!(self.err, "{}", ensured.stdout);
             }
             Err(e) => self.fail(format!("cannot probe {}: {e}", lock.display())),

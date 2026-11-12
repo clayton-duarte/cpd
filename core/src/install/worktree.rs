@@ -109,32 +109,34 @@ fn sync_existing_worktree(ports: &Ports, preview_worktree: &std::path::Path, err
     );
 
     // Step 3: Re-apply patch with 3-way merge
-    let apply_out = run_with(
-        &*ports.runner,
-        preview_worktree,
-        &[
-            "apply",
-            "-3",
-            patch_file.to_str().unwrap_or(".cpd-preview-wip.patch"),
-        ],
-    );
-    let conflict = match apply_out {
-        Ok(out) if out.code != 0 => true,
-        Err(_) => true,
-        _ => false,
-    };
-
-    if conflict {
-        let _ = writeln!(
-            err,
-            "cpd install: preview sync conflict while re-applying patch; patch preserved at {}",
-            patch_file.display()
+    if !patch_content.is_empty() {
+        let apply_out = run_with(
+            &*ports.runner,
+            preview_worktree,
+            &[
+                "apply",
+                "-3",
+                patch_file.to_str().unwrap_or(".cpd-preview-wip.patch"),
+            ],
         );
-        return;
-    }
+        let conflict = match apply_out {
+            Ok(out) if out.code != 0 => true,
+            Err(_) => true,
+            _ => false,
+        };
 
-    // If applied cleanly, remove the temporary patch file.
-    let _ = fs::remove_file(&patch_file);
+        if conflict {
+            let _ = writeln!(
+                err,
+                "cpd install: preview sync conflict while re-applying patch; patch preserved at {}",
+                patch_file.display()
+            );
+            return;
+        }
+
+        // If applied cleanly, remove the temporary patch file.
+        let _ = fs::remove_file(&patch_file);
+    }
 
     // Step 4: Run pnpm install in the preview worktree
     if let Err(e) = app::pnpm(ports, preview_worktree, &["install"]) {
