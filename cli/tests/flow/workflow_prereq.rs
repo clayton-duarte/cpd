@@ -5,7 +5,6 @@ use crate::common;
 use common::fx::Fx;
 use common::refused;
 use cpd_core::home::CpdHome;
-use serde_json::json;
 
 const REF: &str = "acme/api#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -24,8 +23,8 @@ fn fixture() -> Fx {
                                     merge_state, authored, base_ref, default_branch, head_oid)
            VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add the thing', 0, 'open', 'approved', 'passed', 't', 't',
                    'clean', 1, 'main', 'main', '{SHA}');
-         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, pr_number, pr_url, pr_opened_at, created_txn, created_at)
-           VALUES ('p1', 'api', '/r/api', 'main', 'open', 'cpd/p1/api', 7, 'https://github.com/acme/api/pull/7', 't', cpd_txn(), 't');
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at)
+           VALUES ('p1', 'api', '/r/api', 'main', 'open', 'cpd/p1/api', '/w/api', 't', 7, 'https://github.com/acme/api/pull/7', 't', 1, cpd_txn(), 't');
          INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
                                 rebase_merge_allowed, delete_branch_on_merge, fetched_at)
            VALUES ('acme/api', 'main', 0, 1, 1, 0, 0, 1, 't');"
@@ -37,11 +36,17 @@ fn fixture() -> Fx {
 fn prereq_add_and_confirm_workflow_prereq() {
     let fx = fixture();
     let out = fx.cpd(&[
-        "workflow", "prereq", "add",
-        "--workflow", "api",
-        "--kind", "manual",
-        "--text", "Run db migration",
-        "--plan", "p1",
+        "workflow",
+        "prereq",
+        "add",
+        "--workflow",
+        "api",
+        "--kind",
+        "manual",
+        "--text",
+        "Run db migration",
+        "--plan",
+        "p1",
     ]);
     let ok = out.ok();
     assert_eq!(ok["prereq"]["kind"], "manual");

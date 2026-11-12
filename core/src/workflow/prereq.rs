@@ -57,8 +57,8 @@ pub struct ConfirmPrereqArgs {
 pub fn run(command: PrereqCommand) -> Result<Output, CpdError> {
     match command {
         PrereqCommand::Add(_) => Err(CpdError::bad_row("workflow prereq add not yet implemented")),
-        PrereqCommand::Confirm(_) => {
-            Err(CpdError::bad_row("workflow prereq confirm not yet implemented"))
-        }
+        PrereqCommand::Confirm(_) => Err(CpdError::bad_row(
+            "workflow prereq confirm not yet implemented",
+        )),
     }
 }
