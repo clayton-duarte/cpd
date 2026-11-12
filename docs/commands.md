@@ -61,13 +61,14 @@ A command is **internal** when cpd runs it by itself and neither an agent nor th
 
 ### 1.2 Output and exit codes
 
-Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Four kinds of command print something other than one JSON value and are the only exceptions (amendment 10, §19):
+Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Five kinds of command print something other than one JSON value and are the only exceptions (amendment 10, §19):
 
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | a streaming command (§1.2) |
 | `cpd session tail` (§10.19) | one line per completed transcript message, the grammar of contract §6.20 (§10.19) | a read-only tail of a durable Session's host socket: it streams live frames as they complete, as the socket tail of Q33 is |
 | `cpd gate finish` (§26) | the run's report on stderr and its exit status | it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
+| `cpd serve` (§12a) | log lines on stderr and in `watch.log`; no JSON value | a long-running server, as `cpd events follow` is |
 | `cpd session run` (internal) | it runs pi in its pane | it is the program inside a Session's pane (§6.2), not a command an agent calls. If it fails before taking the terminal, it prints the failure envelope and exits with its code |
 
 `cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.22.45-070ddee", "protocol": 22, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. The `version` field is `<semantic version>-<commit>` where the semantic version is `0.<protocol>.<migrations>`: the commit is the short hash the build was given in `CPD_COMMIT` (set by `scripts/install-cpd.sh` and the Gate, so an installed binary reports the commit it was built from), capped at 7 characters: a longer hash is truncated to its first 7, so the commit suffix is at most 7 characters, e.g. `070ddee`; and `dev` when the build was given none, e.g. `0.19.45-dev` (docs/implementing.md "The version string"; docs/versioning.md). `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **23** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278, 4 until `session-titled`, hs-d257, 5 until `workflow-base-changed`, hs-d324, 6 until `session state waiting`, hs-d303, 7 until `review-opened`/`review-closed`, hs-d496, 8 until `session-retiered`, hs-d506, 9 until `plan-outlined`, hs-d502, 10 until `job-merged`'s `data.turn` and `session-message`'s `data.unblocks`, hs-d514, 11 until `session-resumed`, hs-d552, 12 until `session report`, hs-d573, 13 until `incident-started` and `incident-ended`, hs-d634, 14 until `mcp-attached`, pro-d8, 15 until the adapter runs `session switch-failed` and `session switched` and the `error` Event carries the reporting Session, 16 until `workflow-described`, pro-d94, 17 until `session-model-changed`: the tier-preset switch, the adapter acts on it at the Session's next idle, §14.6, 18 until `context pending`'s plan-level `jobs` field (Plan `explore-view`): the adapter's Manager `Pending work:` digest reads it, §15.7, 21 until the agent key on every display surface: `session show` and `session list` carry `key` and `board take` and `board list` carry `from_name`, both read by the adapter, which also restores a fixed name and handles `key_fixed`, §10.1, §10a, §15.4), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7) and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false` and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
@@ -288,6 +289,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd pr repost` (§9.8b2) | none | yes | no |
 | `cpd session switch-failed` (§10.18a, internal) | none | no | yes |
 | `cpd session switched` (§10.18b, internal) | none | no | yes |
+| `cpd serve` (§12a) | none | no | no |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
 | `cpd resource list` (§30) | Manager, Lead, Worker | no | no |
@@ -4247,6 +4249,43 @@ Idempotent: a second one rewrites the same marker with a new `at`. The next engi
 The engine it starts says how long it was down to each Manager (contract §3.7).
 
 **`--restart-tmux` (internal; hs-d294).** Started by the engine, detached, when a restart of the tmux server is pending and nothing is in the way (contract §3.7, §6.1; §13.3); it is not an interface of the User or an agent. It restarts the server onto the installed tmux as §13.3 describes and exits 0, also when it did nothing (the server needs no restart, it is not safe now, another run holds `locks/tmux-restart.lock`). It prints one JSON value, `{"ok": true, "outcome": "…"}` and logs to stderr, which the engine appends to `run/tmux-restart.log`. A failed restart exits with its failure and keeps the reason in `run/tmux-restart.pending`.
+
+## 12a. `serve`
+
+```
+cpd serve
+```
+
+The production server of a host: the engine (§12, contract §3.7) and the WebUI on `0.0.0.0:3333`, in one process. Its design, and the UI-only preview on 33333, are `docs/architecture/serve.md`; its runtime and port invariants are contract §3.7b. The User's command, or the host's supervisor's (`docs/architecture/serve.md` §6, open point 1). No agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2).
+
+Status: decided by pro-d566, pro-d567, pro-d570, pro-d541 and pro-d542. As of this amendment the binary has no `serve` command: the engine runs as `cpd watch`, and the WebUI is a child Node process (`serve.md` §3). The implementing change adds the command with these values.
+
+**Arguments.** None. Any argument is `usage` (exit 2). There are no flags: the ports are fixed (3333 and 33333), and the store, the home and the checkout are those of the host's cpd (`$CPD_HOME`, default `~/.cpd`).
+
+**Start, in this order.** A failure at a step exits with that step's code, and no later step runs:
+
+1. **Lock.** `locks/watch.lock` is taken exclusively, as `cpd watch` takes it (§12). When it is held, the command refuses with `watch_running` (exit 3) and changes nothing.
+2. **Port.** It binds `0.0.0.0:3333`. When the port is held, it exits 1 with `port_in_use` (new code, added to §1.3 by the implementing change) and the message `Port 3333 is in use by <process> (PID <pid>). Exiting.`, or `Port 3333 is in use by an unknown process. Exiting.` when neither `lsof` nor `ss` names the holder (`docs/architecture/webui-supervision.md`, "Port checking"). It never tries another port.
+3. **Store.** It opens the store as `cpd watch` does (§4.5 verdicts, §12): the refusals of that section apply with their codes and exits, and a live store is never migrated here.
+4. **Ticks.** It runs the engine's tick loop (contract §3.7) until it is stopped.
+
+**Running.** The process serves `/cpd-ws` on the same port and origin for the WebUI (contract §5.8; `web/CONTRACT.md` §15.1 for the Origin rule, which applies unchanged). Its log is the engine's log, `watch.log` (contract §3.7), and its stderr. It writes no JSON value on stdout: a long-running server, like `cpd events follow` (§1.2). The engine's `watch-started` Event `{pid}` is appended at start, and `watch-stopped` `{pid}` at a clean stop (§12, Effects).
+
+**Stop.** `SIGTERM` or `SIGINT` ends it: the port is closed, open WebSocket connections are closed, the lock is released, and it exits 0. A process that exits 0 after `SIGTERM` is not a crash for the restart bound (`docs/architecture/serve.md` §4).
+
+**Crash.** Any other exit is a crash. A supervisor restarts the process at most 3 times in any 10-minute window; the fourth crash in that window latches it stopped and raises the `error` Event `webui_crash_loop`. A restart after a payload install is not a crash (`docs/architecture/webui-supervision.md`).
+
+| Exit | When | Codes |
+|---|---|---|
+| `0` | stopped by `SIGTERM` or `SIGINT` | |
+| `1` | the port is held; a store or config failure | `port_in_use`, `config_invalid`, `store_failed`, `migration_changed`, `migration_order`, `internal` |
+| `2` | an argument was given | `usage` |
+| `3` | the engine lock is held by another engine | `watch_running` |
+| `5` | the store was busy or a lock timed out | `store_busy`, `lock_timeout` |
+
+**Effects:** binds the port, takes `locks/watch.lock`, writes the engine's files under `$CPD_HOME` as `cpd watch` does (Events, the log, `run/`), and nothing else. It starts no preview: the preview is `scripts/preview-web.sh` (`docs/ui-preview.md`), a process with no cpd binary (`serve.md` §5).
+
+**Idempotence:** a second `cpd serve` while one runs is refused with `watch_running` (exit 3, above) and leaves the running one alone. After it exits, running it again is safe.
 
 ## 13. `tui`
 
