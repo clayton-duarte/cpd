@@ -163,25 +163,34 @@ fn repair(args: RepairArgs) -> Result<Output, CpdError> {
         }
     };
 
-    // Store reconciliation: check for diverged migrations
+    // Store reconciliation: check for diverged migrations and table schema drift
     let mut store_repaired = false;
     let mut store_backup_path: Option<PathBuf> = None;
     if env.home.db().exists() {
         let conn = rusqlite::Connection::open(env.home.db()).map_err(CpdError::from)?;
         let divergences = crate::store::repair::detect_divergences(&conn)?;
+        let drifted = crate::store::repair::detect_table_drift(&conn)?;
         drop(conn);
 
-        if !divergences.is_empty() {
+        if !divergences.is_empty() || !drifted.is_empty() {
             // Interactive confirmation if not -y/--yes
             let confirmed = if args.yes {
                 true
             } else {
-                eprintln!("Detected diverged store migration(s):");
-                for d in &divergences {
-                    eprintln!(
-                        "  - {}: recorded={}, embedded={}",
-                        d.name, d.recorded_checksum, d.accepted_checksum
-                    );
+                if !divergences.is_empty() {
+                    eprintln!("Detected diverged store migration(s):");
+                    for d in &divergences {
+                        eprintln!(
+                            "  - {}: recorded={}, embedded={}",
+                            d.name, d.recorded_checksum, d.accepted_checksum
+                        );
+                    }
+                }
+                if !drifted.is_empty() {
+                    eprintln!("Detected drifted table schema(s):");
+                    for t in &drifted {
+                        eprintln!("  - {t}");
+                    }
                 }
                 eprint!("Apply store repair? [y/N]: ");
                 use std::io::Write;
