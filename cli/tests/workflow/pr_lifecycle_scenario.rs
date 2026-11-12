@@ -13,45 +13,49 @@
 
 #[test]
 fn t1_open_ci_fails() {
-    panic!("red test: not yet implemented");
+    panic!("red test: reproduces CI failure rollup persistence and status invariants (T1)");
 }
 
 #[test]
 fn t2_lead_woken_on_failing_check() {
-    panic!("red test: not yet implemented");
+    panic!("red test: reproduces Lead waking on failing check (T2)");
 }
 
 #[test]
 fn t3_push_ci_green() {
-    panic!("red test: not yet implemented");
+    panic!("red test: reproduces push, CI green transition and readiness check (T3)");
 }
 
 #[test]
 fn t4_bot_review_comments_wake_lead() {
-    panic!("red test: not yet implemented");
+    panic!(
+        "red test: reproduces b31/b33 where SWR pass drops comments and does not wake Lead (T4)"
+    );
 }
 
 #[test]
 fn t5_replies_clear_comments() {
-    panic!("red test: not yet implemented");
+    panic!("red test: reproduces replies clearing comment items and unready checks (T5)");
 }
 
 #[test]
 fn t6_conflict_with_main_queues_update() {
-    panic!("red test: not yet implemented");
+    panic!(
+        "red test: reproduces b34 / pro-d554 conflict update queueing and behind-base invariants (T6)"
+    );
 }
 
 #[test]
 fn t7_ready_raises_one_inbox_item() {
-    panic!("red test: not yet implemented");
+    panic!("red test: reproduces b32 where ready PR stays waiting with CommentsUnread (T7)");
 }
 
 #[test]
 fn t8_peer_review_requested_and_approved() {
-    panic!("red test: not yet implemented");
+    panic!("red test: reproduces peer review approval transition to ready to merge (T8)");
 }
 
 #[test]
 fn t9_merged_closes_workflow() {
-    panic!("red test: not yet implemented");
+    panic!("red test: reproduces MERGED closing pr-ready item and Workflow (T9)");
 }
