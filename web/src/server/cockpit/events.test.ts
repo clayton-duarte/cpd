@@ -436,6 +436,7 @@ describe("cockpit service stale pane updates", () => {
     await flush();
     expect(service.snapshot().inbox?.cursor).toBe(10);
     expect(updates.filter((u) => u.kind === "pane" && u.pane === "inbox")).toEqual([]);
+    expect(updates.filter((u) => u.kind === "error")).toEqual([]);
     service.stop();
   });
 
@@ -456,6 +457,7 @@ describe("cockpit service stale pane updates", () => {
     await service.selectPlan("p1");
     expect(service.snapshot().plan?.cursor).toBe(10);
     expect(updates.filter((u) => u.kind === "pane" && u.pane === "plan")).toEqual([]);
+    expect(updates.filter((u) => u.kind === "error")).toEqual([]);
     service.stop();
   });
 });
