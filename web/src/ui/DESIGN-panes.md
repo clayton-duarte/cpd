@@ -59,7 +59,7 @@ section[aria-label="Plan {planId}"][data-phase="{plan.phase}"]            KEPT l
     └─ div[data-part="plan-body"]   flex flex-col gap-2.5 px-4 py-2.5; hidden when the Plan pane is collapsed (DESIGN 3i)
         ├─ section[aria-label="Explore jobs"][data-part="explore"]    only when explore jobs exist (job.workflow === null)   KEPT label   (1d)
         ├─ div[data-part="wf-legend"]   only when a Workflow dependency edge is drawn (1e(iv)); "Stacked (base)" solid, "Depends on (needs)" dashed
-        └─ div[data-part="wf-canvas"]   relative flex flex-col gap-2.5 (1e(iv)); holds the Workflow cards and the dependency overlay
+        └─ div[data-part="wf-canvas"]   relative flex flex-col gap-2.5 (1e(iv)); holds the Workflow cards (left-padded by the gutter `G`, 1e(iv) 6) and the dependency overlay
             ├─ svg[data-part="wf-edges"][aria-hidden="true"]   only when an edge is drawn (1e(iv))
             └─ section[data-workflow="{wf.key}"][aria-label="Workflow {wf.key}"]  ×N, in topological order (1e(iv))   KEPT hooks   (1e to 1g)
         ├─ section[data-part="review-pr"][aria-label="Review PR"]   only when plan.reviewedPr !== null and plan.workflows is empty (1i)
@@ -207,16 +207,23 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 1. **Edges.** Two kinds, from the upstream Workflow `u` to the dependant Workflow `d`:
    - `base`: `u` is the card whose `<planId>/<key>` equals `d.base_workflow`. Only when `d.base_workflow !== null`.
    - `needs`: one for each key `k` in `d.needs`; `u` is the card with key `k`.
-   An upstream that is not a card of this Plan draws no edge and is not an error (CONTRACT §28.4). A Workflow with both a base and a needs edge to the same upstream gets both paths, which overlap.
+   An upstream that is not a card of this Plan draws no edge and is not an error (CONTRACT §28.4). A Workflow with both a base and a needs edge to the same upstream gets two lanes and two attachment points (3, 6), so the two paths do not overlap.
 
 2. **Order (topological).** The cards render in the order `topoOrder(plan.workflows, edges)`: at each step, emit the earliest card in `plan.workflows` order whose upstream cards are all emitted. Upstream therefore precedes dependant, and cards with no edge between them keep their `plan.workflows` order (stable). With no edges the order is `plan.workflows`, as today. If no card is ready while cards remain, the Plan has a cycle: it **throws** `plan {planId} has a workflow dependency cycle at {key}`, where `{key}` is the first remaining card in `plan.workflows` order (the rule of (ii) 2). The order is the DOM order of the `section[data-workflow]` cards.
 
-3. **Geometry.** The cards sit in `div[data-part="wf-canvas"]`: `relative flex flex-col gap-2.5`. The gap is the `plan-body` gap, so spacing between cards is as today. Each card's box is measured relative to this wrapper, after layout, and re-measured when the wrapper or a card resizes (`ResizeObserver`, disconnected on unmount). For an edge `u` → `d`, with `x1` = centre x of `u`, `y1` = bottom of `u`, `x2` = centre x of `d`, `y2` = top of `d`, `ym = (y1 + y2) / 2`:
-   - `path[data-wf-edge="{u.key}>{d.key}"][data-edge-kind="base|needs"]`, `fill="none"`, `stroke-width="1.5"`, class `stroke-line`, `d = M{x1} {y1}C{x1} {ym} {x2} {ym} {x2} {y2}`. `base`: solid, no dash. `needs`: `stroke-dasharray="3 3"`.
-   - `path[data-part="wf-arrowhead"]`, one per edge, solid for both kinds, `stroke-width="1.5"`, class `stroke-line`, `d = M{x2−4} {y2−6}L{x2} {y2}L{x2+4} {y2−6}` (pointing down, into the dependant).
-   - Since the order is topological and the cards form one column, `y2 > y1` always.
-   - Overlay `svg[data-part="wf-edges"][aria-hidden="true"]`: `absolute left-0 top-0 pointer-events-none`, `width`/`height` = the wrapper's size, `fill="none"`, first child of the wrapper so the cards paint above it. Rendered only when at least one edge is drawn.
+3. **Geometry.** The cards sit in `div[data-part="wf-canvas"]`: `relative flex flex-col gap-2.5`, with `paddingLeft = G`, the left gutter of item 6 (`G = 0` when no edge is drawn). The gap is the `plan-body` gap, so spacing between cards is as today. Each card's box is measured relative to this wrapper, after layout, and re-measured when the wrapper or a card resizes (`ResizeObserver`, disconnected on unmount). Every card's measured `left` is `G`.
+
+   Edges are drawn only in the gutter to the left of the cards (Bug b46). Edge `e` from `u` to `d` has a lane `λ(e)` (item 6) and two attachment points, one on the left edge of `u` and one on the left edge of `d`:
+   - **Attachment points.** A card with `n` attachment points (its outgoing and incoming edges together) places the `k`-th one (`k = 1..n`) at `y = top + k·h/(n+1)`, where `top` and `h` are the card's measured top and height; a single attachment sits at the vertical centre. The points of a card are ordered by the topological index (item 2) of the other end of their edge, ascending, ties by the edge order of `computeWorkflowEdges`, so arrows from upstream attach above arrows to downstream. An attachment point's `x` is `G`, the card's left edge.
+   - `ys` = the source attachment `y`, `yt` = the target attachment `y`. Upstream precedes dependant, so `ys < yt`.
+   - `xL = G` (the card's left edge), `lx = G − (λ(e)+1)·10` (the lane's track, item 6).
+   - `path[data-wf-edge="{u.key}>{d.key}"][data-edge-kind="base|needs"][data-lane="{λ(e)}"]`, `fill="none"`, `stroke-width="1.5"`, class `stroke-line`, `d = M{xL} {ys}H{lx}V{yt}H{xL}`. It leaves the source's left edge horizontally, runs down its lane past any card between `u` and `d`, and enters the target's left edge horizontally. `base`: solid, no dash. `needs`: `stroke-dasharray="3 3"`.
+   - `path[data-part="wf-arrowhead"]`, one per edge, solid for both kinds, `stroke-width="1.5"`, class `stroke-line`, `d = M{xL−6} {yt−4}L{xL} {yt}L{xL−6} {yt+4}`, pointing right into the dependant's left edge. No arrowhead at the source.
+   - The lane's vertical run is at `lx ≤ G − 10`, so it never touches a card. Only the two horizontal stubs touch a card, each at its own attachment point.
+   - Overlay `svg[data-part="wf-edges"][aria-hidden="true"]`: `absolute left-0 top-0 pointer-events-none`, `width`/`height` = the wrapper's size, `fill="none"`, first child of the wrapper. Rendered only when at least one edge is drawn.
    - Edges carry no status: the kind alone sets the style. They are not clickable and have no labels.
+
+   **Superseded by Bug b46 (kept as the pro-d100 record; do not implement).** The vertical curve `d = M{x1} {y1}C{x1} {ym} {x2} {ym} {x2} {y2}` from the bottom-centre of `u` (`x1`, `y1`) to the top-centre of `d` (`x2`, `y2`), `ym = (y1+y2)/2`, with the arrowhead `M{x2−4} {y2−6}L{x2} {y2}L{x2+4} {y2−6}` pointing down. It ran through the middle of the cards between its ends, which is the defect b46 fixes.
 
 4. **Legend.** `div[data-part="wf-legend"]`: `flex items-center gap-3 font-mono text-meta text-muted-foreground`, a sibling immediately before `div[data-part="wf-canvas"]` (after the explore strip), rendered only when at least one edge is drawn. Two items, in this order:
    - a solid sample, `svg` 24×8 (`aria-hidden="true"`) with `path d="M1 4H23"` and the arrowhead `M19 1L23 4 19 7`, then the text `Stacked (base)`;
@@ -225,7 +232,15 @@ Node look by status (`jobDisplay(...).tone` and status), exact:
 
 5. **Plans without Workflow dependencies.** No overlay, no legend, cards in `plan.workflows` order. The `wf-canvas` wrapper still renders, with the same gap, so the layout is as today.
 
-6. **Left-gutter routing (Bug b46).** TODO skeleton: to be specified.
+6. **Left-gutter routing and lane allocation (Bug b46).** Every drawn edge is routed through a left gutter, on its own lane, so that no arrow crosses a card's interior. Pure function `allocateLanes(order, edges)` in `plan/layout.ts`, next to `computeWorkflowEdges`, returns the lane of each edge (in edge order) and the lane count `L`. Constants: lane pitch 10 px, arrowhead 6 px deep and 4 px half-height.
+   - **Span.** For edge `e` from `u` to `d`, `span(e) = [i_u, i_d]`, the topological indices (item 2) of its two cards; `i_u < i_d`. Spans use card indices, not pixels, so the allocation depends only on the order and the edges, not on measurement.
+   - **Conflict.** Two edges conflict when their closed spans intersect. Sharing a card counts: an arrow arriving at a card and one leaving it never share a track.
+   - **Allocation (interval colouring, first fit).** Sort the edges by `(i_u, i_d)` ascending, ties by the edge order of `computeWorkflowEdges`. For each edge in that order, `λ(e)` is the lowest lane `j ≥ 0` that holds no already-placed conflicting edge. Lane 0 is nearest the cards. Consequence: two edges that touch or pass the same card never share a lane.
+   - **Gutter width.** `G = (L + 1)·10` px when `L > 0`, else `G = 0`. Lane `j` has track `x = G − (j+1)·10`: lane 0 is 10 px left of the cards and the outermost lane is 10 px from the wrapper's left edge. `G` comes from the edge list alone, so the cards' offset is known on the first render, before measurement.
+   - **Example.** Edges A→B, B→C and A→C (indices 0→1, 1→2, 0→2). Sorted: A→B `[0,1]` gets lane 0; A→C `[0,2]` conflicts with A→B, so lane 1; B→C `[1,2]` conflicts with A→B (card 1) and A→C, so lane 2. `L = 3`, `G = 40`; lanes at x = 30, 20, 10.
+   - **Guarantees.** No two vertical runs share a track. No vertical run touches a card. Each card has its own attachment points (item 3), so no two horizontal stubs overlap. A card between `u` and `d` is passed in the gutter.
+   - **Accepted limit.** Two arrows whose spans interleave (e.g. `[1,3]` and `[2,4]`) cross once in the gutter: one stub crosses the other's vertical run. Routing with one lane per edge cannot avoid this without reordering cards, which the order rule (item 2) does not allow. Inferred from the geometry; not rendered.
+   - **Intra-Workflow Job arrows** (1e(ii)) are unchanged and stay inside their card.
 
 ### 1f. PR link and Post PR
 
