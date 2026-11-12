@@ -1,9 +1,9 @@
 //! Stubs and types for cpd upgrade (docs/architecture/upgrade.md, docs/commands.md §14.4c).
 
-use std::path::PathBuf;
 use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::ports::Ports;
+use std::path::PathBuf;
 
 /// Configuration for `cpd upgrade`.
 #[derive(Debug, Clone)]
@@ -25,5 +25,7 @@ pub struct UpgradeOutcome {
 
 /// Run `cpd upgrade` against the given ports and configuration.
 pub fn run_upgrade(_ports: &Ports, _config: &UpgradeConfig) -> Result<UpgradeOutcome, CpdError> {
-    todo!("implement cpd upgrade: fetch CI-green commit, isolated build, migration dry run, backup, swap, health check, rollback")
+    todo!(
+        "implement cpd upgrade: fetch CI-green commit, isolated build, migration dry run, backup, swap, health check, rollback"
+    )
 }
