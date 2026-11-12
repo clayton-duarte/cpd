@@ -44,6 +44,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 30. [`resource`](#30-resource)
 32. [`swr`](#32-swr)
 33. [`protocol`](#33-protocol)
+34. [The refactor protocol](#34-the-refactor-protocol)
 
 ## 1. Conventions
 
@@ -8431,3 +8432,7 @@ One bug record, every field (contract §2.2 "Bug record"), so **mitigation appli
 **Output:** the `bug` object of §33.1.
 
 **Idempotent:** a read.
+
+## 34. The refactor protocol
+
+Status: skeleton, to be completed in this Attempt.
