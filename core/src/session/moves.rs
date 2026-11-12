@@ -716,8 +716,10 @@ pub(crate) fn start_parked(
     let window_name = parked_window(row);
     let created = if tmux.has_session(&cockpit)? {
         None
-    } else {
+    } else if command == "session send" {
         tmux.create_session(&cockpit, &window_name, &spawn)?
+    } else {
+        return Ok(None);
     };
     let (window, pane) = match created {
         Some(ids) => ids,

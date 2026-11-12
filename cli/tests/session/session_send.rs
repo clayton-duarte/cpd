@@ -803,29 +803,6 @@ fn send_to_stopped_pi_session_without_cockpit_starts_pane() {
 }
 
 #[test]
-fn engine_liveness_restart_works_when_cockpit_session_is_missing() {
-    let fx = Fx::with_ports();
-    setup(&fx.env);
-    // lead2 is stopped with a recorded pane that vanished (the OS shutdown recovery scenario).
-    fx.env
-        .sql("UPDATE sessions SET state = 'stopped', tmux_pane = '%99' WHERE id = 'lead2'");
-    fx.engine_tick();
-    let pane = show(&fx, "lead2")["tmux_pane"]
-        .as_str()
-        .unwrap_or_else(|| panic!("lead2 should have a pane"))
-        .to_owned();
-    assert_ne!(pane, "%99");
-    assert_eq!(show(&fx, "lead2")["place"], "parked");
-    assert!(
-        panes(&fx)
-            .iter()
-            .any(|(p, w, s)| *p == pane && w == "park-other" && s == "lead2"),
-        "engine liveness restart wakes session without an existing cockpit: {:?}",
-        panes(&fx)
-    );
-}
-
-#[test]
 fn session_send_origin_flag_sets_event_data() {
     let fx = Fx::new();
     setup_with_fork(&fx.env);
