@@ -107,7 +107,8 @@ mod refactor_protocol {
         let fx = fixture("dispatch");
 
         // Add coverage workflow and refactor workflow based on it
-        fx.add_workflow("cov", &["--shape", "coverage"]).ok();
+        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+            .ok();
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
 
@@ -133,7 +134,8 @@ mod refactor_protocol {
     fn refactor_push_touching_test_file_refused() {
         let fx = fixture("dispatch");
 
-        fx.add_workflow("cov", &["--shape", "coverage"]).ok();
+        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+            .ok();
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
 
@@ -152,7 +154,8 @@ mod refactor_protocol {
     fn refactor_coverage_below_baseline_fails_gate() {
         let fx = fixture("dispatch");
 
-        fx.add_workflow("cov", &["--shape", "coverage"]).ok();
+        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+            .ok();
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
 
@@ -176,7 +179,8 @@ mod refactor_protocol {
     fn bad_test_stops_refactor_until_coverage_amend() {
         let fx = fixture("dispatch");
 
-        fx.add_workflow("cov", &["--shape", "coverage"]).ok();
+        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+            .ok();
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
 
