@@ -2851,4 +2851,60 @@ Escape never submits, never clears the draft and never changes the Tier, model o
 
 ## 33. WebUI dialog answers and plan review feedback (Plan `dialog-answers`; Job `answers-docs`; decisions pro-d582, pro-d584)
 
-Status: skeleton, in progress.
+This section states the guarantees of the `AskCard` submission (decision pro-d582, b41) and of the plan review feedback file (decision pro-d584, b43). Where the code does not yet meet a decided guarantee, the gap is named in the text and in 33.4; it is not described as working.
+
+### 33.1 `AskCard` submits every answer verbatim
+
+`web/src/ui/dialogs/AskCard.tsx` (`extractAnswer`, `:32-72`; submit, `:161-184`). On submit the card sends one `QuestionAnswer` per answered question, in question order, each with its `questionIndex`, `question` and `kind`:
+
+| `kind` | Fields | Source of the value |
+|---|---|---|
+| `option` | `answer` = the chosen option's `label`; `preview` when the option has one | the option label, exactly as the option defines it |
+| `custom` | `answer` = the text typed in `Type something.` | the typed text, with surrounding whitespace trimmed; nothing else changed |
+| `multi` | `selected` = the chosen labels, `answer` = the typed text (`""` when none) | the checked labels; the typed text, trimmed |
+
+- Typed text is trimmed; this is the only change made to a value. Whitespace-only text is not an answer.
+- Test: `AskCard.test.tsx:132` (custom text submits typed text), `:166` (one answer per index with kinds `option`, `multi` and the `unanswered` index).
+
+### 33.2 Typing in `Type something.` captures the custom answer
+
+- Typing non-blank text in the `Type something.` input of a question selects that input as the answer. For a single-select question the chosen option is then cleared, so the one answer is the typed text. No option click is needed.
+- Whitespace-only text does not select the input.
+- Source: the shadcn `Questionnaire.Input` (`web/node_modules/@shadcn/react/dist/questionnaire/index.js`, minified, cited by function `_e`): `onChange` selects the input when `value.trim().length > 0`.
+- Test: `AskCard.test.tsx:132` types after clicking an option, and checks that the option is unchecked. The case with no earlier option click is covered by the source only; no test runs it.
+
+### 33.3 Option selection keeps the preview and the option value
+
+- Selecting an option that has a `preview` (single-select only, `QuestionOption.preview`, 3.8) gives an `option` answer whose `answer` is the option label and whose `preview` is that option's preview text, unchanged.
+- The preview pane shows the preview of the focused option; the submitted answer carries the preview of the selected option.
+- Multi-select answers carry no `preview`: the card does not send one for `multi`.
+- Test: `AskCard.test.tsx:166` (`{kind: "option", answer: "A0", preview: "pv"}`).
+
+### 33.4 Incomplete submission is blocked unless the question is skipped
+
+- A question with no answer blocks the submit. The Questionnaire validates every item when the form is submitted; an unanswered item that is not skipped fails validation, takes the focus and the form is not submitted. The card's submit then sends nothing.
+- `Skip` marks a question as skipped. A skipped question is sent with no answer and its index in `result.unanswered` (`QuestionnaireResult.unanswered`, 3.8). The pi tool result reports these as unanswered (`pi/ask-user-question/tool/response-envelope.ts`).
+- `Cancel` and `Escape` are not submissions: they send `outcome: "cancelled"` with no answers.
+- Source: the shadcn Questionnaire root submit and item `validate` (minified, `index.js`, by function). The card sets `required: false` on every item, so the primitive's own required check does not run. The block is the primitive's validation of an unanswered item that is not skipped.
+- Test: `AskCard.test.tsx:166` (the helper clicks `Skip` on the unanswered step before it submits, and the result has `unanswered: [2]`). No test asserts that a submit with an unanswered step is refused; that behaviour is from source, not from a test.
+
+### 33.5 Plan review feedback is recorded with the verdict
+
+Decision pro-d584: for a review verdict of `changes` or `reject`, the feedback is written to a file and the file is passed to `cpd plan decide` as `--feedback-file`, when the feedback is non-empty. The feedback then is recorded with the verdict (`cpd plan decide` reads the file, `core/src/plan/review.rs` `decide`, `read_text_file`, and stores it on the review).
+
+| Path | `changes` with non-empty feedback | `reject` | Status |
+|---|---|---|---|
+| pi backend (`web/src/server/pi/backend.ts:404-416`) | writes `<cpdHome>/run/<plan>/feedback-<n>.md`; runs `cpd plan decide <n> --reject --feedback-file <path> --plan <plan>` | `cpd plan decide <n> --reject --plan <plan>`; no feedback | `changes`: met. `reject`: no feedback exists to pass (33.6) |
+| durable, transcript review (`web/src/server/durable/backend.ts:500-516`) | runs `cpd plan decide <n> --reject --plan <plan>` with **no** `--feedback-file`; then posts the feedback as a follow-up message | `cpd plan decide <n> --reject --plan <plan>`; no feedback | **Not met.** The feedback reaches the Lead but is not recorded with the verdict. |
+| durable, host-held review (`ui_request` select `plan_review`, 3.8) | the host's `decide` (`pi/durable-host/plan-review.ts:67-76`) passes `--feedback-file feedback-<review>.md` (a relative path) | no reject outcome on this path (3.8: no Reject on the wire) | Passed, but the file is not written in that module. Whether `cpd` finds it depends on its working directory. Unverified. |
+
+### 33.6 Reject carries no feedback today
+
+- The `reject` outcome of `DialogResponse` (3.8, `web/src/protocol/domain.ts`) has no `feedback` field. So neither backend can receive feedback with a reject, and the "reject passes `feedbackFile` when feedback is non-empty" clause of pro-d584 cannot take effect yet.
+- Making `reject` carry feedback changes the wire type (3.8, 4.1 `dialog.respond`) and is not made here. It is open item 33.7.
+
+### 33.7 Open items (not decided here)
+
+- **Durable transcript `changes` and `feedbackFile`** (33.5): the code at `backend.ts:513-515` must write the feedback file and pass `--feedback-file` for pro-d584 to hold. Not changed by this section.
+- **`reject` with feedback** (33.6): whether the wire `reject` carries `feedback`, and how the WebUI collects it. Not decided.
+- **Host-held feedback file location** (33.5): whether the relative `feedback-<review>.md` resolves in `cpd`. Unverified.
