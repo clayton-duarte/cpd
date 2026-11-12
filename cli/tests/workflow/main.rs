@@ -17,6 +17,7 @@ mod pr_comments;
 mod pr_excused;
 mod pr_human_approval;
 mod pr_human_gated;
+mod pr_lifecycle_scenario;
 mod pr_merge;
 mod pr_newest_run;
 mod pr_open;
