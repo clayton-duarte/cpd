@@ -471,14 +471,14 @@ fn an_approval_runs_one_command_once() {
     assert_eq!(r.ok()["value"], "v", "{r:?}");
     assert!(approvals(&fx).is_empty());
     assert!(
-        fx.op_log()[0].contains("--vault other"),
+        fx.op_log()[1].contains("--vault other"),
         "{:?}",
         fx.op_log()
     );
 
     let r = get();
     denied(&r, "secret_grant_required", 3);
-    assert_eq!(fx.op_log().len(), 1, "{:?}", fx.op_log());
+    assert_eq!(fx.op_log().len(), 2, "{:?}", fx.op_log());
 }
 
 #[test]
@@ -503,7 +503,7 @@ fn an_approval_is_bound_to_its_session_and_arguments_and_expires() {
             files,
             "the approval was used or removed: {r:?}"
         );
-        assert_op_not_called(&fx, &r);
+        assert_eq!(fx.op_log(), vec!["whoami --account my.1password.com"]);
     };
     refused(Who::Manager, "get", "other", "deployment", "password");
     refused(Who::Lead, "get", "other", "another-item", "password");
@@ -525,7 +525,7 @@ fn an_approval_is_bound_to_its_session_and_arguments_and_expires() {
     );
     denied(&r, "secret_grant_required", 3);
     assert!(approvals(&fx).is_empty(), "the expired approval stays");
-    assert_op_not_called(&fx, &r);
+    assert_eq!(fx.op_log(), vec!["whoami --account my.1password.com"]);
 }
 
 #[test]

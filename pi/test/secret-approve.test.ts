@@ -16,6 +16,8 @@ function setup(t: TestContext, role: string | undefined, ui = true) {
   const f = new Fixture();
   t.after(() => f.close());
   const host: Host = createHost(f.pi, { env: process.env });
+  const call = host.call;
+  host.call = (args) => args[0] === "secret" && args[1] === "check" ? Promise.resolve({ ok: true }) : call(args);
   if (role !== undefined) host.run = { info: { role, name: NAME, plan: "p1", planLead: role === "lead" }, facts: { ownPrompt: <T>(show: () => Promise<T>) => show() } } as unknown as Run;
   host.ctx = (ui ? f.pi.ctx() : { ...f.pi.ctx(), ui: undefined }) as Host["ctx"];
   registerSecretTool(host);
