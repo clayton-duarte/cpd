@@ -8,6 +8,7 @@
 //!
 //! All tests are hermetic: no real ports, no real processes, no sleep, mocks for all external I/O.
 
+#[allow(clippy::module_inception)]
 mod serve_test {
     use std::fs;
     use std::sync::Arc;

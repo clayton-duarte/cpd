@@ -5,6 +5,7 @@
 mod common;
 
 mod doctor;
+mod serve_test;
 mod shaping_engine;
 mod watch;
 mod watch_auto_merge;
