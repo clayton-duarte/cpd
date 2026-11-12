@@ -187,4 +187,10 @@ describe("PlanView DAG", () => {
     expect(legend?.textContent).toContain("Depends on (needs)");
     m.unmount();
   });
+
+  it("routes inter-workflow edges in left gutter with distinct lanes avoiding workflow cards", () => {
+    // Red test placeholder for skeleton commit
+    expect(true).toBe(false);
+  });
 });
+
