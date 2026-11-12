@@ -212,13 +212,54 @@ function submit(c: HTMLElement) {
   });
 
   it("typing_in_custom_text_without_selecting_an_option_submits_typed_answer", () => {
-    // Stub
+    const { container, responses, unmount } = setup([q(0)]);
+    const text = field(container, 0).querySelector<HTMLInputElement>('input[type="text"][aria-label="Type something."]');
+    expect(text).not.toBeNull();
+    type(text as HTMLInputElement, "my own answer");
+    submit(container);
+    expect(responses).toEqual([
+      {
+        method: "ask_user_question",
+        outcome: "answered",
+        result: {
+          answers: [{ questionIndex: 0, question: "Question 0?", kind: "custom", answer: "my own answer" }],
+          cancelled: false,
+        },
+      },
+    ]);
+    unmount();
   });
 
   it("multi_question_dialog_with_all_questions_answered_submits_all_answers_verbatim", () => {
-    // Stub
+    const { container, responses, unmount } = setup([q(0), q(1)]);
+    click(input(container, 0, "A0"));
+    click(shown(container, "questionnaire-next") as HTMLElement);
+    click(input(container, 1, "B1"));
+    click(shown(container, "questionnaire-submit") as HTMLElement);
+    expect(responses).toEqual([
+      {
+        method: "ask_user_question",
+        outcome: "answered",
+        result: {
+          answers: [
+            { questionIndex: 0, question: "Question 0?", kind: "option", answer: "A0" },
+            { questionIndex: 1, question: "Question 1?", kind: "option", answer: "B1" },
+          ],
+          cancelled: false,
+        },
+      },
+    ]);
+    unmount();
   });
 
   it("dialog_submission_is_blocked_when_questions_remain_unanswered_without_explicit_skip", () => {
-    // Stub
+    const { container, responses, unmount } = setup([q(0), q(1)]);
+    click(input(container, 0, "A0"));
+    click(shown(container, "questionnaire-next") as HTMLElement);
+    const submitBtn = shown(container, "questionnaire-submit");
+    expect(activeStep(container)).toBe("1");
+    expect(submitBtn).not.toBeNull();
+    click(submitBtn!);
+    expect(responses.length).toBe(0);
+    unmount();
   });
