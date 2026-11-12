@@ -5,6 +5,7 @@
 mod common;
 
 mod doctor;
+mod install_b30_test;
 mod retire_app_test;
 mod serve_test;
 mod shaping_engine;
