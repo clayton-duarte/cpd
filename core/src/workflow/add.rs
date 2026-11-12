@@ -916,9 +916,14 @@ fn decide(
                 rusqlite::params![base_plan.as_str(), base_key.as_str(), wanted.repo],
                 |r| r.get::<_, bool>(0),
             )?
-        } else { false };
+        } else {
+            false
+        };
         if !green {
-            return Err(CpdError::new(ErrorCode::BaseCoverageRequired, "A refactor requires a green or merged coverage workflow as its --base."));
+            return Err(CpdError::new(
+                ErrorCode::BaseCoverageRequired,
+                "A refactor requires a green or merged coverage workflow as its --base.",
+            ));
         }
     }
     // Stacked (§2.2 "The base Workflow"): `--base` names a base Workflow, or a branch that is a Workflow's Lead Branch; its base is its link.
