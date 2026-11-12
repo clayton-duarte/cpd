@@ -290,6 +290,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd session switch-failed` (§10.18a, internal) | none | no | yes |
 | `cpd session switched` (§10.18b, internal) | none | no | yes |
 | `cpd serve` (§12a) | none | no | no |
+| `cpd upgrade` (§14.4c) | none | yes | no |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
 | `cpd resource list` (§30) | Manager, Lead, Worker | no | no |
@@ -5192,6 +5193,64 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 Every refusal (steps 1 to 4b, nothing replaced), failure (steps 5 and 6) and failed follow-up (steps 7 and 7a) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
 
 Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`), the scratch home of step 4b (removed before the install ends), the checkout's `web/node_modules` and `web/dist-electron` (step 7a) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
+
+### 14.4c `upgrade`
+
+```
+cpd upgrade [--check | --dry-run]
+```
+
+Builds the newest CI-green commit of origin/main on this host, in an isolated directory, proves its migrations on a copy of the store, then backs up, swaps the binary, restarts the engine and checks its health; a failed check rolls back. The design, and the reason for each step, are `docs/architecture/upgrade.md`; the failure and banner rules are contract §3.7c. Decided by pro-d567 (upgrade by button or command; no automatic upgrade) and pro-d569. Status: as of this amendment the binary has no `upgrade` command; the implementing change adds it with these values.
+
+The User's command at a shell, or the WebUI's upgrade button, which starts it and reads its outcome from the Events below. No agent runs it (callers none); the cockpit flag is yes, the button's action. Its build takes minutes, so the button does not wait for the JSON value: it starts the command and follows the Events.
+
+**Flags.** Exactly one of two may be given; none gives the full upgrade.
+
+| Flag | Meaning |
+|---|---|
+| (none) | the full upgrade of `docs/architecture/upgrade.md` §2 to §6 |
+| `--check` | read only: fetches `origin main`, reads the newest green commit and prints whether it is newer than the running build. Builds nothing, opens no store for writing, changes nothing |
+| `--dry-run` | builds the green commit (§2) and runs the migration dry run on a copy of the store (§3), then stops. No backup, swap, engine stop or restart. The build stays in the isolated directory |
+
+Any other argument is `usage` (exit 2).
+
+**Execution flow** (full upgrade; each step fails the command at that step, with the code of the table below):
+
+1. **Lock.** `locks/upgrade.lock` is taken exclusively for the whole run. When it is held, the command refuses with `upgrade_running` (exit 3) and changes nothing.
+2. **Fetch and green.** `git fetch origin main` in `$CPD_HOME/upgrade/src`, then the green commit (§2). No green commit: `not_green` (exit 3), `details.sha` the head of origin/main. When the green commit is the running build's commit, the command ends `ok` with `"already": true` (idempotence, below).
+3. **Build.** `CPD_COMMIT=<short sha> scripts/cargo.sh build --release --locked -p cpd` in the clone, to `$CPD_HOME/upgrade/target`.
+4. **Dry run.** The migration dry run on a copy of the store (`docs/architecture/upgrade.md` §3).
+5. **Stop, backup, swap.** The engine is stopped as the install stops it (contract §3.7, step 3), then the backup of `cpd.db` and `config.toml` into `$CPD_HOME/backups/`, then the swap of the binary and of the adapter and payload (`upgrade.md` §4).
+6. **Start and health check.** `cpd watch --ensure`, then the probes of `upgrade.md` §5.
+7. **Rollback**, only after a failure of step 5 or 6 (`upgrade.md` §6). Its failure is `upgrade_rollback_failed`.
+8. **Finish.** One `upgrade-finished` Event (below), then the JSON value.
+
+The progress of each step is one line on stderr, as `cpd install` prints its steps (commands.md §14.4). The JSON value is the only thing on stdout.
+
+**Output.**
+
+- `--check`: `{"ok": true, "current": {"sha": "<full sha>", "version": "<the version of cpd --version>"}, "green": {"sha": "<full sha>"}, "available": <bool>}`. `available` is `true` when `green.sha` is not the running build's commit.
+- `--dry-run`: `{"ok": true, "dry_run": true, "green": {"sha": "<full sha>"}, "built": "<path of the built binary>"}`.
+- full upgrade: `{"ok": true, "from": {"sha": "<full sha>"}, "to": {"sha": "<full sha>"}, "backup": "<path>", "already": false}`. When already current: `{"ok": true, "from": {"sha": "<full sha>"}, "to": {"sha": "<full sha>"}, "backup": null, "already": true}`.
+
+**Refusals and failures.**
+
+| Exit | When | Codes |
+|---|---|---|
+| `0` | the upgrade, a check, or a dry run succeeded; or the build is already current | |
+| `1` | a step failed; the rollback succeeded or the step failed before the swap | `upgrade_failed` (`details`: `step` one of `fetch`, `build`, `dry_run`, `backup`, `swap`, `restart`, `health`, `rollback`; `rolled_back` bool; `backup` path or null; `code` the store's code when the dry run or the health check gave one) |
+| `1` | a rollback step failed: the host is not on either build as expected | `upgrade_rollback_failed` (`details`: `step`, `backup`; `rolled_back` is `false`) |
+| `2` | an argument is not one of the flags | `usage` |
+| `3` | another upgrade holds `locks/upgrade.lock`; the green commit is not CI-green | `upgrade_running`, `not_green` |
+| `5` | a subprocess ran past its deadline (contract §1.2) | `tool_timeout` |
+
+**Effects.** Full upgrade: writes `$CPD_HOME/upgrade/` (the clone and its target directory), `$CPD_HOME/backups/<UTC ts>-<old version>/`, the installed `cpd`, `cpd.previous` and the adapter and payload of the install, and `locks/upgrade.lock` while it runs. It stops and starts the engine. It never writes the host checkout's working tree. `--check` writes nothing; `--dry-run` writes only under `$CPD_HOME/upgrade/` and the temp dir.
+
+**Events.** `upgrade-finished` `{from, to, backup}` on success. A failure appends one `error` Event with code `upgrade_failed` or `upgrade_rollback_failed` (source `watch`, the same text rule as the engine's `error` Events, contract §3.7); the Event kinds are added to the catalogue of contract §5 by the implementing change.
+
+**Idempotence.** Running it again when the running build is the green commit changes nothing and returns `already: true`. A failed run leaves the same state it found, or the rollback's state, so a rerun is safe.
+
+**Callers and rules.** Not run by a Lead, Manager or Worker. Not run by `cpd install`: `cpd install --root <checkout>` (§14.4) keeps its own meaning and does not take `locks/upgrade.lock`; whether the two may run at once is an open point of `docs/architecture/upgrade.md` §8.
 
 ### 14.4a `desktop`
 

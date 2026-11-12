@@ -72,7 +72,7 @@ Rollback runs when the health check (§5) fails, or when a step after the swap f
 4. **Restore the binary.** `cpd.previous` is renamed over `cpd` (one `rename(2)`). The adapter and payload are restored by the same rule as their swap (§4 step 5).
 5. **Start the old engine.** `cpd watch --ensure` with the restored binary, then the check that `locks/watch.lock` is held.
 
-If every step of the rollback passes, the upgrade fails with `upgrade_failed` (exit 1, §6 of commands.md §14.4c), `details.step` naming the step that failed first, `details.rolled_back` `true` and `details.backup` the path of the backup. If a rollback step fails, the rollback stops at that step and the upgrade fails with `upgrade_rollback_failed` (exit 1), `details.step` naming the rollback step, `details.rolled_back` `false` and `details.backup` the path. Nothing retries a failed rollback step by itself: the host is then in a state only the User can clear (contract §3.7c, "The banner").
+If every step of the rollback passes, the upgrade fails with `upgrade_failed` (exit 1, commands.md §14.4c), `details.step` naming the step that failed first, `details.rolled_back` `true` and `details.backup` the path of the backup. If a rollback step fails, the rollback stops at that step and the upgrade fails with `upgrade_rollback_failed` (exit 1), `details.step` naming the rollback step, `details.rolled_back` `false` and `details.backup` the path. Nothing retries a failed rollback step by itself: the host is then in a state only the User can clear (contract §3.7c, "The banner").
 
 ## 7. Store rollback semantics
 
@@ -90,4 +90,5 @@ If every step of the rollback passes, the upgrade fails with `upgrade_failed` (e
 3. **Backup retention.** Backups accumulate under `$CPD_HOME/backups/`. No pruning rule is decided; an upgrade deletes nothing.
 4. **Health-check probes and deadline.** §5 lists the probes; the exact `watch-started` match, the HTTP check and the deadline's value are for the implementing Job to choose and pin in a test.
 5. **The version tag's check interval.** How often the engine compares the running commit with the green commit of origin/main is not decided. It is a constant in the code, not a config key, with its reason in the code.
-6. **CPD.app.** The desktop app is not upgraded by `cpd upgrade`. Its retirement is the `retire-app` Workflow's, out of this page's scope.
+6. **`cpd install` during an upgrade.** `cpd install` does not take `locks/upgrade.lock` (commands.md §14.4c). Whether an install and an upgrade may run at once, and which one waits, is not decided.
+7. **CPD.app.** The desktop app is not upgraded by `cpd upgrade`. Its retirement is the `retire-app` Workflow's, out of this page's scope.
