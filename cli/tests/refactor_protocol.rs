@@ -5,7 +5,6 @@ mod common;
 
 use common::Run;
 use common::fx::Fx;
-use std::fs;
 use std::path::PathBuf;
 
 const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
@@ -115,10 +114,28 @@ mod refactor_protocol {
 
         // Simulate an attempt in the refactor workflow touching a test file (e.g. tests/refactor_test.rs)
         // Submitting this attempt must fail with test_change_forbidden
-        let worktree = fx.repo.join("worktree-attempt");
-        fs::create_dir_all(&worktree).unwrap();
+        fx.git(&fx.repo, &["branch", "pay-1/cov"]);
+        fx.git(&fx.repo, &["branch", "pay-1/refact"]);
+        let base = fx.git(&fx.repo, &["rev-parse", "HEAD"]);
+        fx.git(
+            &fx.repo,
+            &["checkout", "-b", "pay-1/refact--refact-impl-a1"],
+        );
+        fx.commit_file(
+            &fx.repo,
+            "tests/refactor_test.rs",
+            "bad test",
+            "change test",
+        );
+        fx.env.sql(&format!(
+            "UPDATE jobs SET status = 'queued', tier = 'S2', goal = 'goal', context = 'context', touches = '[\"**\"]', acceptance = '[\"works\"]', out_of_scope = '[]', fingerprint = printf('%064d', 0) WHERE key = 'refact-impl';
+             UPDATE jobs SET status = 'running' WHERE key = 'refact-impl';
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+             VALUES ('pay-1', 'refact-impl-a1', 'refact-impl', 1, 'S2', 'ladder', 'running', 'pay-1/refact--refact-impl-a1', '{}', '{}', 't');",
+            fx.repo.display(), base
+        ));
         let run = fx.cpd_in(
-            &worktree,
+            &fx.repo,
             &["attempt", "submit", "refact-impl-a1", "--plan", "pay-1"],
         );
         let err = common::refused(&run, "test_change_forbidden", 3);
@@ -140,6 +157,10 @@ mod refactor_protocol {
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
         fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay-1'; UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch', lead_worktree = '/tmp/lead', started_at = 't' WHERE plan = 'pay-1';");
+
+        fx.git(&fx.repo, &["branch", "pay-1/cov"]);
+        fx.git(&fx.repo, &["checkout", "-b", "pay-1/refact"]);
+        fx.commit_file(&fx.repo, "tests/bad_test.rs", "bad test", "change test");
 
         // Pushing a refactor workflow whose commits touch a test file is refused with test_change_forbidden
         let run = fx.cpd(&["pr", "push", "--workflow", "refact", "--plan", "pay-1"]);
