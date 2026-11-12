@@ -33,7 +33,15 @@ pub enum Command {
     #[command(hide = true)]
     Approve,
     /// Repair the skipped cpd install (Manager) (§9.11)
-    Repair,
+    Repair(RepairArgs),
+}
+
+/// Arguments for `cpd host repair`.
+#[derive(clap::Args, Debug, Default)]
+pub struct RepairArgs {
+    /// Automatically approve store repair without interactive confirmation
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 /// The checkout a repair always works in (commands.md §9.11): `$HOME/projects/cpd`, no argument.
@@ -102,7 +110,7 @@ fn caller(env: &mut crate::env::Env) -> Result<Option<(crate::ids::SessionId, Ro
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Approve => approve(),
-        Command::Repair => repair(),
+        Command::Repair(args) => repair(args),
     }
 }
 
@@ -140,7 +148,7 @@ fn save_patch(home: &CpdHome, ts: &str, patch: &str) -> Result<PathBuf, CpdError
 }
 
 /// `cpd host repair` (commands.md §9.11): save the diff and the old HEAD, then reset `main`.
-fn repair() -> Result<Output, CpdError> {
+fn repair(args: RepairArgs) -> Result<Output, CpdError> {
     let mut env = crate::env::Env::open()?;
     let waiting = match caller(&mut env)? {
         None => None,
@@ -154,6 +162,50 @@ fn repair() -> Result<Output, CpdError> {
             }
         }
     };
+
+    // Store reconciliation: check for diverged migrations
+    let mut store_repaired = false;
+    let mut store_backup_path: Option<PathBuf> = None;
+    if env.home.db().exists() {
+        let conn = rusqlite::Connection::open(env.home.db()).map_err(CpdError::from)?;
+        let divergences = crate::store::repair::detect_divergences(&conn)?;
+        drop(conn);
+
+        if !divergences.is_empty() {
+            // Interactive confirmation if not -y/--yes
+            let confirmed = if args.yes {
+                true
+            } else {
+                eprintln!("Detected diverged store migration(s):");
+                for d in &divergences {
+                    eprintln!(
+                        "  - {}: recorded={}, embedded={}",
+                        d.name, d.recorded_checksum, d.accepted_checksum
+                    );
+                }
+                eprint!("Apply store repair? [y/N]: ");
+                use std::io::Write;
+                let _ = std::io::stderr().flush();
+                let mut line = String::new();
+                if std::io::stdin().read_line(&mut line).is_ok() {
+                    let answer = line.trim().to_lowercase();
+                    answer == "y" || answer == "yes"
+                } else {
+                    false
+                }
+            };
+
+            let options = crate::store::repair::RepairOptions {
+                dry_run: false,
+                confirmed,
+                reason: "cpd host repair".to_owned(),
+            };
+            let res = crate::store::repair::repair(&env.home, &options)?;
+            store_repaired = res.repaired;
+            store_backup_path = res.backup_path;
+        }
+    }
+
     let dir = checkout()?;
     let ts = stamp(OffsetDateTime::now_utc());
     let old = git_ok(&dir, &["rev-parse", "HEAD"])?.trim().to_owned();
@@ -170,11 +222,18 @@ fn repair() -> Result<Output, CpdError> {
     if let Some(path) = &waiting {
         approval::consume(path)?;
     }
-    Ok(Output::success(json!({
+    let mut out = json!({
         "saved": {
             "ref": reference,
             "patch": patch_path.map(|p| p.display().to_string()),
         },
         "head": head,
-    })))
+    });
+    if store_repaired {
+        out["store_repaired"] = json!(true);
+        if let Some(bp) = store_backup_path {
+            out["store_backup"] = json!(bp.display().to_string());
+        }
+    }
+    Ok(Output::success(out))
 }

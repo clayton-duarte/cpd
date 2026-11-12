@@ -3263,6 +3263,17 @@ cpd host repair
 
 **`cpd host repair`** (Manager only; contract §3.7 `host-alert`): repairs the skipped cpd install by resetting the checkout's main branch to origin/main, saving the diff and old HEAD. Needs an approval of the calling Session. Steps, all `git -C $HOME/projects/cpd`: (a) `rev-parse HEAD` (old head); (b) `diff HEAD` and, when non-empty, write to `$CPD_HOME/run/cpd-install-backups/<ts>.patch` (0600; <ts> = UTC `YYYYMMDDTHHMMSSZ`); (c) `update-ref refs/cpd-host/<ts> <old head>`; (d) `checkout --force -B main origin/main`; (e) `rev-parse HEAD` (new sha). Untracked files, other branches and stashes are never touched; no fetch (the script fetched). The approval is consumed only after step (e) succeeds. A failing git step stops it with `git_failed` naming the argv. Output JSON: `{"ok":true,"saved":{"ref":"refs/cpd-host/<ts>","patch":"<path or null>"},"head":"<new sha>"}`. The pill clears at the next sync tick after a repair (contract §3.7 `host-alert`).
 
+**Store repair: planned, not built.** The steps below are the Plan `store-repair` design (accepted assumption A3; architecture in [store-repair.md](architecture/store-repair.md)). On `origin/main` `cpd host repair` does **none** of them: it takes no flags, does not open or write `cpd.db`, runs no dry run, asks no confirmation, and writes no store backup. Its only backup is the checkout patch under `run/cpd-install-backups/`. Until the implementation lands, a store repair is not a `cpd host repair` capability.
+
+Planned store repair, in order:
+
+1. **Copy dry run.** Copy `cpd.db`, `-wal` and `-shm` to a scratch directory, insert the repair and run the migration on the copy, and verify it with `cpd --version`. Any failure stops here; the live store is untouched.
+2. **Backup.** Copy the same three files to `$CPD_HOME/run/backups/<ts>/` (`<ts>` as above). This is not `run/cpd-install-backups/`.
+3. **Interactive approval.** The User at a terminal confirms the migration name, both checksums and the backup path, and answers yes. Whether this replaces or adds to the Session approval from `cpd host approve` is not decided.
+4. **Transaction.** The repair row and any migration step run in one `BEGIN IMMEDIATE` transaction. A failure before commit leaves the store unchanged.
+
+Planned CLI behaviour: `cpd host repair` refuses a store repair without the confirmation of step 3, and reports the backup path in its JSON output. Exact flag names and the exit code of a refused repair are not decided and are not documented as behaviour yet.
+
 ### 9.12 `cpd tui action host`
 
 **Removed** (decision pro-d529, Plan `drop-cli-tui`). No StatusBar click runs it: the cockpit is removed (§13). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").

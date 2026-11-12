@@ -188,6 +188,21 @@ pub const VERSION: i64 = 1000;
 /// D2). A test asserts it and prints the new value when it is stale.
 pub const SCHEMA_HASH: &str = "e931e359f3b48414f980f12bb46e3da844c18bf1a3496a6d496eb875d7d2c8b6";
 
+pub const SCHEMA_MIGRATION_REPAIRS_DDL: &str = "\
+CREATE TABLE IF NOT EXISTS schema_migration_repairs (
+  id                INTEGER PRIMARY KEY,
+  name              TEXT    NOT NULL REFERENCES schema_migrations(name),
+  recorded_checksum TEXT    NOT NULL CHECK (length(recorded_checksum) = 64),
+  accepted_checksum TEXT    NOT NULL CHECK (length(accepted_checksum) = 64),
+  txn               INTEGER NOT NULL REFERENCES txns(id),
+  reason            TEXT    NOT NULL CHECK (length(trim(reason)) > 0)
+) STRICT;
+CREATE TRIGGER IF NOT EXISTS schema_migration_repairs_own BEFORE INSERT ON schema_migration_repairs WHEN NEW.txn IS NOT cpd_txn()
+BEGIN SELECT RAISE(ABORT, 'schema_migration_repairs.txn must be cpd_txn()'); END;
+CREATE TRIGGER IF NOT EXISTS schema_migration_repairs_no_update BEFORE UPDATE ON schema_migration_repairs BEGIN SELECT RAISE(ABORT, 'append_only: schema_migration_repairs'); END;
+CREATE TRIGGER IF NOT EXISTS schema_migration_repairs_no_delete BEFORE DELETE ON schema_migration_repairs BEGIN SELECT RAISE(ABORT, 'append_only: schema_migration_repairs'); END;
+";
+
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
 pub(super) const RUNNER_DDL: &str = "\
@@ -990,6 +1005,9 @@ pub(super) fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
     let mut entries = Vec::new();
     for (kind, name, sql) in rows {
         if kind == "trigger" && generated.contains(&name) {
+            continue;
+        }
+        if name == "schema_migration_repairs" || name.starts_with("schema_migration_repairs_") {
             continue;
         }
         let parts = if kind == "table" {
