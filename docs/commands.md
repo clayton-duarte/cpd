@@ -217,7 +217,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `head_moved` | 3 | `review submit` (§31.1) found the pull request's current head is not `--head`; `details` `{workflow, expected, actual}`, both SHAs lowercase; nothing was posted (pro-d169) |
 | `open_job_live` | 3 | `pr open` (§9.1) found the Workflow's `open` Job `draft`, `queued` or `running`; `details.job` (hs-d573) |
 | `not_an_impl_job`, `path_not_guarded` | 3 | `job approve-tests` (§5.9): the Job is not of kind `impl`; `details.paths` lists the paths no `test_files` entry of its test Jobs guards |
-| `host_approval_required`, `not_a_manager` | 3 | `cpd host repair` (§9.17): needs an approval of the calling Session (`host_approval_required`); Manager role only (`not_a_manager`, commands.md §9.17) |
+| `host_approval_required`, `not_a_manager` | 3 | `cpd host repair` (§9.11): needs an approval of the calling Session (`host_approval_required`); Manager role only (`not_a_manager`, commands.md §9.11) |
 | `git_failed`, `tmux_failed`, `gh_failed` | 1 | the tool exited non-zero where the command did not expect it; `details` has `argv`, `exit` and the last 60 lines of stderr. A merge's `gh_failed` (contract §7.4) has the detail `gh_failed: <message>` and that same stderr tail, so stderr is always recorded. A RATE_LIMITED reply inside a merge is waited out in place to the reset and uses no try: it ends no Attempt, unless the merge's wait bound is exceeded (contract §7.4). `pr poll` also returns `gh_failed` for an empty or non-JSON body, a search response with `errors` and a lookup with no `data` (contract §7.6, hs-d96) |
 | `gh_rate_limited` | 1 | an `error` Event code of engine `pr-poll` (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine `host-alert` (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
@@ -260,8 +260,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | Command | Callers | Cockpit | Internal |
 |---|---|---|---|
 | `cpd context owner` (§3.14) | Manager, Lead | no | no |
-| `cpd host approve` (§9.17) | | no | yes |
-| `cpd host repair` (§9.17) | Manager | no | no |
+| `cpd host approve` (§9.11) | | no | yes |
+| `cpd host repair` (§9.11) | Manager | no | no |
 | `cpd pr approve` (§9.8d, internal) | Lead | no | yes |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd gate finish` (§26) | none | no | no |
@@ -3257,23 +3257,24 @@ The command takes the pull-request argument `<owner>/<repo>#<n>`; it does not se
 
 ```
 cpd host approve
-cpd host repair
+cpd host repair [-y | --yes]
 ```
 
 **`cpd host approve`** (internal; written by the adapter's `cpd_host_approve` tool after the User's Allow once): creates a private approval file for the Session, valid 10 minutes, one repair. Output: `{"ok": true}`.
 
 **`cpd host repair`** (Manager only; contract §3.7 `host-alert`): repairs the skipped cpd install by resetting the checkout's main branch to origin/main, saving the diff and old HEAD. Needs an approval of the calling Session. Steps, all `git -C $HOME/projects/cpd`: (a) `rev-parse HEAD` (old head); (b) `diff HEAD` and, when non-empty, write to `$CPD_HOME/run/cpd-install-backups/<ts>.patch` (0600; <ts> = UTC `YYYYMMDDTHHMMSSZ`); (c) `update-ref refs/cpd-host/<ts> <old head>`; (d) `checkout --force -B main origin/main`; (e) `rev-parse HEAD` (new sha). Untracked files, other branches and stashes are never touched; no fetch (the script fetched). The approval is consumed only after step (e) succeeds. A failing git step stops it with `git_failed` naming the argv. Output JSON: `{"ok":true,"saved":{"ref":"refs/cpd-host/<ts>","patch":"<path or null>"},"head":"<new sha>"}`. The pill clears at the next sync tick after a repair (contract §3.7 `host-alert`).
 
-**Store repair: planned, not built.** The steps below are the Plan `store-repair` design (accepted assumption A3; architecture in [store-repair.md](architecture/store-repair.md)). On `origin/main` `cpd host repair` does **none** of them: it takes no flags, does not open or write `cpd.db`, runs no dry run, asks no confirmation, and writes no store backup. Its only backup is the checkout patch under `run/cpd-install-backups/`. Until the implementation lands, a store repair is not a `cpd host repair` capability.
+**Store repair.** `cpd host repair` also reconciles the store `cpd.db` (decision pro-d568; architecture in [store-repair.md](architecture/store-repair.md)). A **diverged migration** is an applied migration whose recorded checksum differs from the checksum this cpd embeds and that has no matching row in `schema_migration_repairs`. When the store has one, the command runs these steps before the checkout steps above, in this order. A store with none is left alone, and the output has no store keys. Run from a terminal (no `CPD_SESSION`), neither the store repair nor the checkout repair needs a Session approval.
 
-Planned store repair, in order:
+1. **Detect.** Without `-y` or `--yes`, the command lists each diverged migration on stderr: its name, and its `recorded=` and `embedded=` checksums.
+2. **Copy dry run (automatic).** `cpd.db`, `-wal` and `-shm` are copied to `run/scratch-repair-<pid>/`, the repair is applied to that copy, and the copy must open. The scratch directory is removed on both paths. A failure stops here and the live store is untouched. The dry run runs before the confirmation, so it runs on every repair, confirmed or not.
+3. **Confirmation.** `-y` or `--yes` confirms without asking. Otherwise the command prints `Apply store repair? [y/N]: ` on stderr and reads one line from stdin: `y` or `yes` (any case) confirms, and any other answer, an empty line included, refuses. **Answering N refuses** with `host_approval_required` (exit 3, message `Store repair requires user confirmation [y/N].`). The store is untouched, no backup is written, and the checkout is not reset either, because the command stops at the refusal. The error code names a Session approval; the message names the confirmation.
+4. **Backup.** The three store files that exist are copied to `$CPD_HOME/run/backups/<ts>/`, with `<ts>` as above. The backup is `run/backups/<ts>/cpd.db`, with its `-wal` and `-shm` beside it. It is not `run/cpd-install-backups/`.
+5. **Record.** One transaction inserts a `txns` row (`command` `cpd host repair`; the calling Session when `CPD_SESSION` is set) and one `schema_migration_repairs` row per diverged migration (`name`, the recorded and the accepted checksum, `reason` `cpd host repair`). The table is append-only. A failure before the commit leaves the live store unchanged.
 
-1. **Copy dry run.** Copy `cpd.db`, `-wal` and `-shm` to a scratch directory, insert the repair and run the migration on the copy, and verify it with `cpd --version`. Any failure stops here; the live store is untouched.
-2. **Backup.** Copy the same three files to `$CPD_HOME/run/backups/<ts>/` (`<ts>` as above). This is not `run/cpd-install-backups/`.
-3. **Interactive approval.** The User at a terminal confirms the migration name, both checksums and the backup path, and answers yes. Whether this replaces or adds to the Session approval from `cpd host approve` is not decided.
-4. **Transaction.** The repair row and any migration step run in one `BEGIN IMMEDIATE` transaction. A failure before commit leaves the store unchanged.
+The store repair runs before the checkout steps. If a checkout step then fails, the store repair stays and its backup remains. On success the JSON output gains two keys: `"store_repaired": true` and `"store_backup": "<path of run/backups/<ts>/cpd.db>"`. Neither key appears when no store repair ran.
 
-Planned CLI behaviour: `cpd host repair` refuses a store repair without the confirmation of step 3, and reports the backup path in its JSON output. Exact flag names and the exit code of a refused repair are not decided and are not documented as behaviour yet.
+**Current limit (tracked in Plan `repair-open`).** Before any step above, `cpd host repair` opens the store with `Env::open`. An open of a store with a diverged migration is refused with `migration_changed` (exit 1; `details` `name`, `recorded`, `embedded`). On the current build the command therefore stops there: no dry run, no prompt, no backup, no record and no checkout reset. `cpd host approve` opens the store the same way and is refused the same way, so a Manager cannot obtain the approval while the store is diverged. Until that is fixed, `cpd host repair` does not repair a diverged store.
 
 ### 9.12 `cpd tui action host`
 
