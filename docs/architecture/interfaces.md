@@ -83,4 +83,22 @@ in is [[agent-runtime]]; the programmable whole the interfaces attach to is the
 
 ## WebUI dialog answers and review feedback
 
-Status: skeleton, in progress.
+A web UI dialog is where a human answer leaves the browser and reaches an agent or a
+cpd command. Two guarantees apply to dialog answers; the details are in
+[web/CONTRACT.md §33](../../web/CONTRACT.md) (decisions pro-d582 and pro-d584).
+
+**Dialog answers are sent verbatim.** The `ask_user_question` card submits every
+answered question with its kind (`option`, `custom` or `multi`) and its index, and
+the typed text is trimmed and otherwise unchanged. Typing in `Type something.`
+selects the custom answer without an option click. Selecting an option keeps the
+option's label and its preview. A submit with an unanswered question is refused
+until that question is answered or skipped; a skipped question is reported as
+unanswered, never as an answer.
+
+**Review feedback is kept with its verdict.** For a plan review, `changes` and
+`reject` must record their feedback with the verdict: the feedback is written to a
+file and passed to `cpd plan decide` as `--feedback-file`, when it is non-empty.
+The pi backend does this for `changes`. The durable backend does not yet: its
+transcript-review path sends the feedback as a follow-up message, not with the
+verdict (contract §33.5). The wire `reject` carries no feedback, so it cannot pass
+one yet (contract §33.6). Both gaps are open and are not hidden by this note.
