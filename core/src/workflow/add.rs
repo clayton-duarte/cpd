@@ -34,7 +34,7 @@ use crate::store::WriteTxn;
 const COMMAND: &str = "workflow add";
 
 /// The shapes `workflow add` writes (contract §2.2 "Job kinds"); `free` is only what the migration gave an older Workflow.
-pub(crate) const SHAPES: [&str; 3] = ["tdd", "docs", "config"];
+pub(crate) const SHAPES: [&str; 5] = ["tdd", "docs", "config", "coverage", "refactor"];
 
 /// One stub draft of a shape's template.
 struct Stub {
@@ -65,6 +65,8 @@ fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
             stub("impl", "impl", "Implement", Some("tests")),
         ],
         "docs" => vec![stub("docs", "docs", "Docs", None)],
+        "coverage" => vec![stub("coverage", "work", "Coverage", None)],
+        "refactor" => vec![stub("impl", "impl", "Refactor", None)],
         _ => vec![stub("config", "work", "Config", None)],
     }
 }
@@ -624,6 +626,12 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
             .store
             .read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
     };
+    if args.shape == "refactor" && !matches!(base, BaseArg::Workflow(..)) {
+        return Err(CpdError::new(
+            ErrorCode::BaseCoverageRequired,
+            "A refactor requires a green or merged coverage workflow as its --base.",
+        ));
+    }
     // A branch that is a Workflow's Lead Branch of the Plan and repo is its base Workflow's: it needs no branch yet (that Workflow may be `waiting`).
     let lead_branch_of_workflow = match &base {
         BaseArg::Branch(Some(branch)) => env.store.read(|conn| {
@@ -900,6 +908,18 @@ fn decide(
         .with("shape", existing.shape.as_str())
         .with("head_ref", existing.head_ref.clone())
         .with("status", existing.status.as_str()));
+    }
+    if wanted.shape == "refactor" {
+        let green = if let BaseWanted::Workflow(base_plan, base_key) = &wanted.base {
+            conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM workflows w LEFT JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2 AND w.repo = ?3 AND w.shape = 'coverage' AND (w.status = 'merged' OR (EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key) AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status != 'merged') AND (p.id IS NULL OR p.checks != 'failed'))))",
+                rusqlite::params![base_plan.as_str(), base_key.as_str(), wanted.repo],
+                |r| r.get::<_, bool>(0),
+            )?
+        } else { false };
+        if !green {
+            return Err(CpdError::new(ErrorCode::BaseCoverageRequired, "A refactor requires a green or merged coverage workflow as its --base."));
+        }
     }
     // Stacked (§2.2 "The base Workflow"): `--base` names a base Workflow, or a branch that is a Workflow's Lead Branch; its base is its link.
     let stacked = match &wanted.base {
