@@ -7542,6 +7542,8 @@ cpd secret approve --action <get|list|create|edit|delete> --vault <v> [--item <i
 
 Records the User's approval for a Lead or Manager to use another vault. Called by the pi adapter after the User chooses Allow in the `cpd_secret_approve` tool. Internal; not for manual use.
 
+**Fail fast before the dialog** (decision pro-d580; status: decided, not yet built at base commit `b9b4aaec6`). The `cpd_secret_approve` tool checks 1Password before it opens any dialog. When `op whoami` fails, or `op account list` is empty, the tool refuses at once with the error `sign in to 1Password on this host`. No dialog opens, so the User is not asked, and no approval is recorded or spent. The caller sees the error at once, not after the User has answered.
+
 | Argument | Meaning |
 |---|---|
 | `--action <get|list|create|edit|delete>` | the action (required) |
