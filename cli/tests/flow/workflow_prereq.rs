@@ -13,6 +13,13 @@ fn fixture() -> Fx {
     let fx = Fx::with_ports();
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    let policy_dir = fx.env.cpd_home().join("policy/acme");
+    std::fs::create_dir_all(&policy_dir).unwrap();
+    std::fs::write(
+        policy_dir.join("owner.toml"),
+        "[pr.post]\nenabled = true\nchannel = \"C0123456789\"\n",
+    )
+    .unwrap();
     fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -20,14 +27,20 @@ fn fixture() -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('p1', 'ctx', 'Plan 1', 'plan', 'lead1', '2000-01-01T00:00:00.000Z');
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
-                                    merge_state, authored, base_ref, default_branch, head_oid)
+                                    merge_state, authored, base_ref, default_branch, head_oid, feedback)
            VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add the thing', 0, 'open', 'approved', 'passed', 't', 't',
-                   'clean', 1, 'main', 'main', '{SHA}');
+                   'clean', 1, 'main', 'main', '{SHA}', '[]');
          INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at)
            VALUES ('p1', 'api', '/r/api', 'main', 'open', 'cpd/p1/api', '/w/api', 't', 7, 'https://github.com/acme/api/pull/7', 't', 1, cpd_txn(), 't');
          INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed, merge_commit_allowed,
                                 rebase_merge_allowed, delete_branch_on_merge, fetched_at)
-           VALUES ('acme/api', 'main', 0, 1, 1, 0, 0, 1, 't');"
+           VALUES ('acme/api', 'main', 0, 1, 1, 0, 0, 1, 't');
+         INSERT INTO workflow_prereqs (plan, workflow, id, kind, details_json, met_at, met_by)
+           VALUES ('p1', 'api', 1, 'manual', '{{\"text\":\"deploy flag\"}}', NULL, NULL);
+         INSERT INTO swr_deploys (repo, run_id, updated_at, run_json, pending_json, inactive_at)
+           VALUES ('acme/api', 101, 'U0', '{{\"id\":101,\"pull_requests\":[{{\"number\":7}}]}}', '[{{\"environment\":{{\"name\":\"production\"}},\"current_user_can_approve\":true}}]', NULL);
+         INSERT INTO inbox_items (id, kind, urgency, label, subject, opened_at, closed_at)
+           VALUES (1, 'deploy', 'yellow', 'api deploy production', 'deploy:acme/api#101', '2000-01-01T00:00:00.000Z', NULL);"
     ));
     fx
 }
@@ -57,7 +70,7 @@ fn prereq_unmet_refuses_pr_merge() {
     let fx = fixture();
     let out = fx.cpd(&["pr", "merge", REF]);
     let err = refused(&out, "prereq_unmet", 3);
-    assert_eq!(err["error"]["code"], "prereq_unmet");
+    assert_eq!(err["code"], "prereq_unmet");
 }
 
 #[test]
@@ -65,7 +78,7 @@ fn prereq_unmet_refuses_pr_merge_green() {
     let fx = fixture();
     let out = fx.cpd(&["pr", "merge-green", REF]);
     let err = refused(&out, "prereq_unmet", 3);
-    assert_eq!(err["error"]["code"], "prereq_unmet");
+    assert_eq!(err["code"], "prereq_unmet");
 }
 
 #[test]
@@ -73,15 +86,20 @@ fn prereq_unmet_refuses_pr_post() {
     let fx = fixture();
     let out = fx.cpd(&["pr", "post", "--workflow", "api", "--plan", "p1"]);
     let err = refused(&out, "prereq_unmet", 3);
-    assert_eq!(err["error"]["code"], "prereq_unmet");
+    assert_eq!(err["code"], "prereq_unmet");
 }
 
 #[test]
 fn prereq_unmet_refuses_inbox_deploy_approve() {
     let fx = fixture();
-    let out = fx.cpd(&["inbox", "approve", "1"]);
+    let cpd_home = fx.env.cpd_home().to_string_lossy().to_string();
+    let out = fx.cpd_with(
+        fx.env.root(),
+        &["inbox", "approve", "1"],
+        &[("CPD_HOME", &cpd_home)],
+    );
     let err = refused(&out, "prereq_unmet", 3);
-    assert_eq!(err["error"]["code"], "prereq_unmet");
+    assert_eq!(err["code"], "prereq_unmet");
 }
 
 #[test]

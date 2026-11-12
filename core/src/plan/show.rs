@@ -79,6 +79,14 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
                     json!(crate::pr::posts::find(conn, plan.as_str(), &key)?.is_some());
             }
             value["needs"] = json!(needs.remove(&key).unwrap_or_default());
+            let unmet = crate::workflow::prereq::evaluate_unmet(
+                conn,
+                &*crate::ports::Ports::current().runner,
+                plan.as_str(),
+                &key,
+            )
+            .unwrap_or_default();
+            value["unmet_prereqs"] = json!(unmet);
             Ok(value)
         })
         .collect()
