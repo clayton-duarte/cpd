@@ -121,3 +121,7 @@ Host checkout rollback is separate and exists today: `cpd host repair` saves the
 - `core/src/home.rs` `CpdHome::resolve`, `is_isolated`.
 - `core/src/host_repair.rs` `repair`, `save_patch`; `core/src/install/mod.rs` `dry_run_migrations`.
 - Contract §4.5 and §4.5a (`docs/contract.md`); `docs/commands.md` §9.11.
+
+## Schema reconciliation
+
+Skeleton (reconcile-docs-a1). Content follows.
