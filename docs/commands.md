@@ -305,6 +305,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd protocol bug close` (§33.3) | Lead, Manager | no | no |
 | `cpd protocol bug list` (§33.4) | Manager, Lead, Worker | no | no |
 | `cpd protocol bug show` (§33.5) | Manager, Lead, Worker | no | no |
+| `cpd workflow prereq add` (§9.5b) | Lead | no | no |
+| `cpd workflow prereq confirm` (§9.5b) | none | yes | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -2830,6 +2832,47 @@ Effects: **rows**, one transaction: the Workflow's stored `description` column (
 
 Idempotent: yes; when the description is unchanged it returns `"already": true` and writes nothing.
 
+### 9.5b `workflow prereq`
+
+```
+cpd workflow prereq add --workflow <key> --kind ld-flag --project <p> --key <flag> [--env <e>] [--plan <id>]
+cpd workflow prereq add --workflow <key> --kind manual --text "<what>" [--plan <id>]
+cpd workflow prereq confirm --workflow <key> --id <id> [--plan <id>]
+```
+
+An **external prerequisite** is something outside the Workflow's repo that must exist before its change reaches production: a LaunchDarkly flag the change reads, or a manual setup task. An unmet prerequisite refuses `pr merge-green`, `pr merge`, `pr post` and deploy approvals (`cpd inbox approve`) with `prereq_unmet`, until it is met (their rows in §9.8b, §9.10, §9.10a and §21.13; the refusal is in [refusals.md](refusals.md)).
+
+**Callers.** The Lead declares every prerequisite when it creates the Workflow (its skill, `cpd-lead` Scoping). `confirm` is the User's: a manual prerequisite is confirmed at a shell or from the PR's Inbox item, never by an agent.
+
+**Kinds.** `--kind` is required. Each kind takes only its own flags; a flag of the other kind is `usage`.
+
+| Kind | Flags | Met when |
+|---|---|---|
+| `ld-flag` | `--project <p>` the LaunchDarkly project key; `--key <flag>` the flag key; `--env <e>` optional | the flag exists in the project. Checked live through the LaunchDarkly API at each gated command, with the token from the secret `launchdarkly/api-token` (vault `cpd`, §24). A flag deleted later is unmet again. |
+| `manual` | `--text "<what>"`, one line: the task | the User confirms it with `confirm`. Once confirmed it stays met. |
+
+`--env` is stored with the prerequisite; the check does not yet read it.
+
+Preconditions of `add` and `confirm`, in this order:
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Workflow is a Workflow of the Plan | `workflow_not_found` | 4 |
+| the Workflow is not `merged` or `cancelled` | `workflow_ended` | 3 |
+| `--kind` is `ld-flag` or `manual`; the flags of that kind are all given; no flag of the other kind is given | `usage` | 2 |
+| `confirm`: `--id` names a `manual` prerequisite of the Workflow; an `ld-flag` is checked, never confirmed, and an unknown `--id` is refused | `usage` | 2 |
+
+Effects: **rows**, one transaction. `add` stores one prerequisite of the Workflow under a new `id`; `confirm` records when and by whom it was met. The Workflow's status and the Plan's phase do not change.
+
+```json
+{"ok": true, "workflow": "api", "prereq": {"id": 1, "kind": "ld-flag", "project": "missionlane", "key": "opportunity-tiles-takeover", "env": null}}
+{"ok": true, "workflow": "api", "prereq": {"id": 2, "kind": "manual", "text": "Create the flag in staging"}}
+```
+
+Idempotent: yes. `add` of a declaration the Workflow already has returns `"already": true` and writes nothing; `confirm` of a met prerequisite returns `"already": true` and writes nothing.
+
+**Refusal on merge, post and deploy.** `pr merge-green`, `pr merge`, `pr post` and `inbox approve` read the unmet prerequisites before their first write and refuse `prereq_unmet` (exit 3) while any is unmet. The refusal names every unmet prerequisite, not only the first. A prerequisite that cannot be checked (LaunchDarkly unreachable, no token) is not met: the refusal is the same `prereq_unmet`, with the cause in its `details`, so a broken check never lets a change through.
+
 ### 9.6 `workflow cancel`
 
 ```
@@ -2996,6 +3039,7 @@ Check order; the first failure refuses and then nothing is sent and nothing is w
 6. the channel is `policy.pr.post.channel` when not empty, else the machine config's `inbox.team_channel` when not empty, else (`details` `{keys: ["pr.post.channel", "inbox.team_channel"]}`) → `post_unconfigured` (exit 3)
 7. `postable::unready(&row)` (contract §2.2, §8.3, the eight Unready reasons: `not_open`, `draft`, `conflicting`, `changes_requested`, `checks_failed`, `checks_pending`, `comments_unread`, `bot_comments`) is not empty (`details` `{workflow, number, url, reasons: [<as_str of each>]}`) → `pr_not_ready` (exit 3)
 8. ONE `gh api graphql` read of the repository and the pull request (the auto-merge read query: `autoMergeAllowed`, the pull request's `id`, `autoMergeRequest { enabledAt }`, `squashMergeAllowed`, `mergeCommitAllowed`, `rebaseMergeAllowed`): all three methods false (`details` `{repo, number, squash, merge, rebase}`) → `no_merge_method` (exit 3); a read that fails or cannot be parsed → `gh_failed` (exit 1, `details` `{argv, exit, stderr}`). Both refuse before the Slack send: nothing is sent and nothing is written
+9. the Workflow has an unmet external prerequisite (§9.5b) → `prereq_unmet` (exit 3), `details` as in [refusals.md](refusals.md). Refused before the Slack send: nothing is sent and nothing is written
 
 | Refusal | Exit | Details |
 |---|---|---|
@@ -3011,6 +3055,7 @@ Check order; the first failure refuses and then nothing is sent and nothing is w
 | `pr_not_ready` | 3 | `{workflow, number, url, reasons: ["draft", "changes_requested", …]}` |
 | `no_merge_method` | 3 | `{repo, number, squash, merge, rebase}`: the repo allows no merge method (check 8) |
 | `gh_failed` | 1 | the read of check 8 failed or was unparseable; `{argv, exit, stderr}` |
+| `prereq_unmet` | 3 | check 9: an external prerequisite of the Workflow is unmet (§9.5b); `details` as in [refusals.md](refusals.md) |
 | `slack_auth` | 3 | the Slack sign-in in pi's MCP credentials is missing or invalid (§21.7); run `pi mcp login slack`; nothing was sent and nothing is written |
 | `slack_not_configured` | 3 | no `slack` server in `~/.pi/agent/mcp.json` (§21.7); run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden`; nothing was sent and nothing is written |
 | `slack_failed` | 1 | the helper could not send the message (timeout, network, Slack service failure) (§21.7); the outcome is unknown: nothing is written, the message may have reached the channel, and the engine's Slack poll records it if it did (Order and unknown outcomes); the post is retryable |
@@ -3219,6 +3264,7 @@ Steps:
 | with a non-empty repo policy `pr.required_checks`, when the stored required-check evaluation (the poll's live-read one, read by the pr-ready readiness too; no cache gates here) says any required name is missing, pending or failed; `details` is `{repo, number, missing: [names], pending: [names], failed: [names]}`, the real names of that evaluation | `required_check_not_passed` | 3 |
 | the up-to-date gate finds the head behind: the current default-branch head, read fresh at merge time (the stored `default_branch`'s head, from GitHub), is neither the pull request's head nor an ancestor of it; a stacked pull request is never checked; `details` is `{repo, number, head, main}`, the head oid and the default branch; the message is `behind main, updated, waiting for gate`; the refusal queues no `update` Job (pro-d519) and arms an automatic merge (the up-to-date gate, above) | `head_behind_main` | 3 |
 | the repo allows no method: `squash`, `merge` and `rebase` are all false in the read of step 2a (only reached when the pull request is `OPEN` and `CLEAN`); `details` is `{repo, number, squash, merge, rebase}`; the message is `<owner/repo> allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #<n>. Allow one in the repo's settings.` | `no_merge_method` | 3 |
+| an external prerequisite of the pull request's Workflow (§9.5b) is unmet; `details` as in [refusals.md](refusals.md), nothing is written | `prereq_unmet` | 3 |
 | each `gh` call succeeds (also when `--match-head-commit` makes GitHub refuse, and the methods read of step 2a: a non-zero exit or an unparseable answer; the fallback `gh api` call of step 3 is one of these calls, and its failure's `details` are that call's `{argv, exit, stderr}`); `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
 The setting read of step 4 is never a `gh_failed`: a failed read is the `auto_delete_unread` warning, and the exit status does not change.
@@ -3248,6 +3294,8 @@ Runs the Manager's merge protocol for a green pull request the User names (air-d
 **The green-PR check:** on each engine tick, cpd checks for a green PR that has remained unmerged for 30 minutes and alerts both the Manager and the User. The Manager follows up by running this command for the PR.
 
 **Refusal:** when the cached `checks` of the pull request is not `passed`, the command is refused `checks_not_green` (exit 3) before any `gh` write (no `update-branch`, no `merge`).
+
+**Prerequisites:** when a Workflow owns the pull request (§9.5b), an unmet external prerequisite of that Workflow is refused `prereq_unmet` (exit 3) before any `gh` write, with `details` as in [refusals.md](refusals.md). A pull request no Workflow owns has none.
 
 The command takes the pull-request argument `<owner>/<repo>#<n>`; it does not select a Plan or Workflow. `gh` failures use `gh_failed` (exit 1; §1.3). The command's success output is one JSON value, as for every non-streaming command (§1.2).
 
@@ -7126,6 +7174,7 @@ Approves the pending deployments of a `deploy` item (contract §2.2 "The deploy 
 | the item is open | `item_closed` | 3 |
 | the item is `deploy` (a snoozed or dismissed one too); `details` `{item, kind}` | `not_approvable` | 3 |
 | its subject is `deploy:<owner>/<repo>#<run_id>` with `<run_id>` a u64; else the database holds an invalid row and nothing else is done | `store_failed` (a bad row) | 1 |
+| an external prerequisite of the deploy's Workflow (§9.5b) is unmet; `details` as in [refusals.md](refusals.md). Checked at enqueue, before the enqueue | `prereq_unmet` | 3 |
 | READ: `gh api` answers within 15 s with a JSON array of `{"environment": {"id": <u64>, "name": "<str>"}, "current_user_can_approve": <bool>, …}` (other members ignored); a failed call, a timeout or JSON of another shape | `gh_failed` | 1 |
 | WRITE (only when some entry is approvable): the POST answers within 15 s; a failed call | `gh_failed` | 1 |
 
