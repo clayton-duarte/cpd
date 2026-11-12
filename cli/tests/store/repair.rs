@@ -1,7 +1,7 @@
 //! Store repair tests (bug b23, Plan `store-repair`).
 //!
 //! Tests mac-pro's exact diverged migration case, copy dry-run,
-//! backup creation, ledger append, and verdict acceptance.
+//! backup creation, ledger append, verdict acceptance, and clean install compatibility.
 
 use std::fs;
 
