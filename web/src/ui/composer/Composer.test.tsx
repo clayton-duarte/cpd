@@ -319,3 +319,28 @@ it("a draft save quota error is shown", async () => {
   expect(alert!.textContent).toMatch(/draft|storage|quota/i);
   m.unmount();
 });
+
+it("Escape while busy calls onAbort", () => {
+  expect(false).toBe(true);
+});
+
+it("Escape while idle leaves draft intact", () => {
+  expect(false).toBe(true);
+});
+
+it("Escape closes open popup before aborting", () => {
+  expect(false).toBe(true);
+});
+
+it("Escape shows notice when abort is unsupported", () => {
+  expect(false).toBe(true);
+});
+
+it("Cmd+Backspace deletes to start of current line", () => {
+  expect(false).toBe(true);
+});
+
+it("Ctrl+U deletes to start of current line", () => {
+  expect(false).toBe(true);
+});
+

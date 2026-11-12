@@ -138,6 +138,11 @@ describe("hub connection", () => {
     expect(notReady.sent[0]).toMatchObject({ type: "cockpit.error", error: { code: "internal" } });
   });
 
+  it("session abort routes to the attached backend", async () => {
+    // Red test skeleton
+    expect(false).toBe(true);
+  });
+
   it("session attach selects the backend by session runner", async () => {
     const t = setup();
     await t.hub.handle({ type: "session.attach", sessionId: "pi-1" });
