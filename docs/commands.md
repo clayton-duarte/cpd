@@ -2674,7 +2674,7 @@ Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the 
 ### 9.4 `workflow add`
 
 ```
-cpd workflow add <key> --repo <path> --title <text> [--jira <KEY>] [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--jobs <file.json>] [--base <branch> | --base <key> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
+cpd workflow add <key> --repo <path> --title <text> [--jira <KEY>] [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config|coverage|refactor>] [--jobs <file.json>] [--base <branch> | --base <key> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
 ```
 
 Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an unlocked `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done`, and in a re-planned `plan` (`locked_at` set, A1), it is **appended**, like `job add` and engine `workflow-start` starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy`, `done` and a re-planned `plan` it also **moves the Plan back to `dispatch`** (A3, pro-d429; hs-d87: a merged Workflow can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the Workflow itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up Workflow is registered at once, even when it cannot run yet: `workflow add <key> --repo … --needs …`. Before the lock its template's stub drafts follow (§9.4); after the lock it takes `--jobs <file.json>`, which queues the template's Jobs (pro-d404: a Job that waits is queued with its needs, never a draft; contract §2.2 "A parked draft", rule 2). With `--adopt` it adopts an existing pull request whose head branch does not equal the stored `lead_branch` of any Workflow of that repo: cpd works it like a Plan (Jobs that address review comments and failing CI checks) and pushes to the pull request's own head branch, never a second pull request (pro-n8).
@@ -2698,7 +2698,7 @@ Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an 
 | `--base <plan>/<key>` | exclusive with `--adopt`. **Stack on a Workflow** (hs-d324, hs-d325): the Workflow `<key>` of Plan `<plan>` (this Plan's own included) becomes the **base Workflow** and the stored `base` is its Lead Branch, so the Workflow starts from that branch's head and its pull request targets it (contract §3.8 "Stacked Workflows"). The value is a Workflow when it has the form `<plan>/<key>` and a Plan `<plan>` exists, else a branch (contract §2.2 "A Workflow reference") |
 | `--needs <r1,r2>` | Workflow references (contract §2.2): keys of other Workflows of the Plan (`<plan>/<key>` of the Plan itself is read as the bare key; another Plan's is refused `workflow_other_plan`, hs-d522), that must be `merged` before this one starts, comma-separated, no duplicates (`usage`). Default: in phase `deploy` or `done` (the reopen, hs-d118), **every `merged` Workflow of the Plan**; in other phases none. Within a repo, stack instead (`--base <key>`); a need is for another repo's Workflow or a Workflow that must start from fresh `main` (contract §3.8 "Stacked Workflows") |
 | `--no-needs` | no needs, also in phase `deploy` or `done`; exclusive with `--needs` (`usage`) |
-| `--shape <tdd\|docs\|config>` | the template the Workflow starts with (hs-d341, contract §2.2 "Job kinds"; its stub drafts before the lock, queued with `--jobs` after it), default `tdd`: `<key>-docs` (kind `docs`), `<key>-tests` (`test`, needs `<key>-docs`), `<key>-impl` (`impl`, needs `<key>-tests`). **`docs`**: only `<key>-docs`; **`config`**: only `<key>-config`, kind `work`: a docs-only or config-only Workflow says so here and has no test Job. **Stored in `workflows.shape` and enforced** (hs-d497; contract §2.2 "Job kinds"): the kinds the Workflow may have (`shape_violation` at `job add`, `job edit --kind`) and the ones a `tdd` Workflow must keep (`shape_incomplete` at `plan review`, `plan lock` and `job cancel` typed by the Lead); never changed afterwards. `workflow cancel` of the whole Workflow is the way out and cancels the `test` and `impl` Jobs itself (§9.6, hs-d573) `workflow_exists`'s comparison includes it |
+| `--shape <tdd\|docs\|config\|coverage\|refactor>` | the template the Workflow starts with (hs-d341; `coverage` and `refactor` are the refactor protocol's shapes, §34; contract §2.2 "Job kinds"; its stub drafts before the lock, queued with `--jobs` after it), default `tdd`: `<key>-docs` (kind `docs`), `<key>-tests` (`test`, needs `<key>-docs`), `<key>-impl` (`impl`, needs `<key>-tests`). **`docs`**: only `<key>-docs`; **`config`**: only `<key>-config`, kind `work`: a docs-only or config-only Workflow says so here and has no test Job. **Stored in `workflows.shape` and enforced** (hs-d497; contract §2.2 "Job kinds"): the kinds the Workflow may have (`shape_violation` at `job add`, `job edit --kind`) and the ones a `tdd` Workflow must keep (`shape_incomplete` at `plan review`, `plan lock` and `job cancel` typed by the Lead); never changed afterwards. `workflow cancel` of the whole Workflow is the way out and cancels the `test` and `impl` Jobs itself (§9.6, hs-d573) `workflow_exists`'s comparison includes it |
 | `--jobs <file.json>` | **after the lock** (phase `dispatch`, `deploy` or `done`, or a re-planned `plan`; pro-d404, hs-d731): required for every Workflow not adopted (`--adopt`), a Workflow that waits for another Workflow included; the template's Jobs as decided work. One JSON object keyed by the template suffix (shape `tdd`: `docs`, `tests`, `impl`; `docs`: `docs`; `config`: `config`), each value `{"tier": "<T>", "spec": <the Spec object `job add --spec` takes; a test Job's has `tests` and `test_files`>}`; every key of the shape is required and no other key is allowed. Before the lock it is refused `usage` (in phase `plan` every Job is a draft). Effects in "The template" below |
 
 | Precondition | Code | Exit |
@@ -8435,4 +8435,52 @@ One bug record, every field (contract §2.2 "Bug record"), so **mitigation appli
 
 ## 34. The refactor protocol
 
-Status: skeleton, to be completed in this Attempt.
+Status: **designed, not yet built.** Decisions pro-d579 and pro-d581 (Context `cpd`), planned in Plan `refactor-protocol`; its Job `protocol-impl` builds it. Until that Job merges, the binary knows neither shape (`workflow add --shape` lists `tdd`, `docs` and `config`, §9.4), and no check below runs. The **Open points** (§34.5) are what the decisions leave to that Job. Evidence: **docs** (the decision records and the Plan's Jobs).
+
+The protocol makes a refactor safe by its tests: coverage is proven before the code changes, and the tests do not change while it does. [protocols.md](protocols.md) lists it in the registry.
+
+### 34.1 The rules
+
+1. **Coverage first.** Before any code change in a refactor, add tests in a `coverage` Workflow until no gap remains. The refactor's code change starts only then; the baseline of rule 5 is what shows it.
+2. **A green or merged base.** A `refactor` Workflow stacks on a `coverage` Workflow (`--base <coverage-key>`) that is green or merged.
+3. **Tests do not change.** A refactor Workflow's diff may not touch a test path: `*_test.rs`, anything under `tests/`, `*.test.ts`, or the repo's `test_files` globs. There is no in-place test approval: `cpd job approve-tests` does not apply to a refactor.
+4. **A bad test stops the refactor.** A test that fails after the refactor is one of two things and nothing else: a regression (the refactor is wrong, so fix the code) or a bad test (it pins the implementation, not the behaviour). A bad test stops the refactor Job, blocked on the coverage Workflow, not on the User. The Lead amends the coverage Workflow: the test is fixed to pin behaviour and stays green on the old code. Then the refactor takes the amended base (§34.4). A bad test is never fixed in place.
+5. **Coverage floor.** The baseline is the line and branch coverage of the files the refactor touches, measured on the coverage base branch. The refactor's gate fails if it lowers either.
+
+### 34.2 The shapes
+
+| Shape | Workflow | Base | Purpose |
+|---|---|---|---|
+| `coverage` | adds tests | the normal base (§9.4) | Until no gap remains (rule 1). Its tests pass on the code as it is; green or merged, it is the base a refactor needs (rule 2). |
+| `refactor` | changes code, not tests | `--base <coverage-key>` (rule 2), in the bare or `<plan>/<key>` form of §9.4 | The code change. Its diff is checked against rule 3 and its gate against rule 5. |
+
+```
+cpd workflow add <key> --repo <path> --title <text> --shape coverage
+cpd workflow add <key> --repo <path> --title <text> --shape refactor --base <coverage-key>
+```
+
+### 34.3 Validation rules and error codes
+
+| Check | When | Code | Exit (planned) |
+|---|---|---|---|
+| `--shape refactor` has a `--base` that names a `coverage` Workflow which is `green` or `merged` (rule 2) | `workflow add`, nothing written when refused | `base_coverage_required` | 3 |
+| the refactor's diff touches a test path (rule 3); the message names the file and says a bad test goes back to the coverage Workflow | Job submit, Job merge and `pr push` | `test_change_forbidden` | 3 |
+| a touched file's line or branch coverage is below the baseline (rule 5) | the refactor's gate | `coverage_below_baseline` (the gate fails) | 3 |
+| a test fails after the refactor (rule 4) | the refactor Job | none: the Job is blocked on the coverage Workflow (§34.4) | none |
+
+The three codes are the protocol's error codes. A refusal exits 3, as the state refusals of §9.4 do; `protocol-impl` sets the exit codes in the code, and this table follows it.
+
+### 34.4 Routing a bad test
+
+1. The refactor Job stops, blocked on the coverage Workflow.
+2. The Lead amends the coverage Workflow: the test is fixed to pin behaviour and is green on the code before the refactor. No test changes in the refactor Workflow.
+3. The coverage Workflow is green or merged again. The refactor Workflow takes the amended base. A stacked Workflow never rebases (§9.3, `stacked_rebase`), so the Lead runs `git -C <lead worktree> merge --no-edit origin/<coverage-branch>` and then `cpd pr push --workflow <refactor-key>` (§9.3).
+4. The stopped Job reruns: `cpd job retry <job> --tier <T>` (§5.4).
+
+### 34.5 Open points
+
+The decisions do not settle these. `protocol-impl` settles them and removes this list:
+
+- **Job kinds of the two shapes.** A `test` Job's red tests must fail before its implementation exists (§5.1, §7.5). Coverage tests pass on the code as it is, by design. So the kind of a coverage Job, and of a refactor's code Job, is open.
+- **Green.** The decisions say "green" and do not define it.
+- **Coverage tool.** None is configured in the repo (no coverage or mutation tool in any tracked config). The baseline's measuring tool is open. Mutation testing is omitted (A2).
