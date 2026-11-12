@@ -1,12 +1,11 @@
-// Skeleton commit for webui-adopt-impl: implementing supervisor port holder takeover and preview worktree path resolution
-
-//!
+//! WebUI server supervisor (pro-d541, pro-d542).
 //! Supervises WebUI production server on port 3333 and preview server on port 33333.
 //! Checks port availability using lsof (fallback to ss) before starting.
 //! Restarts crashed servers with backoff (>3 crashes in 10 minutes latches stopped).
 //! Restarts once when payload install marker (`run/install-restart.json`) is present.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde_json::json;
 use time::OffsetDateTime;
@@ -247,12 +246,40 @@ pub fn run_inner(engine: &mut Engine) -> Result<(), CpdError> {
     Ok(())
 }
 
-fn preview_worktree_exists(home: &CpdHome) -> bool {
-    let preview_dir = home.root().join("projects").join("cpd.preview");
-    if preview_dir.exists() {
-        return true;
+pub fn preview_worktree_path(home: &CpdHome) -> Option<PathBuf> {
+    if let Some(env_path) = std::env::var_os("CPD_WEB_PREVIEW_WORKTREE") {
+        let p = PathBuf::from(env_path);
+        if p.exists() {
+            return Some(p);
+        }
     }
-    home.run_dir().join("preview-web").exists()
+    // projects/cpd.preview.web under home root
+    let p1 = home.root().join("projects").join("cpd.preview.web");
+    if p1.exists() {
+        return Some(p1);
+    }
+    // sibling to home root (e.g. repo parent / install root's cpd.preview.web)
+    if let Some(parent) = home.root().parent() {
+        let p2 = parent.join("cpd.preview.web");
+        if p2.exists() {
+            return Some(p2);
+        }
+    }
+    // legacy paths for backwards compatibility with tests / earlier specs:
+    // home.root().join("projects/cpd.preview") or run_dir/preview-web
+    let p3 = home.root().join("projects").join("cpd.preview");
+    if p3.exists() {
+        return Some(p3);
+    }
+    let p4 = home.run_dir().join("preview-web");
+    if p4.exists() {
+        return Some(p4);
+    }
+    None
+}
+
+fn preview_worktree_exists(home: &CpdHome) -> bool {
+    preview_worktree_path(home).is_some()
 }
 
 fn handle_crash(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError> {
@@ -291,27 +318,147 @@ fn handle_crash(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError> 
     start_service(engine, kind)
 }
 
+/// Reads the command line of a process using `ps -o command= -p <pid>`.
+fn read_process_command(runner: &dyn Runner, pid: u32) -> Option<String> {
+    let ps_call = Call {
+        tool: "ps".to_owned(),
+        program: "ps".to_owned(),
+        args: vec![
+            "-o".to_owned(),
+            "command=".to_owned(),
+            "-p".to_owned(),
+            pid.to_string(),
+        ],
+        envs: Vec::new(),
+        cwd: None,
+        deadline: NO_DEADLINE,
+        stdin: None,
+        stderr_to: None,
+    };
+    if let Ok(res) = runner.run(&ps_call)
+        && res.status.success()
+    {
+        let cmd = String::from_utf8_lossy(&res.stdout).trim().to_string();
+        if !cmd.is_empty() {
+            return Some(cmd);
+        }
+    }
+    None
+}
+
+/// Checks whether the holder is considered the "same service" that can be taken over.
+///
+/// Rules:
+/// - `webui-prod` on 3333: command line naming `web/src/server/serve.ts` or `serve-prod.mjs`
+/// - `webui-preview` on 33333: command line running `vite`
+fn is_same_service(kind: ServiceKind, cmd: &str) -> bool {
+    match kind {
+        ServiceKind::Prod => {
+            cmd.contains("web/src/server/serve.ts") || cmd.contains("serve-prod.mjs")
+        }
+        ServiceKind::Preview => cmd.contains("vite"),
+    }
+}
+
 fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError> {
     let port = kind.port();
 
     // Check port availability first
     if let Some(holder) = detect_port_holder(engine.ports.runner.as_ref(), port) {
-        let err_msg = format_port_in_use_message(Some(&holder), port);
-        engine.log.line(&format!("webui: {err_msg}"));
-        engine.store.write(SOURCE, |tx| {
-            let event = NewEvent::error(
-                err_msg.clone(),
-                SOURCE,
-                "port_in_use",
-                &err_msg,
-                json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
-            );
-            append(tx, event)?;
-            Ok(())
-        })?;
-        let state = engine.webui.services.entry(kind).or_default();
-        state.latched_stopped = true;
-        return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
+        let cmd_opt = read_process_command(engine.ports.runner.as_ref(), holder.pid);
+        let can_takeover = cmd_opt
+            .as_deref()
+            .is_some_and(|cmd| is_same_service(kind, cmd));
+
+        if can_takeover {
+            let cmd = cmd_opt.as_deref().unwrap_or("");
+            // Send SIGTERM to holder
+            let holder_pid = Pid(holder.pid);
+            if engine.ports.spawn.signal(holder_pid, Signal::Term).is_ok() {
+                // Wait up to 10 seconds checking if port cleared or holder died
+                let mut cleared = false;
+                for _ in 0..10 {
+                    let still_held = if !engine.ports.spawn.alive(holder_pid) {
+                        false
+                    } else if let Some(h) = detect_port_holder(engine.ports.runner.as_ref(), port) {
+                        // If runner still returns a holder, check if it's the dead process in spawn
+                        h.pid == holder.pid && engine.ports.spawn.alive(holder_pid)
+                    } else {
+                        false
+                    };
+
+                    if !still_held {
+                        cleared = true;
+                        break;
+                    }
+                    engine
+                        .ports
+                        .clock
+                        .sleep(std::time::Duration::from_millis(100));
+                }
+
+                if cleared {
+                    // Successful takeover writes one line to run/watch.log and no Event
+                    engine.log.line(&format!(
+                        "webui: replaced port holder PID {} ({}) for {}",
+                        holder.pid,
+                        cmd,
+                        kind.name()
+                    ));
+                } else {
+                    // Takeover failed: port still held after wait
+                    let err_msg = format_port_in_use_message(Some(&holder), port);
+                    engine.log.line(&format!("webui: {err_msg}"));
+                    engine.store.write(SOURCE, |tx| {
+                        let event = NewEvent::error(
+                            err_msg.clone(),
+                            SOURCE,
+                            "port_in_use",
+                            &err_msg,
+                            json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
+                        );
+                        append(tx, event)?;
+                        Ok(())
+                    })?;
+                    return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
+                }
+            } else {
+                // Signal failed
+                let err_msg = format_port_in_use_message(Some(&holder), port);
+                engine.log.line(&format!("webui: {err_msg}"));
+                engine.store.write(SOURCE, |tx| {
+                    let event = NewEvent::error(
+                        err_msg.clone(),
+                        SOURCE,
+                        "port_in_use",
+                        &err_msg,
+                        json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
+                    );
+                    append(tx, event)?;
+                    Ok(())
+                })?;
+                return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
+            }
+        } else {
+            // Not the same service, or command line cannot be read:
+            // Service does not start, raises error event, latches stopped.
+            let err_msg = format_port_in_use_message(Some(&holder), port);
+            engine.log.line(&format!("webui: {err_msg}"));
+            engine.store.write(SOURCE, |tx| {
+                let event = NewEvent::error(
+                    err_msg.clone(),
+                    SOURCE,
+                    "port_in_use",
+                    &err_msg,
+                    json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
+                );
+                append(tx, event)?;
+                Ok(())
+            })?;
+            let state = engine.webui.services.entry(kind).or_default();
+            state.latched_stopped = true;
+            return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
+        }
     }
 
     // Launch service
@@ -325,7 +472,7 @@ fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError>
         ServiceKind::Preview => (
             "pnpm".to_owned(),
             vec!["run".to_owned(), "dev".to_owned()],
-            Some(engine.home.root().join("projects").join("cpd.preview")),
+            preview_worktree_path(&engine.home),
         ),
     };
 
