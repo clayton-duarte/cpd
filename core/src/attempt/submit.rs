@@ -296,6 +296,11 @@ fn run_checks(
         base,
         sha,
     )?;
+    if let Some(workflow) = &job.workflow {
+        env.store.read(|conn| {
+            crate::workflow::guard_refactor_tests(conn, plan, workflow, root, compare, sha)
+        })?;
+    }
     // The Job's Spec `touches` (§7.5, hs-n641): the same diff may not change a path outside them, unless a base merge
     // brought it, the repo's `[generated] paths` match it, or the Lead approved it (`job approve-touches`, read now so
     // an approval reaches a running Attempt).

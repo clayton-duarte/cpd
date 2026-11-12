@@ -165,3 +165,48 @@ pub fn run_workflow(command: WorkflowCommand) -> Result<Output, CpdError> {
         WorkflowCommand::Prereq(cmd) => prereq::run(cmd),
     }
 }
+
+/// Enforce test immutability on refactor diffs, including declared test-file globs.
+pub(crate) fn guard_refactor_tests(
+    conn: &rusqlite::Connection,
+    plan: &crate::ids::PlanId,
+    workflow: &str,
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+) -> Result<(), CpdError> {
+    let shape: String = conn.query_row(
+        "SELECT shape FROM workflows WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), workflow],
+        |row| row.get(0),
+    )?;
+    if shape != "refactor" {
+        return Ok(());
+    }
+    let jobs = crate::plan::jobs::load(conn, plan)?;
+    let patterns: Vec<&str> = jobs
+        .iter()
+        .filter_map(|j| j.test_files.as_ref())
+        .filter_map(|v| v.as_array())
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .collect();
+    let paths: Vec<_> = crate::git::tamper::changed_paths(root, base, head)?
+        .into_iter()
+        .filter(|p| {
+            p.ends_with("_test.rs")
+                || p.ends_with(".test.ts")
+                || p.split('/').any(|part| part == "tests")
+                || patterns
+                    .iter()
+                    .any(|pattern| crate::git::tamper::touches_matches(pattern, p))
+        })
+        .collect();
+    if !paths.is_empty() {
+        return Err(crate::error::CpdError::new(
+            crate::error::ErrorCode::TestChangeForbidden,
+            format!("Refactor workflows cannot change test files: {}. Amend the coverage workflow instead.", paths.join(", ")),
+        ).with("paths", serde_json::json!(paths)));
+    }
+    Ok(())
+}

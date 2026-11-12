@@ -43,6 +43,16 @@ fn push_held(args: Args) -> Result<Output, CpdError> {
         std::path::Path::new(&workflow.repo),
         &format!("refs/heads/{branch}"),
     )?;
+    env.store.read(|conn| {
+        crate::workflow::guard_refactor_tests(
+            conn,
+            &id,
+            key.as_str(),
+            std::path::Path::new(&workflow.repo),
+            &workflow.base,
+            &sha,
+        )
+    })?;
     if policy.gate.workflow == Gate::Local {
         require_clean_lead(&lead, &id, workflow)?;
         git::sync_lead(&lead, &branch)?;
