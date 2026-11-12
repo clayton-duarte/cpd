@@ -1,3 +1,4 @@
+import { Facts } from "../lib/state.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { registerExternalApproveTool } from "../lib/externalapprove.ts";
@@ -16,7 +17,7 @@ function setup(t: TestContext, role: string | undefined, ui = true) {
   // The Rust `pr approve` lands in the pg Workflow of Plan pr-slack-perm-guard, which will then make this override redundant.
   f.cpd.grammar = { ...grammar, "pr approve": { flags: { "--help": false, "--kind": true, "--plan": true, "--to": true, "--workflow": true }, positionals: { min: 0, max: 0 }, required: ["--kind", "--workflow"] } };
   const host: Host = createHost(f.pi, { env: process.env });
-  if (role !== undefined) host.run = { info: { role, name: "s-x", plan: role === "manager" ? null : "p1", planLead: role === "lead" }, facts: { ownPrompt: <T>(show: () => Promise<T>) => show() } } as unknown as Run;
+  if (role !== undefined) host.run = { info: { role, name: "s-x", plan: role === "manager" ? null : "p1", planLead: role === "lead" }, facts: new Facts() } as unknown as Run;
   host.ctx = (ui ? f.pi.ctx() : { ...f.pi.ctx(), ui: undefined }) as Host["ctx"];
   registerExternalApproveTool(host);
   const tool = f.pi.tools.find((x) => x.name === "cpd_external_approve");

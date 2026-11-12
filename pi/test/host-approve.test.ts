@@ -1,3 +1,4 @@
+import { Facts } from "../lib/state.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { createHost, type Host } from "../lib/host.ts";
@@ -17,7 +18,7 @@ function setup(t: TestContext, role: string | undefined, ui = true) {
   const f = new Fixture();
   t.after(() => f.close());
   const host: Host = createHost(f.pi, { env: process.env });
-  if (role !== undefined) host.run = { info: { role, name: NAME, plan: role === "manager" ? null : "p1", planLead: role === "lead" }, facts: { ownPrompt: <T>(show: () => Promise<T>) => show() } } as unknown as Run;
+  if (role !== undefined) host.run = { info: { role, name: NAME, plan: role === "manager" ? null : "p1", planLead: role === "lead" }, facts: new Facts() } as unknown as Run;
   host.ctx = (ui ? f.pi.ctx() : { ...f.pi.ctx(), ui: undefined }) as Host["ctx"];
   registerHostApproveTool(host);
   const tool = f.pi.tools.find((x) => x.name === "cpd_host_approve");
