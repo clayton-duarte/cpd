@@ -307,4 +307,3 @@ pub fn repair(home: &CpdHome, options: &RepairOptions) -> Result<RepairResult, C
 pub fn is_table_reconciliation_supported() -> bool {
     false
 }
-
