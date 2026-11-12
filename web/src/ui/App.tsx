@@ -205,7 +205,7 @@ export function App(props: AppProps): ReactElement {
   const inboxModel = useMemo(() => {
     const inbox = cockpit.inbox;
     if (inbox === null) return inbox;
-    const rows = inbox.rows.filter((r) => !(r.kind === "unread" && (r.sessionId === selectedSessionId || dismissedUnread.has(r.id))));
+    const rows = inbox.rows.filter((r) => !(r.kind === "unread" && ((selectedSessionId !== null && r.sessionId === selectedSessionId) || dismissedUnread.has(r.id))));
     return rows.length === inbox.rows.length ? inbox : { ...inbox, rows, openCount: rows.length };
   }, [cockpit.inbox, selectedSessionId]);
 
