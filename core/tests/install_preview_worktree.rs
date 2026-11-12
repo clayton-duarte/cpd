@@ -215,38 +215,27 @@ mod install_preview_worktree {
     }
 
     #[test]
-    fn installs_cpd_app_shell_on_macos_only() {
-        // Part 1: On macOS (macos = true), install downloads/unpacks shell app-v0.1.0
-        let mac_rig = Rig::new(true);
-        let (mac_exit, mac_stderr) = mac_rig.run();
-        assert_eq!(mac_exit, 0, "{mac_stderr}");
+    fn installs_cpd_app_shell_retired() {
+        // Per decision pro-d567, CPD.app is retired and browser is the official interface.
+        // install preview worktree does not attempt to download legacy CPD.app shell on macOS or Linux.
+        for macos in [true, false] {
+            let rig = Rig::new(macos);
+            let (exit, stderr) = rig.run();
+            assert_eq!(exit, 0, "{stderr}");
 
-        let mac_gh_calls = mac_rig.calls_of("gh");
-        let has_shell_download = mac_gh_calls.iter().any(|c| {
-            c.args.contains(&"release".to_string())
-                && c.args.contains(&"download".to_string())
-                && (c.args.contains(&"app-v0.1.0".to_string())
-                    || c.args
-                        .windows(2)
-                        .any(|w| w[0] == "--pattern" && w[1].contains("app")))
-        });
-        assert!(
-            has_shell_download,
-            "expected gh release download for app-v0.1.0 on macOS, got gh calls: {mac_gh_calls:?}"
-        );
-
-        // Part 2: On Linux (macos = false), install skips shell download
-        let linux_rig = Rig::new(false);
-        let (linux_exit, linux_stderr) = linux_rig.run();
-        assert_eq!(linux_exit, 0, "{linux_stderr}");
-
-        let linux_gh_calls = linux_rig.calls_of("gh");
-        let has_linux_download = linux_gh_calls.iter().any(|c| {
-            c.args.contains(&"release".to_string()) && c.args.contains(&"download".to_string())
-        });
-        assert!(
-            !has_linux_download,
-            "shell install must be skipped on Linux, but got gh calls: {linux_gh_calls:?}"
-        );
+            let gh_calls = rig.calls_of("gh");
+            let has_shell_download = gh_calls.iter().any(|c| {
+                c.args.contains(&"release".to_string())
+                    && c.args.contains(&"download".to_string())
+                    && (c.args.contains(&"app-v0.1.0".to_string())
+                        || c.args
+                            .windows(2)
+                            .any(|w| w[0] == "--pattern" && w[1].contains("app")))
+            });
+            assert!(
+                !has_shell_download,
+                "shell download must not be attempted (macos={macos}), but got gh calls: {gh_calls:?}"
+            );
+        }
     }
 }
