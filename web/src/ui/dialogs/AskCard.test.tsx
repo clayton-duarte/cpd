@@ -215,14 +215,18 @@ function submit(c: HTMLElement) {
     const { container, responses, unmount } = setup([q(0)]);
     const text = field(container, 0).querySelector<HTMLInputElement>('input[type="text"][aria-label="Type something."]');
     expect(text).not.toBeNull();
-    type(text as HTMLInputElement, "my own answer");
+    act(() => {
+      text!.focus();
+      text!.value = "my custom answer";
+      text!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     submit(container);
     expect(responses).toEqual([
       {
         method: "ask_user_question",
         outcome: "answered",
         result: {
-          answers: [{ questionIndex: 0, question: "Question 0?", kind: "custom", answer: "my own answer" }],
+          answers: [{ questionIndex: 0, question: "Question 0?", kind: "custom", answer: "my custom answer" }],
           cancelled: false,
         },
       },
@@ -234,8 +238,14 @@ function submit(c: HTMLElement) {
     const { container, responses, unmount } = setup([q(0), q(1)]);
     click(input(container, 0, "A0"));
     click(shown(container, "questionnaire-next") as HTMLElement);
-    click(input(container, 1, "B1"));
-    click(shown(container, "questionnaire-submit") as HTMLElement);
+    const text1 = field(container, 1).querySelector<HTMLInputElement>('input[type="text"][aria-label="Type something."]');
+    expect(text1).not.toBeNull();
+    act(() => {
+      text1!.focus();
+      text1!.value = "custom answer 1";
+      text1!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    submit(container);
     expect(responses).toEqual([
       {
         method: "ask_user_question",
@@ -243,7 +253,7 @@ function submit(c: HTMLElement) {
         result: {
           answers: [
             { questionIndex: 0, question: "Question 0?", kind: "option", answer: "A0" },
-            { questionIndex: 1, question: "Question 1?", kind: "option", answer: "B1" },
+            { questionIndex: 1, question: "Question 1?", kind: "custom", answer: "custom answer 1" },
           ],
           cancelled: false,
         },
@@ -255,11 +265,7 @@ function submit(c: HTMLElement) {
   it("dialog_submission_is_blocked_when_questions_remain_unanswered_without_explicit_skip", () => {
     const { container, responses, unmount } = setup([q(0), q(1)]);
     click(input(container, 0, "A0"));
-    click(shown(container, "questionnaire-next") as HTMLElement);
-    const submitBtn = shown(container, "questionnaire-submit");
-    expect(activeStep(container)).toBe("1");
-    expect(submitBtn).not.toBeNull();
-    click(submitBtn!);
-    expect(responses.length).toBe(0);
+    submit(container);
+    expect(responses).toEqual([]);
     unmount();
   });

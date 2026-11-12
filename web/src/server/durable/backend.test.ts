@@ -521,7 +521,24 @@ describe("durable backend", () => {
     });
 
     it("plan_review_changes_writes_feedback_file_and_passes_it_to_cpd_plan_decide_reject", async () => {
-      // Stub
+      const reviewEntry = (id: number, n: string): Obj => ({
+        id,
+        conversationId: "root",
+        kind: "cpd-plan-review",
+        data: { review: n, status: "pending" },
+      });
+      const { cpd, handle } = await setup([viewFrame([reviewEntry(1, "7")])]);
+      await handle.respond("review:7", { method: "cpd_plan_review", outcome: "changes", feedback: "rename the step" });
+      expect(cpd.json).toHaveBeenCalledWith([
+        "plan",
+        "decide",
+        "7",
+        "--reject",
+        "--feedback-file",
+        expect.stringMatching(/feedback-7\.md$/),
+        "--plan",
+        "plan",
+      ]);
     });
   });
 });
