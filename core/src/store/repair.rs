@@ -236,7 +236,9 @@ pub fn apply_repair_in_txn(
 
         // PRAGMA foreign_key_check
         {
-            let mut stmt = tx.prepare("PRAGMA foreign_key_check").map_err(CpdError::from)?;
+            let mut stmt = tx
+                .prepare("PRAGMA foreign_key_check")
+                .map_err(CpdError::from)?;
             let violations: Vec<(String, Option<i64>, String)> = stmt
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
                 .map_err(CpdError::from)?
@@ -251,10 +253,14 @@ pub fn apply_repair_in_txn(
         }
 
         // Verify generated triggers match
-        if let Some((name, expected, found)) = schema::generated_mismatch(&tx).map_err(CpdError::from)? {
+        if let Some((name, expected, found)) =
+            schema::generated_mismatch(&tx).map_err(CpdError::from)?
+        {
             return Err(CpdError::new(
                 ErrorCode::StoreFailed,
-                format!("generated trigger mismatch for {name}: expected {expected}, found {found:?}"),
+                format!(
+                    "generated trigger mismatch for {name}: expected {expected}, found {found:?}"
+                ),
             ));
         }
 
@@ -517,12 +523,11 @@ pub fn detect_table_drift(conn: &Connection) -> Result<Vec<String>, CpdError> {
         )
         .optional()
         .map_err(CpdError::from)?;
-    if let Some(sql) = jobs_sql {
-        if sql.contains("waiting_on IN ('lead', 'user')")
-            || sql.contains("CHECK (waiting_on IS NULL OR waiting_on IN")
-        {
-            drifted.push("jobs".to_string());
-        }
+    if let Some(sql) = jobs_sql
+        && (sql.contains("waiting_on IN ('lead', 'user')")
+            || sql.contains("CHECK (waiting_on IS NULL OR waiting_on IN"))
+    {
+        drifted.push("jobs".to_string());
     }
 
     let incident_cols: Vec<String> = conn
@@ -536,10 +541,10 @@ pub fn detect_table_drift(conn: &Connection) -> Result<Vec<String>, CpdError> {
     if !incident_cols.is_empty() {
         let lead_pos = incident_cols.iter().position(|c| c == "lead");
         let until_plan_pos = incident_cols.iter().position(|c| c == "until_plan");
-        if let (Some(l), Some(u)) = (lead_pos, until_plan_pos) {
-            if u < l {
-                drifted.push("incident".to_string());
-            }
+        if let (Some(l), Some(u)) = (lead_pos, until_plan_pos)
+            && u < l
+        {
+            drifted.push("incident".to_string());
         }
     }
 
