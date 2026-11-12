@@ -34,7 +34,7 @@ const INCIDENT: &str = "@cpd_incident";
 const HELD: &str = "SELECT count(*) FROM job_tenants WHERE pool = 'workers'";
 
 /// The glyph between the three numbers (User, hs-d749): a private-use Nerd Font glyph, one cell wide like the buttons' glyphs.
-const SEPARATOR: char = '\u{f0798}';
+const SEPARATOR: char = '·';
 
 /// The three numbers of the StatusBar.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
