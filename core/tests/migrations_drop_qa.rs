@@ -31,6 +31,7 @@ fn raw(home: &CpdHome) -> Connection {
 /// schema: its undo deletes the one `event_kinds` row it inserted, so the migration can run again; so does `loop-guard-trip`'s.
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
+    ("workflow_prereqs", "DROP TABLE workflow_prereqs"),
     ("workflows", "ALTER TABLE workflows DROP COLUMN repair"),
     (
         "event_kinds",
