@@ -239,7 +239,7 @@ impl Store {
         let mut persist = persist;
         let mut wait = Wait::new();
         loop {
-            let result = Store::open_catalog(clock, home, busy_ms, &Catalog::BUILT_IN);
+            let result = Store::open_catalog(clock, home, busy_ms, &Catalog::BUILT_IN, false);
             if let (Err(e), Some(since)) = (&result, wait.since)
                 && is_transient(e)
                 && clock.now().saturating_duration_since(since) >= lock::MIGRATION_WAIT_CEILING
@@ -254,6 +254,33 @@ impl Store {
         }
     }
 
+    /// [`Store::open`] for `cpd host repair`: tolerates a diverged migration (`migration_changed`)
+    /// without running migrations or modifying the store, so repair can inspect and repair it.
+    pub fn open_for_repair(home: &CpdHome, busy_ms: u64) -> Result<Store, CpdError> {
+        Store::open_for_repair_with(&SystemClock, home, busy_ms)
+    }
+
+    /// [`Store::open_for_repair`] on `clock`.
+    pub fn open_for_repair_with(
+        clock: &dyn Clock,
+        home: &CpdHome,
+        busy_ms: u64,
+    ) -> Result<Store, CpdError> {
+        let mut wait = Wait::new();
+        loop {
+            let result = Store::open_catalog(clock, home, busy_ms, &Catalog::BUILT_IN, true);
+            if let (Err(e), Some(since)) = (&result, wait.since)
+                && is_transient(e)
+                && clock.now().saturating_duration_since(since) >= lock::MIGRATION_WAIT_CEILING
+            {
+                return result;
+            }
+            if let Some(store) = settle(clock, Duration::MAX, &mut None, &mut wait, result)? {
+                return Ok(store);
+            }
+        }
+    }
+
     /// [`Store::open`] with the migrations and the pinned hash of `catalog`:
     /// the tests' way to run migrations this binary does not have.
     fn open_catalog(
@@ -261,6 +288,7 @@ impl Store {
         home: &CpdHome,
         busy_ms: u64,
         catalog: &Catalog<'_>,
+        for_repair: bool,
     ) -> Result<Store, CpdError> {
         let path = home.db();
         // §4.2: `locks/store.lock` guards only the store's one-time setup — the WAL switch of a missing database
@@ -274,7 +302,7 @@ impl Store {
             Err(e) if is_transient(&e) => false,
             Err(e) => return Err(e),
         };
-        let needs_setup = missing || !Self::is_up_to_date(&path, catalog, busy_ms)?;
+        let needs_setup = missing || !Self::is_up_to_date(&path, catalog, busy_ms, for_repair)?;
         if !needs_setup {
             // §1.4: the setup lock creates `locks/` on its way; this open takes no lock, but must still leave
             // the directory, since other parts of cpd write files in it (resource locks, the writer's record)
@@ -314,11 +342,21 @@ impl Store {
     /// Whether the existing store at `path` needs no migration, judged read-only: no lock, no migration, no write.
     /// A store that cannot be read right now (another connection holds it exclusively) is judged as needing setup,
     /// so the caller takes the lock, as every open did before (§4.2).
-    fn is_up_to_date(path: &Path, catalog: &Catalog<'_>, busy_ms: u64) -> Result<bool, CpdError> {
+    fn is_up_to_date(
+        path: &Path,
+        catalog: &Catalog<'_>,
+        busy_ms: u64,
+        for_repair: bool,
+    ) -> Result<bool, CpdError> {
         let read = || -> Result<bool, CpdError> {
             let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             conn.busy_timeout(Duration::from_millis(busy_ms))?;
-            Ok(verdict_with(&conn, catalog)?.into_plan()?.is_none())
+            let verdict = verdict_with(&conn, catalog)?;
+            match verdict.into_plan() {
+                Ok(plan) => Ok(plan.is_none()),
+                Err(e) if for_repair && e.code() == ErrorCode::MigrationChanged => Ok(true),
+                Err(e) => Err(e),
+            }
         };
         match read() {
             Ok(up_to_date) => Ok(up_to_date),
@@ -1453,6 +1491,7 @@ mod tests {
                 named,
                 schema_hash: &pinned,
             },
+            false,
         )
     }
 

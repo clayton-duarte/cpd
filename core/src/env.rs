@@ -69,6 +69,35 @@ impl Env {
             catalog: None,
         })
     }
+
+    /// Opens `$CPD_HOME` for `cpd host repair`: tolerates `migration_changed` without running
+    /// migrations or writing to the store, so repair can reach divergence detection, confirmation,
+    /// and reconciliation.
+    pub fn open_for_repair() -> Result<Env, CpdError> {
+        Env::open_for_repair_with(&Ports::current())
+    }
+
+    /// [`Env::open_for_repair`] on `ports`.
+    pub fn open_for_repair_with(ports: &Ports) -> Result<Env, CpdError> {
+        Env::open_home_for_repair_with(ports, CpdHome::from_env()?)
+    }
+
+    /// [`Env::open_for_repair`] for a specific `home` on `ports`.
+    pub fn open_home_for_repair_with(ports: &Ports, home: CpdHome) -> Result<Env, CpdError> {
+        let config = Config::load(&home)?;
+        let store = Store::open_for_repair_with(
+            &*ports.clock,
+            &home,
+            u64::from(config.timeouts.store_busy_ms),
+        )?;
+        Ok(Env {
+            home,
+            config,
+            store,
+            ports: ports.clone(),
+            catalog: None,
+        })
+    }
 }
 
 #[cfg(test)]
