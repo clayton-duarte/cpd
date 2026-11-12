@@ -187,4 +187,124 @@ describe("PlanView DAG", () => {
     expect(legend?.textContent).toContain("Depends on (needs)");
     m.unmount();
   });
+
+  it("routes inter-workflow edges in left gutter with distinct lanes avoiding workflow cards", () => {
+    // 3 stacked workflows: wf-1 -> wf-2, wf-2 -> wf-3, wf-1 -> wf-3.
+    // wf-1 feeds wf-3 with wf-2 between them, plus parallel edges passing/touching intermediate card.
+    const plan = createPlan([
+      {
+        key: "wf-1",
+        title: "Workflow 1",
+        repo: "repo",
+        base: "main",
+        status: "open",
+        needs: [],
+        jobKeys: [],
+        pr: null,
+      },
+      {
+        key: "wf-2",
+        title: "Workflow 2",
+        repo: "repo",
+        base: "main",
+        needs: ["wf-1"],
+        status: "open",
+        jobKeys: [],
+        pr: null,
+      },
+      {
+        key: "wf-3",
+        title: "Workflow 3",
+        repo: "repo",
+        base: "main",
+        needs: ["wf-1", "wf-2"],
+        status: "open",
+        jobKeys: [],
+        pr: null,
+      },
+    ]);
+
+    const m = mount(<PlanView plan={plan} onAction={vi.fn()} />);
+
+    const canvas = m.container.querySelector('[data-part="wf-canvas"]') as HTMLElement;
+    expect(canvas).not.toBeNull();
+
+    const edge1to3 = m.container.querySelector('path[data-wf-edge="wf-1>wf-3"]');
+    const edge1to2 = m.container.querySelector('path[data-wf-edge="wf-1>wf-2"]');
+    const edge2to3 = m.container.querySelector('path[data-wf-edge="wf-2>wf-3"]');
+
+    expect(edge1to3).not.toBeNull();
+    expect(edge1to2).not.toBeNull();
+    expect(edge2to3).not.toBeNull();
+
+    // 1) Every inter-Workflow edge path segment has x < workflowCardLeft
+    // (no segment intersects any Workflow card's bounding box).
+    // The edge path is M{xL} {ys}H{lx}V{yt}H{xL} where lx < workflowCardLeft,
+    // and stubs touch the card only at its left edge (x = xL = workflowCardLeft).
+    // Specifically, for wf-1 -> wf-3 passing intermediate card wf-2, the vertical run and path
+    // must run in the left gutter strictly to the left of the cards, never crossing intermediate cards.
+    const d1to3 = edge1to3?.getAttribute("d") ?? "";
+    const d1to2 = edge1to2?.getAttribute("d") ?? "";
+    const d2to3 = edge2to3?.getAttribute("d") ?? "";
+
+    // The legacy curve M...C... cut through the middle of intermediate cards.
+    // Under left-gutter routing, paths use orthogonal segments M...H...V...H... avoiding cards.
+    expect(d1to3).not.toContain("C");
+    expect(d1to2).not.toContain("C");
+    expect(d2to3).not.toContain("C");
+
+    // Path segments syntax: M{xL} {ys}H{lx}V{yt}H{xL}
+    const pathRegex = /^M\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*H\s*(\d+(?:\.\d+)?)\s*V\s*(\d+(?:\.\d+)?)\s*H\s*(\d+(?:\.\d+)?)$/;
+    const m1to3 = d1to3.match(pathRegex);
+    expect(m1to3).not.toBeNull();
+    if (m1to3) {
+      const startX = Number(m1to3[1]);
+      const laneX = Number(m1to3[3]);
+      const endX = Number(m1to3[5]);
+      // Leaves and enters at the card left edge
+      expect(startX).toBe(endX);
+      // The vertical segment is placed in the left gutter outside the cards (x < workflowCardLeft)
+      expect(laneX).toBeLessThan(startX);
+    }
+
+    // 2) Parallel edges passing an intermediate card get distinct x tracks/lanes in the left gutter
+    // so parallel edges do not overlap each other or touch cards.
+    const lane1to3 = edge1to3?.getAttribute("data-lane");
+    const lane1to2 = edge1to2?.getAttribute("data-lane");
+    const lane2to3 = edge2to3?.getAttribute("data-lane");
+
+    expect(lane1to3).not.toBeNull();
+    expect(lane1to2).not.toBeNull();
+    expect(lane2to3).not.toBeNull();
+    // Conflicting/parallel edges across intermediate cards must have distinct lanes
+    const lanes = new Set([lane1to3, lane1to2, lane2to3]);
+    expect(lanes.size).toBe(3);
+
+    // 3) Arrow leaves source Workflow on left edge and enters target Workflow on left edge with an arrowhead
+    const arrowheads = Array.from(m.container.querySelectorAll('[data-part="wf-arrowhead"]'));
+    expect(arrowheads.length).toBe(3);
+
+    // Arrowhead pointing right into target's left edge: d = M{xL-6} {yt-4}L{xL} {yt}L{xL-6} {yt+4}
+    // Must not be the legacy downward-pointing arrowhead M{x2-4} {y2-6}L{x2} {y2}L{x2+4} {y2-6}
+    const arrowD1to3 = arrowheads[0]?.getAttribute("d") ?? "";
+    const arrowRegex = /^M\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*L\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*L\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$/;
+    expect(arrowD1to3).toMatch(arrowRegex);
+    const arrowMatch = arrowD1to3.match(arrowRegex);
+    if (arrowMatch) {
+      const ax1 = Number(arrowMatch[1]);
+      const ay1 = Number(arrowMatch[2]);
+      const tipX = Number(arrowMatch[3]);
+      const tipY = Number(arrowMatch[4]);
+      const ax2 = Number(arrowMatch[5]);
+      const ay2 = Number(arrowMatch[6]);
+      // Tip points to the card's left boundary: tipX > ax1 and tipX > ax2 (pointing right)
+      expect(tipX).toBeGreaterThan(ax1);
+      expect(tipX).toBeGreaterThan(ax2);
+      expect(ay1).toBeLessThan(tipY);
+      expect(ay2).toBeGreaterThan(tipY);
+    }
+
+    m.unmount();
+  });
 });
+
