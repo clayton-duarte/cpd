@@ -39,13 +39,15 @@ test("cpd_secret_approve is refused for a Worker and for no run", async (t) => {
 
 test("cpd_secret_approve shows the User the action, vault, item and field", async (t) => {
   for (const role of ["lead", "manager"]) {
-    const { f, tool } = setup(t, role);
+    const { f, tool, host } = setup(t, role);
     const running = f.pi.runTool(tool, ARGS);
     const d = await waitFor("the dialog", () => f.pi.openDialog("select"));
+    assert.equal(host.run!.facts.wanted().state, "blocked");
     assert.equal(d.title, TITLE, role);
     assert.deepEqual(d.options, ["Allow once", "Deny"], role);
     d.answer("Deny");
     await running;
+    assert.notEqual(host.run!.facts.wanted().state, "blocked");
   }
 });
 

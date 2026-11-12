@@ -5,7 +5,7 @@ import { registerExternalApproveTool } from "../lib/externalapprove.ts";
 import { takeSlackSend, resetSlackGrants } from "../lib/externalguard.ts";
 import { createHost, type Host } from "../lib/host.ts";
 import type { Run } from "../lib/run.ts";
-import { Fixture } from "./fake.ts";
+import { Fixture, waitFor } from "./fake.ts";
 import { grammar } from "./usage.ts";
 
 // Decision pro-d451: the tool cpd_external_approve, driven through the fake host (model: host-approve.test.ts).
@@ -41,7 +41,7 @@ test("the tool cpd_external_approve registers once per host", (t) => {
 test("pr_reply shows the workflow, the item and the text and runs cpd pr approve --kind reply on Allow once", async (t) => {
   const { f, tool, prCalls } = setup(t, "lead");
   const running = f.pi.runTool(need(tool), REPLY);
-  const d = f.pi.openDialog("select");
+  const d = await waitFor("approval dialog", () => f.pi.openDialog("select"));
   assert.ok(d, "the dialog is open");
   assert.ok(d.title.includes("wf-1") && d.title.includes("item-42") && d.title.includes(REPLY.message), d.title);
   assert.deepEqual(d.options, ["Allow once", "Deny"]);
@@ -60,7 +60,7 @@ test("pr_reply refuses an empty to before any dialog", async (t) => {
 test("pr_post runs cpd pr approve --kind post on Allow once", async (t) => {
   const { f, tool, prCalls } = setup(t, "lead");
   const running = f.pi.runTool(need(tool), POST);
-  const d = f.pi.openDialog("select");
+  const d = await waitFor("approval dialog", () => f.pi.openDialog("select"));
   assert.ok(d, "the dialog is open");
   assert.ok(d.title.includes("wf-1"), d.title);
   d.answer("Allow once");
@@ -72,7 +72,7 @@ test("Deny runs nothing", async (t) => {
   for (const params of [REPLY, POST, SLACK]) {
     const { f, tool, prCalls } = setup(t, "lead");
     const running = f.pi.runTool(need(tool), params);
-    const d = f.pi.openDialog("select");
+    const d = await waitFor("approval dialog", () => f.pi.openDialog("select"));
     assert.ok(d, `${params.kind}: the dialog is open`);
     d.answer("Deny");
     const out = await running;
@@ -85,7 +85,7 @@ test("Deny runs nothing", async (t) => {
 test("slack_send shows the channel and the whole message and records a one-shot grant on Allow once", async (t) => {
   const { f, tool } = setup(t, "manager");
   const running = f.pi.runTool(need(tool), SLACK);
-  const d = f.pi.openDialog("select");
+  const d = await waitFor("approval dialog", () => f.pi.openDialog("select"));
   assert.ok(d, "the dialog is open");
   assert.ok(d.title.includes("C123") && d.title.includes("1700.01") && d.title.includes(SLACK.message), d.title);
   d.answer("Allow once");
@@ -97,7 +97,7 @@ test("slack_send shows the channel and the whole message and records a one-shot 
   assert.equal(takeSlackSend("mcp__slack__slack_send_message", input), false, "one-shot");
 
   const again = f.pi.runTool(need(tool), { ...SLACK, slack_tool: "slack_send_message_draft" });
-  f.pi.openDialog("select")?.answer("Allow once");
+  (await waitFor("approval dialog", () => f.pi.openDialog("select"))).answer("Allow once");
   await again;
   assert.equal(takeSlackSend("mcp__slack__slack_send_message_draft", input), true, "draft grant");
 });
@@ -119,7 +119,7 @@ test("the pr kinds are for a Plan Lead only and slack_send for a Lead or a Manag
   for (const role of ["lead", "manager"]) {
     const { f, tool } = setup(t, role);
     const running = f.pi.runTool(need(tool), SLACK);
-    const d = f.pi.openDialog("select");
+    const d = await waitFor("approval dialog", () => f.pi.openDialog("select"));
     assert.ok(d, `${role} slack: the dialog is open`);
     d.answer("Deny");
     await running;
