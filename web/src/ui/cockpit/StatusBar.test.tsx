@@ -64,6 +64,13 @@ it("workers segment renders the TUI text from the serve status", () => {
   expect(part(c, "workers")?.textContent).toBe(`workers 3\u{f0798}2\u{f0798}9/6`);
 });
 
+it("workers segment contains no private-use glyphs", () => {
+  const pane: PaneStatus = { ...basePane, workers: { queued: 3, waiting: 2, tenants: 9, limit: 6 } };
+  const c = bar(barStatus(pane, 0));
+  const text = part(c, "workers")?.textContent ?? "";
+  expect(text).not.toMatch(/[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u);
+});
+
 it("incident pill renders elapsed minutes while incident is on", () => {
   const pane: PaneStatus = { ...basePane, incident: { startedAt: "2026-11-08T05:00:00Z", lead: "lead-1" } };
   const c = bar(barStatus(pane, Date.parse("2026-11-08T05:05:30Z")));
