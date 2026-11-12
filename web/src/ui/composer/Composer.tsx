@@ -158,7 +158,8 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
           props.onAbort();
         } else {
           e.preventDefault();
-          setAbortNotice(capabilities?.abort?.reason ?? "Abort is not supported for this session");
+          const reason = capabilities?.abort && !capabilities.abort.supported ? capabilities.abort.reason : "Abort is not supported for this session";
+          setAbortNotice(reason);
         }
       }
       return;
