@@ -384,6 +384,12 @@ fn preview_sync_preserves_wip_and_resets_to_main() {
     let preview_worktree = rig.install.root.parent().unwrap().join("cpd.preview.web");
     fs::create_dir_all(&preview_worktree).unwrap();
 
+    let _ = (*rig.fakes.runner).clone().on(
+        "git",
+        |c| c.args.iter().any(|a| a == "diff"),
+        Reply::ok("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n"),
+    );
+
     let (exit, stderr) = rig.run();
     assert_eq!(exit, 0, "{stderr}");
 
@@ -446,6 +452,12 @@ fn preview_sync_conflict_leaves_main_and_reports_error() {
     let preview_worktree = rig.install.root.parent().unwrap().join("cpd.preview.web");
     fs::create_dir_all(&preview_worktree).unwrap();
 
+    let _ = (*rig.fakes.runner).clone().on(
+        "git",
+        |c| c.args.iter().any(|a| a == "diff"),
+        Reply::ok("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n"),
+    );
+
     // Script git apply to simulate merge conflict
     let _ = (*rig.fakes.runner).clone().on(
         "git",
@@ -474,5 +486,49 @@ fn preview_sync_conflict_leaves_main_and_reports_error() {
     assert!(
         stderr.contains("conflict") || stderr.contains("preview sync"),
         "expected conflict or preview sync error report on stderr, got: {stderr} (exit {exit})"
+    );
+}
+
+#[test]
+fn preview_sync_skips_git_apply_when_diff_is_empty() {
+    // Bug b30: when git diff is empty (no uncommitted WIP), preview sync resets to
+    // origin/main and runs pnpm install without invoking git apply (avoiding phantom conflicts).
+    let rig = Rig::new(false);
+    let preview_worktree = rig.install.root.parent().unwrap().join("cpd.preview.web");
+    fs::create_dir_all(&preview_worktree).unwrap();
+
+    let (exit, stderr) = rig.run();
+    assert_eq!(exit, 0, "{stderr}");
+
+    let git_calls = rig.argv("git");
+    let preview_path = preview_worktree.to_str().unwrap();
+
+    let reset_to_main = git_calls.iter().any(|args| {
+        args.iter().any(|a| a.contains(preview_path))
+            && args.iter().any(|a| a == "reset")
+            && args.iter().any(|a| a == "origin/main" || a == "--hard")
+    });
+    assert!(
+        reset_to_main,
+        "expected git reset to origin/main in preview worktree, got git calls: {git_calls:?}"
+    );
+
+    let applied_patch = git_calls.iter().any(|args| {
+        args.iter().any(|a| a.contains(preview_path)) && args.iter().any(|a| a == "apply")
+    });
+    assert!(
+        !applied_patch,
+        "expected git apply to be skipped when diff is empty, got git calls: {git_calls:?}"
+    );
+
+    let pnpm_calls = rig.argv("pnpm");
+    let pnpm_in_preview = pnpm_calls.iter().any(|args| {
+        args.windows(2)
+            .any(|w| w[0] == "--dir" && w[1] == preview_path)
+            && args.iter().any(|a| a == "install")
+    });
+    assert!(
+        pnpm_in_preview,
+        "expected pnpm install in preview worktree, got pnpm calls: {pnpm_calls:?}"
     );
 }
