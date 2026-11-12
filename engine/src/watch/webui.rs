@@ -1,4 +1,5 @@
-//! WebUI server supervisor (pro-d541, pro-d542).
+// Skeleton commit for webui-adopt-impl: implementing supervisor port holder takeover and preview worktree path resolution
+
 //!
 //! Supervises WebUI production server on port 3333 and preview server on port 33333.
 //! Checks port availability using lsof (fallback to ss) before starting.
