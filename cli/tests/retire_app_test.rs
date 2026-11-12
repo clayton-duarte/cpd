@@ -18,8 +18,27 @@ mod retire_app_test {
     /// and no `gh release create app-v*` release command is run.
     #[test]
     fn desktop_release_command_removed() {
-        panic!(
-            "desktop_release_command_removed: stub red test for pro-d567 retiring desktop release"
+        let fx = Fx::with_ports();
+
+        // `cpd desktop release` subcommand must be rejected with exit code 2 (usage)
+        let run = fx.cpd(&["desktop", "release"]);
+        assert_eq!(
+            run.exit, 2,
+            "cpd desktop release must be rejected with exit code 2 (usage), got: {:?}",
+            run
+        );
+        let json = run.json();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"]["code"], "usage");
+
+        // Verify no `gh release create app-v*` was attempted
+        let gh_calls = fx.fakes.runner.calls();
+        let app_v_release_attempted = gh_calls
+            .iter()
+            .any(|c| c.program == "gh" && c.args.iter().any(|a| a.contains("app-v")));
+        assert!(
+            !app_v_release_attempted,
+            "cpd desktop release must not attempt to create legacy app-v* releases, but gh was called: {gh_calls:?}"
         );
     }
 
