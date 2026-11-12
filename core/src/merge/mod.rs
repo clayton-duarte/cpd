@@ -363,8 +363,8 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
         } else {
             (&old, &old, &target.branch)
         };
-        if let Some(workflow) = &job.workflow {
-            if let Err(error) = store.read(|conn| {
+        if let Some(workflow) = &job.workflow
+            && let Err(error) = store.read(|conn| {
                 crate::workflow::guard_refactor_tests(
                     conn,
                     &target.plan,
@@ -373,15 +373,15 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
                     diff_base,
                     diff_head,
                 )
-            }) {
-                if error.code() != crate::error::ErrorCode::TestChangeForbidden {
-                    return Err(error);
-                }
-                return Ok(Stepped::ends(End::Failed {
-                    cause: Failure::Tampered,
-                    detail: error.to_string(),
-                }));
+            })
+        {
+            if error.code() != crate::error::ErrorCode::TestChangeForbidden {
+                return Err(error);
             }
+            return Ok(Stepped::ends(End::Failed {
+                cause: Failure::Tampered,
+                detail: error.to_string(),
+            }));
         }
         let touched = git::tamper::touched_protected_over(
             repo,
