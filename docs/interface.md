@@ -133,6 +133,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd inbox claim` | Hand a review-requested item to the review Context's Manager (§21.7) | | |
 | `cpd inbox approve` | Approve the pending deployments of a deploy item (§21.13) | | |
 | `cpd watch` | The engine, one per machine (commands.md §12) | Lead | |
+| `cpd serve` | The production server: engine and WebUI on 3333 in one process (commands.md §12a) | | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd config tiers` | Set the five Tier keys of config.toml (§14.2a) | | |

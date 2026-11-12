@@ -1544,6 +1544,43 @@ When `node` cannot start, the adapter returns the existing `spawn_failed` (§1.2
 3. No `*_refused`, `*_bad_reply` or other `embedding_*` or `judge_*` outcome raises an Event: only an outage of `ollama.lab` or `bifrost` does (step 2).
 4. A failure to record the health never changes the error that `choose()` returns and never delays the classification.
 
+### 3.7b The serve process: runtime and port supervision
+
+The production server and the UI-only preview of `docs/architecture/serve.md`. The command is `cpd serve` (commands.md §12a). Status: decided by pro-d566, pro-d567, pro-d570, pro-d541 and pro-d542. As of this amendment the code does not do this: no `cpd serve` exists, and the engine runs a child Node server (`engine/src/watch/webui.rs`). The implementing change brings the code in line. Each invariant below is a rule the implementation must make true and a test must pin.
+
+**Production process**
+
+- **I1, one engine per host.** `cpd serve` holds `locks/watch.lock` for its whole life (contract §6.6). No other process runs the §3.7 steps on that `$CPD_HOME`.
+- **I2, one WebUI server, in the engine's process.** The WebUI on `0.0.0.0:3333` and the engine run in one OS process. No child process serves the WebUI.
+- **I3, start order.** Lock, then bind 3333, then open the store, then the first tick. A failure at a step stops the start: no tick runs without the bound port, and the store is not opened when the bind fails.
+- **I4, a refusal changes nothing.** A second start that finds the lock held (`watch_running`) or the port held (`port_in_use`) exits non-zero and leaves the running process, its lock and its port as they were.
+- **I5, the holder is named.** A held port is reported as `Port 3333 is in use by <process> (PID <pid>). Exiting.`, or `... by an unknown process. Exiting.` It never falls back to another port.
+- **I6, no store on the preview.** The preview process opens no store and writes no file under `$CPD_HOME`.
+- **I7, no containers, no login.** Both processes run directly on the host. No image, container runtime, login, token or TLS is added (pro-d566, pro-d567). The Origin rule of `web/CONTRACT.md` §15.1 applies on both ports and is not access control.
+- **I8, a SIGTERM stop is not a crash.** `SIGTERM` or `SIGINT` closes the port and the WebSocket connections, releases the lock and exits 0. A process that exits 0 after `SIGTERM` does not count toward the restart bound in I10.
+- **I9, payload restart.** After `cpd install` writes `run/install-restart.json`, the production process restarts once to serve the new payload, as `docs/architecture/webui-supervision.md` ("Payload install") says. The restart is not a crash.
+
+**Preview process**
+
+- **I10, UI only.** The preview runs no `cpd` binary, no engine, no pi session and no tmux server, and holds no `locks/watch.lock`.
+- **I11, forward only to the same host.** Its `/cpd-ws` forwards each WebSocket to `127.0.0.1:3333/cpd-ws` on its own host, and forwards the `Origin` header unchanged.
+- **I12, the production engine is not replaced.** When port 3333 is not listening, the preview serves its UI and reports the disconnected state. It never starts an engine to stand in for the production one.
+- **I13, strict port.** It binds `0.0.0.0:33333` with `strictPort` (the port of `web/vite.config.ts`). A held 33333 fails the start and never moves.
+
+**Restart bound** (for both processes, applied by the supervisor)
+
+- **I14, 3 crashes in 10 minutes.** A crash restarts the process at most 3 times in any 10-minute window. The fourth crash in the window latches it stopped and raises one `error` Event `webui_crash_loop`. The bound is the one `docs/architecture/webui-supervision.md` adopts; the Lead has not confirmed it for the WebUI.
+
+| Constant | Value | Meaning |
+|---|---|---|
+| production port | 3333 | `0.0.0.0`; `cpd serve` |
+| preview port | 33333 | `0.0.0.0`, `strictPort`; the UI-only preview |
+| restart bound | 3 crashes per 10 minutes | the fourth latches `stopped` (I14) |
+
+**Tests the implementation Job must pin:** the start order and refusals of I3 and I4 against a fake lock and a fake port holder (no real port, no real `lsof`); the holder message of I5 for a named holder and for an unknown one; the SIGTERM exit of I8; the restart bound of I14 on an injected clock; the forwarding and the unchanged `Origin` of I11 against a fake upstream; the no-store rule of I6 by a preview run with `CPD_HOME` unset. Every test is hermetic: no real port, no real process, no sleep.
+
+**Open points:** the supervisor that restarts the production process (`docs/architecture/serve.md` §6, open point 1), and whether `cpd watch` stays as an alias (open point 2).
+
 ### 3.8 Workflow statuses (R34)
 
 ```mermaid

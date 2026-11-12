@@ -1517,6 +1517,16 @@
     },
     "required": []
   },
+  "serve": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "session archive": {
     "flags": {
       "--help": false
