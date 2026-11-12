@@ -258,7 +258,9 @@ describe("PlanView DAG", () => {
     const m1to3 = d1to3.match(pathRegex);
     expect(m1to3).not.toBeNull();
     if (m1to3) {
-      const [, startX, , laneX, , endX] = m1to3.map(Number);
+      const startX = Number(m1to3[1]);
+      const laneX = Number(m1to3[3]);
+      const endX = Number(m1to3[5]);
       // Leaves and enters at the card left edge
       expect(startX).toBe(endX);
       // The vertical segment is placed in the left gutter outside the cards (x < workflowCardLeft)
@@ -289,7 +291,12 @@ describe("PlanView DAG", () => {
     expect(arrowD1to3).toMatch(arrowRegex);
     const arrowMatch = arrowD1to3.match(arrowRegex);
     if (arrowMatch) {
-      const [, ax1, ay1, tipX, tipY, ax2, ay2] = arrowMatch.map(Number);
+      const ax1 = Number(arrowMatch[1]);
+      const ay1 = Number(arrowMatch[2]);
+      const tipX = Number(arrowMatch[3]);
+      const tipY = Number(arrowMatch[4]);
+      const ax2 = Number(arrowMatch[5]);
+      const ay2 = Number(arrowMatch[6]);
       // Tip points to the card's left boundary: tipX > ax1 and tipX > ax2 (pointing right)
       expect(tipX).toBeGreaterThan(ax1);
       expect(tipX).toBeGreaterThan(ax2);
