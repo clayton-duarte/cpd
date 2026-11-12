@@ -295,4 +295,71 @@ archive_sleep_seconds = 86400
             "error event should name process and PID"
         );
     }
+
+    /// Regression test for webui-adopt:
+    /// Engine supervisor terminates holder (SIGTERM) and launches the supervised server
+    /// instead of latching stopped permanently when detect_port_holder finds an existing holder.
+    #[test]
+    fn engine_supervisor_replaces_foreign_port_holder() {
+        let mut fx = SupervisionFx::new();
+
+        // Create serve.ts so prod WebUI is supervised
+        let serve_ts = fx.home.root().join("web/src/server/serve.ts");
+        fs::create_dir_all(serve_ts.parent().unwrap()).expect("create web server dir");
+        fs::write(&serve_ts, "// mock server").expect("write serve.ts");
+
+        // Existing holder process on port 3333
+        let holder_pid = fx.spawn.add_process(
+            cpd_core::host::spawn::Pid(1),
+            "node web/src/server/serve.ts",
+        );
+        let holder_pid_u32 = holder_pid.0;
+
+        // Set up mock lsof output indicating holder PID is listening on port 3333
+        let lsof_out = format!("p{holder_pid_u32}\ncnode\nn*:3333\n");
+        fx.runner = fx.runner.on(
+            "lsof",
+            move |call| call.args.iter().any(|a| a == "-iTCP:3333"),
+            Reply::exit(0, &lsof_out, ""),
+        );
+        // Mock ps output to report the holder's command line
+        fx.runner = fx.runner.on(
+            "ps",
+            move |call| call.args.iter().any(|a| a == &holder_pid_u32.to_string()),
+            Reply::exit(0, "node web/src/server/serve.ts\n", ""),
+        );
+
+        let mut engine = fx.engine();
+        webui::run(&mut engine);
+
+        // Supervisor should terminate holder with SIGTERM
+        assert!(
+            fx.spawn
+                .signals()
+                .iter()
+                .any(|&(p, sig)| p == holder_pid && sig == cpd_core::host::spawn::Signal::Term),
+            "supervisor should terminate the holder with SIGTERM"
+        );
+
+        // Before webui-adopt implementation: supervisor latches stopped when port holder is found
+        // Expected behavior after webui-adopt: supervisor terminates foreign/existing holder and does NOT latch stopped,
+        // successfully starting the supervised server.
+        assert!(
+            !engine.webui.services[&ServiceKind::Prod].latched_stopped,
+            "supervisor should not latch stopped permanently when port holder is found"
+        );
+        assert!(
+            engine.webui.services[&ServiceKind::Prod].pid.is_some(),
+            "supervisor should launch the supervised server"
+        );
+        let launched_pid = engine.webui.services[&ServiceKind::Prod].pid.unwrap();
+        assert_ne!(
+            launched_pid, holder_pid,
+            "launched server should be a new process"
+        );
+        assert!(
+            fx.spawn.alive(launched_pid),
+            "supervised server process should be alive"
+        );
+    }
 }
