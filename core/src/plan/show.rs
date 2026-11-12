@@ -86,7 +86,9 @@ pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Va
                 &key,
             )
             .unwrap_or_default();
-            value["unmet_prereqs"] = json!(unmet);
+            if !unmet.is_empty() {
+                value["unmet_prereqs"] = json!(unmet);
+            }
             Ok(value)
         })
         .collect()
