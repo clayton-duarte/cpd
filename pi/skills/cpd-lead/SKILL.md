@@ -226,6 +226,8 @@ cpd workflow cancel <key>
 
 **A Workflow's Jira ticket.** A Workflow of an owner whose policy sets `workflow.jira_required` needs `--jira <KEY>` before it can open: set it with `cpd workflow add <key> --repo <path> --title "<title>" --jira <KEY>` or, in any phase, `cpd workflow edit <key> --jira <KEY>`; one ticket per Workflow, never the Plan's; until then its open Job is held and `cpd pr open` is refused `jira_required`.
 
+**A Workflow's external prerequisites.** Declare every external prerequisite of a Workflow when you add it, right after `workflow add`, with the `workflow prereq add` subcommand. Anything outside the repo that must exist before the change reaches production counts: a LaunchDarkly flag the change reads, or a manual setup task. A flag is `--kind ld-flag` with its `--project` and `--key` (and `--env` when it applies). Anything else is `--kind manual` with `--text "<what>"`, one line. Until every prerequisite is met, `pr merge-green`, `pr merge`, `pr post` and deploy approvals refuse `prereq_unmet` and name each one. Only the User confirms a manual prerequisite (with `workflow prereq confirm`, or from the PR's Inbox item); never confirm it yourself. A Workflow with no external prerequisite needs no declaration; when you are unsure whether something is one, ask the User.
+
 ### Splitting
 
 Write one spec file per Job and add it to its Workflow. `--workflow <key>` is required when the Plan has two or more Workflows and defaulted when it has one:
