@@ -17,6 +17,7 @@ pub(crate) mod cancel;
 pub(crate) mod describe;
 pub(crate) mod edit;
 pub mod jira_title;
+pub mod prereq;
 pub(crate) mod reopen;
 pub(crate) mod row;
 pub mod start;
@@ -39,6 +40,9 @@ pub enum WorkflowCommand {
     Cancel(CancelArgs),
     /// Start a waiting Workflow whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
+    /// External prerequisites of a Workflow (§9.8)
+    #[command(subcommand)]
+    Prereq(prereq::PrereqCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -158,5 +162,6 @@ pub fn run_workflow(command: WorkflowCommand) -> Result<Output, CpdError> {
         WorkflowCommand::Describe(args) => describe::describe(args),
         WorkflowCommand::Cancel(args) => cancel::cancel(args),
         WorkflowCommand::Start(args) => start::run(args),
+        WorkflowCommand::Prereq(cmd) => prereq::run(cmd),
     }
 }
