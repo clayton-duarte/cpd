@@ -7,13 +7,17 @@ import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createServer as createViteServer, type ViteDevServer } from 'vite';
 import { formatPortInUseMessage } from './port-holder.ts';
-import { createServices, realBoundaries, type PluginBoundaries } from './plugin.ts';
+import { createServices, realBoundaries, cpdWebPlugin, type PluginBoundaries } from './plugin.ts';
 import { createWsServer, createUpgradeFactory, WS_PATH, type WebSocketUpgradeServer } from './ws.ts';
 import { writeWebuiToken } from './webui-token.ts';
 
 export const PROD_PORT = 3333;
 export const PROD_HOST = '0.0.0.0';
+
+export const PREVIEW_PORT = 33333;
+export const PREVIEW_HOST = '0.0.0.0';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -147,6 +151,30 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
       resolve(server);
     });
   });
+}
+
+export interface PreviewServeOptions {
+  port?: number;
+  host?: string;
+  boundaries?: PluginBoundaries;
+}
+
+export async function createPreviewServer(options?: PreviewServeOptions): Promise<ViteDevServer> {
+  const port = options?.port ?? PREVIEW_PORT;
+  const host = options?.host ?? PREVIEW_HOST;
+  const boundaries = options?.boundaries;
+
+  const server = await createViteServer({
+    configFile: false,
+    plugins: [cpdWebPlugin(boundaries ? { boundaries } : undefined)],
+    server: {
+      host,
+      port,
+      strictPort: true,
+    },
+  });
+
+  return server;
 }
 
 // If run directly as a script
