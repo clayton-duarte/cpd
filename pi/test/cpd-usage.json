@@ -137,6 +137,16 @@
     },
     "required": []
   },
+  "cockpit serve": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "config": {
     "flags": {
       "--help": false,
