@@ -4,6 +4,7 @@
 //! CLI rejects `cpd desktop release` and `cpd install shell` subcommands,
 //! and prevents any attempt to fetch legacy app-v* release assets.
 
+#[allow(clippy::module_inception)]
 mod retire_app_test {
     use crate::common::fx::Fx;
     use cpd_core::home::CpdHome;
