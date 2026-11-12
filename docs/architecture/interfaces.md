@@ -80,3 +80,7 @@ the web follows the same rule ([architecture §6](../architecture.md)).
 The roles that use these interfaces are [[roles]]; the runtime the agents run
 in is [[agent-runtime]]; the programmable whole the interfaces attach to is the
 [[sdk]]; the engine loop behind them is [[clocks]].
+
+## WebUI dialog answers and review feedback
+
+Status: skeleton, in progress.

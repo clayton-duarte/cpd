@@ -2848,3 +2848,7 @@ Escape never submits, never clears the draft and never changes the Tier, model o
 - **Notice surface.** The accepted decision requires a short notice for rule 3 of 32.1 but does not say where it appears or how long it stays.
 - **Other platforms.** The shortcut for line deletion on Windows, and the cross-platform combinations listed in 32.3, are not decided.
 - **Failed abort is not shown.** A `session.abort` that the hub reports as session-scoped is stored in `SessionView.error`, which no UI component renders (`scout-abort.md` §3 and `scout.md` §2). Read from source, unverified by running. A failed Escape abort may therefore be invisible to the User.
+
+## 33. WebUI dialog answers and plan review feedback (Plan `dialog-answers`; Job `answers-docs`; decisions pro-d582, pro-d584)
+
+Status: skeleton, in progress.
