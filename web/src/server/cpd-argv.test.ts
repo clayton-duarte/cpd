@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allCpdCommands, toArgv } from "./cpd-argv.ts";
+import { allCpdCommands, generateArgvFixturesJson, toArgv } from "./cpd-argv.ts";
 
 describe("toArgv", () => {
   it("context.new builds the context new argv", () => {
@@ -30,7 +30,9 @@ describe("toArgv", () => {
     const argvs = commands.map(toArgv);
     expect(argvs.length).toBeGreaterThan(0);
     // Fixture JSON representation of all WebUI argv patterns
-    const json = JSON.stringify(argvs);
+    const json = generateArgvFixturesJson();
     expect(json).toBeDefined();
+    const parsed = JSON.parse(json);
+    expect(parsed).toEqual(argvs);
   });
 });

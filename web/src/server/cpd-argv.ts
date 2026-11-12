@@ -234,3 +234,10 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "swr.badge.put", sessionId: "s1", entryId: "e1", label: "L", score: 1, text: "T", tone: "green", others: "[]" },
   ];
 }
+
+/** Generates the JSON fixture of all WebUI commands mapped through `toArgv`. */
+export function generateArgvFixturesJson(): string {
+  const commands = allCpdCommands();
+  const argvs = commands.map(toArgv);
+  return JSON.stringify(argvs, null, 2);
+}
