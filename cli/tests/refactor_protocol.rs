@@ -104,13 +104,15 @@ mod refactor_protocol {
     /// is refused at job submit with `test_change_forbidden` and exit code 3.
     #[test]
     fn refactor_submit_touching_test_file_refused() {
-        let fx = fixture("dispatch");
+        let fx = fixture("grounding");
 
         // Add coverage workflow and refactor workflow based on it
-        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+        fx.add_workflow("cov", &["--shape", "coverage"])
             .ok();
+        fx.env.sql("UPDATE jobs SET status = 'merged' WHERE workflow = 'cov';");
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
+        fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch' WHERE plan = 'pay-1';");
 
         // Simulate an attempt in the refactor workflow touching a test file (e.g. tests/refactor_test.rs)
         // Submitting this attempt must fail with test_change_forbidden
@@ -132,12 +134,14 @@ mod refactor_protocol {
     /// with `test_change_forbidden` and exit code 3.
     #[test]
     fn refactor_push_touching_test_file_refused() {
-        let fx = fixture("dispatch");
+        let fx = fixture("grounding");
 
-        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+        fx.add_workflow("cov", &["--shape", "coverage"])
             .ok();
+        fx.env.sql("UPDATE jobs SET status = 'merged' WHERE workflow = 'cov';");
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
+        fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch' WHERE plan = 'pay-1';");
 
         // Pushing a refactor workflow whose commits touch a test file is refused with test_change_forbidden
         let run = fx.cpd(&["pr", "push", "--workflow", "refact", "--plan", "pay-1"]);
@@ -152,12 +156,14 @@ mod refactor_protocol {
     /// Gate fails if coverage drops below the coverage workflow baseline, with `coverage_below_baseline`.
     #[test]
     fn refactor_coverage_below_baseline_fails_gate() {
-        let fx = fixture("dispatch");
+        let fx = fixture("grounding");
 
-        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+        fx.add_workflow("cov", &["--shape", "coverage"])
             .ok();
+        fx.env.sql("UPDATE jobs SET status = 'merged' WHERE workflow = 'cov';");
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
+        fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch' WHERE plan = 'pay-1';");
 
         // When gate runs for the refactor workflow (e.g. during pr push or gate check),
         // if coverage is below the baseline of the coverage workflow, gate fails with coverage_below_baseline
@@ -177,12 +183,14 @@ mod refactor_protocol {
     /// amending coverage and rebasing clears the block.
     #[test]
     fn bad_test_stops_refactor_until_coverage_amend() {
-        let fx = fixture("dispatch");
+        let fx = fixture("grounding");
 
-        fx.add_workflow("cov", &["--shape", "coverage", "--no-needs"])
+        fx.add_workflow("cov", &["--shape", "coverage"])
             .ok();
+        fx.env.sql("UPDATE jobs SET status = 'merged' WHERE workflow = 'cov';");
         fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
             .ok();
+        fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch' WHERE plan = 'pay-1';");
 
         // A test failure in refactor workflow does not allow in-place test edit/approval.
         // The job is stopped/blocked on the coverage workflow.
