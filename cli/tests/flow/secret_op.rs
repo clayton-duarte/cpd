@@ -681,3 +681,13 @@ fn secret_commands_write_nothing_to_the_store() {
     });
     assert!(leaked.is_empty(), "the secret is in the store: {leaked:?}");
 }
+
+#[test]
+fn test_secret_approve_fails_fast_without_op() {
+    let fx = fixture();
+    fx.fake_op(Reply::io(ErrorKind::NotFound));
+    let a = approve_args("get", "other", Some("deployment"), Some("password"));
+    let r = run(&fx, Who::Lead, &strs(&a), None);
+    denied(&r, "secret_op_missing", 1);
+    assert!(approvals(&fx).is_empty());
+}
