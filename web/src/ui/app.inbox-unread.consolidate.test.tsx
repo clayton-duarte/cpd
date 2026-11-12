@@ -111,3 +111,5 @@ it("a remounted app does not re-hide an already dismissed unread row", () => {
   remount.unmount();
   mounted = null;
 });
+
+// Regression: unread_row_hides_and_dismisses_immediately_on_session_selection_before_attach.

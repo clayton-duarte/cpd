@@ -415,3 +415,5 @@ describe("archive navigation", () => {
     expect(where(run(kept, patch(archiveSelected)))).toEqual(["mgr-a", null]); // only a transition of the selected one navigates
   });
 });
+
+// Regression: action_result_ok_keeps_optimistic_hide_until_snapshot_drops_item.
