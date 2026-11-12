@@ -1194,14 +1194,8 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     // The second tick counts the `open` Job the first adds.
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
 
-    assert_eq!(
-        fx.tmux_option("@cpd_workers"),
-        "workers 3·1·1/1"
-    );
-    assert_eq!(
-        fx.tmux_option("@cpd_workers_short"),
-        "3·1·1/1"
-    );
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 3·1·1/1");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "3·1·1/1");
     // The engine sets no widths: tmux measures the texts (#347).
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
@@ -1220,14 +1214,8 @@ fn watch_cpd_workers_option_counts_are_unchanged_with_workers_as_a_resource() {
 
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
 
-    assert_eq!(
-        fx.tmux_option("@cpd_workers"),
-        "workers 3·1·1/1"
-    );
-    assert_eq!(
-        fx.tmux_option("@cpd_workers_short"),
-        "3·1·1/1"
-    );
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 3·1·1/1");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "3·1·1/1");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
     // The ready Job waits for `workers`, whose one tenant is the one Attempt the `1/1` counts.
     let shown = fx.cpd(&["job", "show", "free", "--plan", PLAN]).ok();
@@ -1275,14 +1263,8 @@ fn watch_cpd_workers_option_counts_tenant_jobs_including_a_failed_one() {
 
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
 
-    assert_eq!(
-        fx.tmux_option("@cpd_workers"),
-        "workers 1·0·2/3"
-    );
-    assert_eq!(
-        fx.tmux_option("@cpd_workers_short"),
-        "1·0·2/3"
-    );
+    assert_eq!(fx.tmux_option("@cpd_workers"), "workers 1·0·2/3");
+    assert_eq!(fx.tmux_option("@cpd_workers_short"), "1·0·2/3");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
