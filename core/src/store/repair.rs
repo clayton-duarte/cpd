@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
+use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
@@ -300,6 +300,40 @@ pub fn repair(home: &CpdHome, options: &RepairOptions) -> Result<RepairResult, C
         repaired: true,
         backup_path: Some(backup_path),
     })
+}
+
+/// Detects table schema drift on the store at `conn`.
+pub fn detect_table_drift(conn: &Connection) -> Result<Vec<String>, CpdError> {
+    let mut drifted = Vec::new();
+    let jobs_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'jobs'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(CpdError::from)?;
+    if let Some(sql) = jobs_sql {
+        if sql.contains("waiting_on IN ('lead', 'user')")
+            || sql.contains("CHECK (waiting_on IS NULL OR waiting_on IN")
+        {
+            drifted.push("jobs".to_string());
+        }
+    }
+
+    let incident_cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('incident') ORDER BY cid")
+        .map_err(CpdError::from)?
+        .query_map([], |r| r.get(0))
+        .map_err(CpdError::from)?
+        .collect::<Result<_, _>>()
+        .map_err(CpdError::from)?;
+
+    if incident_cols.len() == 8 && incident_cols.get(5).map(|s| s.as_str()) == Some("until_plan") {
+        drifted.push("incident".to_string());
+    }
+
+    Ok(drifted)
 }
 
 /// Stub indicator for table schema reconciliation support in store repair.
