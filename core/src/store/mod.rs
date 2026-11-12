@@ -8,6 +8,7 @@
 #[cfg(test)]
 mod clock_tests;
 mod lock;
+pub mod repair;
 mod schema;
 #[doc(hidden)]
 pub mod testing;

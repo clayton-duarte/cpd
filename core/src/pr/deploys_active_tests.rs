@@ -46,7 +46,8 @@ impl Handler for Gh {
                     "reviews": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}}})
                 .to_string(),
             ),
-            ["api", path] if path.contains("/actions/workflows/deploy.yml/runs") => {
+            _ if args.iter().any(|a| a.contains("/actions/workflows/deploy.yml/runs")) => {
+                let path = args.iter().find(|a| a.contains("/actions/workflows/deploy.yml/runs")).copied().unwrap_or("");
                 let status = path
                     .split_once('?')
                     .and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("status=")));
@@ -56,7 +57,7 @@ impl Handler for Gh {
                 };
                 Reply::ok(&json!({"total_count": listed.len(), "workflow_runs": listed}).to_string())
             }
-            ["api", path] if path.ends_with("/pending_deployments") => Reply::ok(
+            _ if args.iter().any(|a| a.ends_with("/pending_deployments")) => Reply::ok(
                 &json!([{"environment": {"id": 1, "name": "prod"}, "wait_timer": 0, "current_user_can_approve": true, "reviewers": []}])
                     .to_string(),
             ),

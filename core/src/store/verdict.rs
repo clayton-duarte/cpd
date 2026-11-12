@@ -178,7 +178,28 @@ pub(super) fn verdict_with<'a>(
         .collect();
     pending.sort_by_key(|n| n.name);
 
-    let outcome = decide(version, &applied, &known, &unknown, &pending, catalog);
+    let has_repairs: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migration_repairs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
+
+    let repairs: HashSet<(String, String, String)> = if has_repairs {
+        let mut stmt = conn.prepare(
+            "SELECT name, recorded_checksum, accepted_checksum FROM schema_migration_repairs",
+        )?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .filter_map(rusqlite::Result::ok)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
+    let outcome = decide(
+        version, &applied, &repairs, &known, &unknown, &pending, catalog,
+    );
     Ok(Verdict {
         outcome,
         unknown,
@@ -191,6 +212,7 @@ pub(super) fn verdict_with<'a>(
 fn decide(
     version: i64,
     applied: &[(String, String, String)],
+    repairs: &HashSet<(String, String, String)>,
     known: &dyn Fn(&str) -> Option<String>,
     unknown: &[String],
     pending: &[&Named],
@@ -201,6 +223,9 @@ fn decide(
         if let Some(embedded) = known(name)
             && *checksum != embedded
         {
+            if repairs.contains(&(name.clone(), checksum.clone(), embedded.clone())) {
+                continue;
+            }
             return Err(CpdError::new(
                     ErrorCode::MigrationChanged,
                     format!("The store applied migration {name} with other text than this cpd's: restore the migration's file from origin/main."),
