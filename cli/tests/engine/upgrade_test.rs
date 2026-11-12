@@ -9,6 +9,7 @@
 //!
 //! All tests are hermetic: mocked git, cargo build, process restarts, health check, network. No real external commands, no sleep.
 
+#[allow(clippy::module_inception)]
 mod upgrade_test {
     use std::fs;
     use std::path::PathBuf;
