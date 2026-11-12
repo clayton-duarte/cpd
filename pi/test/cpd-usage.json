@@ -532,7 +532,8 @@
   },
   "host repair": {
     "flags": {
-      "--help": false
+      "--help": false,
+      "--yes": false
     },
     "positionals": {
       "max": 0,
