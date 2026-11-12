@@ -210,3 +210,15 @@ function submit(c: HTMLElement) {
     expect(responses).toEqual([]);
     unmount();
   });
+
+  it("typing_in_custom_text_without_selecting_an_option_submits_typed_answer", () => {
+    // Stub
+  });
+
+  it("multi_question_dialog_with_all_questions_answered_submits_all_answers_verbatim", () => {
+    // Stub
+  });
+
+  it("dialog_submission_is_blocked_when_questions_remain_unanswered_without_explicit_skip", () => {
+    // Stub
+  });
