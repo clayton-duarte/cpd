@@ -688,7 +688,12 @@ struct Deploys(Vec<Value>);
 
 impl Handler for Deploys {
     fn handle(&self, call: &Call) -> Reply {
-        let path = call.args.get(1).cloned().unwrap_or_default();
+        let path = call
+            .args
+            .iter()
+            .find(|a| a.starts_with("repos/"))
+            .cloned()
+            .unwrap_or_else(|| call.args.get(1).cloned().unwrap_or_default());
         if path.ends_with("deploy.yml/runs?status=waiting&per_page=100") {
             Reply::ok(&json!({"total_count": self.0.len(), "workflow_runs": self.0}).to_string())
         } else if path.ends_with("deploy.yml/runs?status=in_progress&per_page=100")

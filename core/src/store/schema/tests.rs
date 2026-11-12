@@ -3013,6 +3013,7 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
             "swr_repos",
             "swr_pr_detail",
             "swr_deploys",
+            "swr_deploy_lists",
             "gh_issues",
             "swr_slack_posts",
             "swr_jira_issues",

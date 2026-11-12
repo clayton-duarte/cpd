@@ -238,8 +238,8 @@ The names are this page's; the shape is the contract. `EffectivePr` is the only 
 Every failed call of the endpoint `github` (the document, a REST call of §8, a write of §9) is classified once, from what the call returned and nothing else (the rule of contract §7.6 step 4, kept):
 
 - **Transient:** a timeout of the call's own deadline; an HTTP 5xx as `gh` prints it (`HTTP 5\d\d`, or the nginx HTML page that GitHub returns with it); a reply cut off so that `gh` cannot parse it. It feeds `endpoint::record_failure(Kind::Transient)`.
-- **Permanent:** any other failure (a 4xx, a GraphQL `errors` array without `RATE_LIMITED`, an unparseable body that was not cut off, a missing field). It feeds `record_failure(Kind::Permanent)`.
-- **Rate limit:** a GraphQL `errors` entry with `type` `RATE_LIMITED`, or `rateLimit.remaining` under `RATE_FLOOR`. It is §7.2, not a failure: it is the transient-waiting class of contract §7.6 step 4 (`transient` true, `reason` `rate_limited`), it feeds no `record_failure`, and a merge's call waits in place to the reset (contract §7.4).
+- **Permanent:** any other failure (a 4xx, except the REST rate limit of §8.2; a GraphQL `errors` array without `RATE_LIMITED`, an unparseable body that was not cut off, a missing field). It feeds `record_failure(Kind::Permanent)`.
+- **Rate limit:** a GraphQL `errors` entry with `type` `RATE_LIMITED`, `rateLimit.remaining` under `RATE_FLOOR`, or a deploy REST call refused with a 403 for the spent API rate limit (§8.2). It is §7.2, not a failure: it is the transient-waiting class of contract §7.6 step 4 (`transient` true, `reason` `rate_limited`), it feeds no `record_failure`, and a merge's call waits in place to the reset (contract §7.4).
 
 ### 7.2 Rate limits: `swr_endpoints('github')`
 
@@ -264,9 +264,11 @@ The rule is enforced by a test that greps the source for `Command::new("gh")` ou
 
 Deploys are the GitHub Actions runs that wait for the User's approval (contract §2.2 "The deploy rule"). They replace `run/deploy-runs.json` (§12).
 
+The ETag cache (§8.1) and the rate-limit rule (§8.2) are decided by pro-d563 and pro-d564. This section is their target: `core/src/pr/deploys.rs` sends no `If-None-Match` and reads no `x-ratelimit-reset` yet.
+
 For each repository whose policy declares `[deploys] workflows` (contract §8.3 "The `deploys` domain"), and each declared workflow file:
 
-1. **The list** (REST, one call per declared file, through the port): `gh api "repos/<owner>/<repo>/actions/workflows/<file>/runs?status=waiting&per_page=100"`. It returns `id`, `updated_at`, `display_title`, `html_url`, `created_at` and `triggering_actor.login` per run. The list cannot be made a delta: it is the only way GitHub lists the waiting runs.
+1. **The list** (REST, one call per declared file, through the port, conditional per §8.1): `gh api --include "repos/<owner>/<repo>/actions/workflows/<file>/runs?status=waiting&per_page=100"`, with `If-None-Match` when §8.1 holds an ETag for the file. It returns `id`, `updated_at`, `display_title`, `html_url`, `created_at` and `triggering_actor.login` per run. The list cannot be made a delta: it is the only way GitHub lists the waiting runs, so the ETag makes an unchanged list cheap instead.
 2. **The actor filter**, case-insensitive, against `swr_viewer.login` (the viewer read of the document, so no second `gh api user` call).
 3. **The delta.** A run is **changed** when no `swr_deploys` row has its `(repo, run_id, updated_at)`. Only changed runs get the next call:
 4. **`pending_deployments`** (REST), per changed run: `gh api repos/<owner>/<repo>/actions/runs/<id>/pending_deployments`. A run is kept when at least one entry has `current_user_can_approve` true; its `environment` is those entries' names, sorted, joined with `, `. An unchanged run keeps the approvals it had.
@@ -274,6 +276,22 @@ For each repository whose policy declares `[deploys] workflows` (contract §8.3 
 6. **Garbage.** `gc::sweep` deletes an inactive deploy row seven days after `inactive_at` (`swr.gc_days`, §5 of swr.md; A4), when no observer holds it.
 
 A failed call of one file leaves that file's rows as they were, and the others are updated (the rule of contract §7.6 step 8, kept). The approve of a deploy is an outbox op (§9, `approve`).
+
+### 8.1 The ETag cache of the list (pro-d563)
+
+The list of step 1 is the one call every pass makes for each declared file, so it is the one made conditional. Its ETag is cached in SQLite, one row per declared file: `swr_deploy_lists` (`repo`, `workflow`, `viewer_login`, `etag`; primary key `(repo, workflow)`; G11). The row is a cache of GitHub's answer and holds no state of the deploys: those stay in `swr_deploys`.
+
+A stored row is sent as `If-None-Match` only when its `viewer_login` equals the viewer's login read this pass, because the actor filter of step 2 is part of the answer. Otherwise the list is sent without the header.
+
+- **200 OK.** The body (the JSON after the headers of `--include`) is parsed and steps 2 to 5 run. Only when they all succeed is the row upserted with the response's `ETag` and the viewer's login. A parse failure, or a failed call of that file, stores nothing, so the next pass sends the list unconditionally again.
+- **304 Not Modified.** The list is unchanged since the stored ETag. The body is not read or parsed. Steps 2 and 3 are skipped, so no run is changed and no `pending_deployments` call is made; the rows of the file stay as they are, and the stored ETag stays. Step 5's second rule still runs, because it reads the pull request's header and not the list: a row whose pull request is `closed` or `merged` gets `inactive_at` = `now`. A 304 costs zero rate-limit budget: GitHub does not count a conditional request answered with 304 against the primary limit (G12). It is still one call in the `deploys` count of the pass's measure (§5).
+
+### 8.2 A spent REST rate limit on a deploy call (pro-d564)
+
+A deploy call (the list of step 1, or the `pending_deployments` of step 4) that GitHub refuses with HTTP 403 because the API rate limit is spent is a **rate limit**, not a permanent failure. This extends §7.1, which classifies only the GraphQL form. It is recognised when the status is 403 and the reply's `message` says the API rate limit is exceeded (`API rate limit exceeded`). Any other 403, including a secondary-limit reply, is permanent as §7.1 says.
+
+- **The error.** The call fails `gh_failed` with `details.rate_limited` = `true` and `details.reset_at` = the reply's `x-ratelimit-reset` header (epoch seconds, read from the `--include` headers) as an RFC 3339 UTC timestamp, or `null` when the header is absent. It keeps the fields §8 already sets (`argv`, `exit`, `stderr`, `call` `deploys`), with `transient` `true` and `reason` `rate_limited`, the transient-waiting class of §7.1.
+- **The backoff.** The call is the hard pause of §7.2: `endpoint::pause_until(reset_at + RATE_GRACE)`, or `RATE_FALLBACK` when `reset_at` is `null`. `record_failure` is not called, so no failure count rises and no Event is raised. The pass makes no further GitHub call until the pause ends, and the files not yet called keep their rows. The engine's watch loop (`engine/src/watch/pr.rs`) waits until that instant and writes one `watch.log` line, as §7.2 says. That is the whole of the response: no error per poll, and so no hourly error spam.
 
 ## 9. Writes: the outbox ops
 
@@ -383,6 +401,8 @@ These are added to [swr.md §17](swr.md). Each is stated so a later Job can test
 - **G8. A write's precondition is read at enqueue and at drain from the settled cache row**, with GitHub enforcing its own (§9). This is a choice: a write that needs a fresher read than the last pass gives is refused by GitHub, not by cpd.
 - **G9. `head_oid` and `gh_updated_at`** are the migration's columns, written by the pass (§2). `pull_requests.updated_at` keeps its meaning.
 - **G10. The gh-budget-and-swr caps and rules** (pro-d474, pro-d477, the User's urgent report): `HEAVY_CAP` = 5 and `ABSENT_CAP` = 10 per document, `PeerLight` for the `reviews` search, the tombstone of a repository that resolves to null, and the cold-LISTED reconciliation (§3.1, §3.2, §4.2, §4.3). They supersede the cap of 25 in G2 and the total cap of pro-d474 (§3.2, §4.2).
+- **G11. The list's ETag lives in `swr_deploy_lists`**, one row per declared file (§8.1). A per-file row is needed because `swr_deploys` holds runs, not the answer to the list request. The migration is the implementing Job's.
+- **G12. The 304 and 403 wire facts are unverified here.** That `gh api --include` prints the status line and headers for a 304 and for a 403, that `gh` exits 0 on a 304, and that GitHub does not count a 304 against the primary limit, are read from GitHub's and `gh`'s documentation, not observed. The implementing Job checks them against a recorded real reply, never against a test that calls GitHub (§8.1, §8.2).
 
 ## 14. Open items
 

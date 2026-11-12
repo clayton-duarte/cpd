@@ -8,10 +8,12 @@ use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::gh::run_raw_with;
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
+
 use crate::home::CpdHome;
 use crate::host::deadline::Failed;
 use crate::host::runner::{Call, Runner};
@@ -91,6 +93,7 @@ pub fn read_into_store(
     let at = timestamp(now);
     let mut failure: Option<CpdError> = None;
     let mut writes: Vec<Write> = Vec::new();
+    let mut etag_writes: Vec<(String, String, String)> = Vec::new();
     // A repo whose policy no longer declares a workflow: its waiting runs are nobody's to approve.
     let undeclared: Vec<(String, i64)> = store.read(|c| {
         let mut stmt =
@@ -118,18 +121,39 @@ pub fn read_into_store(
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
         })?;
-        match changed_runs(runner, home.root(), &me, repo, workflow, &stored) {
-            Ok((listed, changed)) => {
-                for (id, _, active, of) in &stored {
-                    let ours = match of {
-                        Some(of) => of == workflow,
-                        None => alone,
-                    };
-                    if *active && ours && !listed.contains(&(*id as u64)) {
-                        writes.push(Write::Inactive(repo.clone(), *id));
+        let cached_etag: Option<String> = store.read(|c| {
+            Ok(c.query_row(
+                "SELECT etag FROM swr_deploy_lists WHERE repo = ?1 AND workflow = ?2 AND viewer_login = ?3",
+                params![repo, workflow, me],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })?;
+        match changed_runs(
+            runner,
+            home.root(),
+            &me,
+            repo,
+            workflow,
+            cached_etag.as_deref(),
+            &stored,
+        ) {
+            Ok(cr) => {
+                if let Some(listed) = cr.listed_ids {
+                    for (id, _, active, of) in &stored {
+                        let ours = match of {
+                            Some(of) => of == workflow,
+                            None => alone,
+                        };
+                        if *active && ours && !listed.contains(&(*id as u64)) {
+                            writes.push(Write::Inactive(repo.clone(), *id));
+                        }
                     }
                 }
-                writes.extend(changed.into_iter().map(|c| Write::Row(repo.clone(), c)));
+                writes.extend(cr.changed.into_iter().map(|c| Write::Row(repo.clone(), c)));
+                if let Some(etag) = cr.etag {
+                    etag_writes.push((repo.clone(), workflow.clone(), etag));
+                }
             }
             Err(e) => {
                 failure.get_or_insert(e);
@@ -150,7 +174,7 @@ pub fn read_into_store(
             |r| r.get(0),
         )?)
     })?;
-    if !writes.is_empty() || closing {
+    if !writes.is_empty() || closing || !etag_writes.is_empty() {
         store.write("swr deploys", |tx| {
             for w in &writes {
                 match w {
@@ -170,6 +194,14 @@ pub fn read_into_store(
                         )?;
                     }
                 }
+            }
+            for (repo, workflow, etag) in &etag_writes {
+                tx.execute(
+                    "INSERT INTO swr_deploy_lists (repo, workflow, viewer_login, etag)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT (repo, workflow) DO UPDATE SET viewer_login = excluded.viewer_login, etag = excluded.etag",
+                    params![repo, workflow, me, etag],
+                )?;
             }
             tx.execute(closed, [&at])?;
             Ok::<(), CpdError>(())
@@ -226,9 +258,6 @@ fn declared(home: &CpdHome) -> Result<Vec<(String, String)>, CpdError> {
 
 /// One `gh api <path>`: its stdout. A failed call is `gh_failed`, transient on an HTTP 5xx or a timeout, as the poll's lookups.
 fn api(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    let fail = |message: String, exit: Option<i32>, stderr: &str, reason: Option<&str>| {
-        gh_failed(args, message, exit, stderr, reason)
-    };
     let out = run_raw_with(runner, cwd, args, TIMEOUT).map_err(|e| {
         e.with("call", "deploys")
             .with("transient", true)
@@ -236,28 +265,123 @@ fn api(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdErro
     })?;
     match out.exit {
         Some(0) => Ok(out.stdout),
-        Some(code) => {
-            let status = out.stderr.match_indices("HTTP 5").find_map(|(at, _)| {
-                let s = out.stderr.get(at..at + 8)?;
-                s[6..]
-                    .bytes()
-                    .all(|b| b.is_ascii_digit())
-                    .then(|| s.to_owned())
-            });
-            Err(fail(
-                format!("gh {} exited {code}.", args[0]),
-                Some(code),
-                &out.stderr,
-                status.as_deref(),
-            ))
-        }
-        None => Err(fail(
+        Some(code) => Err(classify_api_error(args, code, &out.stdout, &out.stderr)),
+        None => Err(gh_failed(
+            args,
             format!("gh {} was killed by a signal.", args[0]),
             None,
             &out.stderr,
             None,
         )),
     }
+}
+
+/// The response of a conditional `gh api --include` call.
+struct ApiResponse {
+    status: Option<u16>,
+    etag: Option<String>,
+    body: String,
+}
+
+/// Runs `gh api --include <args>`: parses HTTP status, headers (like ETag) and body.
+fn api_with_include(
+    runner: &dyn Runner,
+    cwd: &Path,
+    args: &[&str],
+) -> Result<ApiResponse, CpdError> {
+    let out = run_raw_with(runner, cwd, args, TIMEOUT).map_err(|e| {
+        e.with("call", "deploys")
+            .with("transient", true)
+            .with("reason", "timeout")
+    })?;
+    let (status, headers, body) = split_http_response(&out.stdout);
+    match out.exit {
+        Some(0) => {
+            let etag = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("etag"))
+                .map(|(_, v)| v.clone());
+            Ok(ApiResponse { status, etag, body })
+        }
+        Some(code) => Err(classify_api_error(args, code, &out.stdout, &out.stderr)),
+        None => Err(gh_failed(
+            args,
+            format!("gh {} was killed by a signal.", args[0]),
+            None,
+            &out.stderr,
+            None,
+        )),
+    }
+}
+
+/// Splits HTTP response output from `--include` into optional status code, headers list, and body string.
+fn split_http_response(stdout: &str) -> (Option<u16>, Vec<(String, String)>, String) {
+    let (header_part, body) = match stdout.find("\r\n\r\n") {
+        Some(pos) => (&stdout[..pos], stdout[pos + 4..].to_string()),
+        None => match stdout.find("\n\n") {
+            Some(pos) => (&stdout[..pos], stdout[pos + 2..].to_string()),
+            None => ("", stdout.to_string()),
+        },
+    };
+    let mut status = None;
+    let mut headers = Vec::new();
+    for (i, line) in header_part.lines().enumerate() {
+        let trimmed = line.trim();
+        if i == 0 && trimmed.starts_with("HTTP/") {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                status = parts[1].parse::<u16>().ok();
+            }
+        } else if let Some((k, v)) = trimmed.split_once(':') {
+            headers.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    (status, headers, body)
+}
+
+/// Classifies a non-zero exit from `gh api`.
+fn classify_api_error(args: &[&str], code: i32, stdout: &str, stderr: &str) -> CpdError {
+    let (http_status, headers, _) = split_http_response(stdout);
+    let is_403 =
+        http_status == Some(403) || stderr.contains("HTTP 403") || stdout.contains("403 Forbidden");
+    let is_rate_limit = is_403
+        && (stdout.contains("API rate limit exceeded")
+            || stderr.contains("API rate limit exceeded"));
+
+    if is_rate_limit {
+        let reset_at = headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-ratelimit-reset"))
+            .and_then(|(_, v)| v.parse::<i64>().ok())
+            .and_then(|epoch| OffsetDateTime::from_unix_timestamp(epoch).ok())
+            .and_then(|t| t.format(&Rfc3339).ok());
+
+        return gh_failed(
+            args,
+            format!("gh {} exited {code}.", args[0]),
+            Some(code),
+            stderr,
+            Some("rate_limited"),
+        )
+        .with("rate_limited", true)
+        .with("reset_at", reset_at.map_or(Value::Null, Value::String));
+    }
+
+    let status = stderr.match_indices("HTTP 5").find_map(|(at, _)| {
+        let s = stderr.get(at..at + 8)?;
+        s[6..]
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| s.to_owned())
+    });
+
+    gh_failed(
+        args,
+        format!("gh {} exited {code}.", args[0]),
+        Some(code),
+        stderr,
+        status.as_deref(),
+    )
 }
 
 /// The `gh_failed` of `gh <args>`: transient on an HTTP 5xx or a timeout (`reason`).
@@ -298,19 +422,50 @@ fn parsed<T: for<'de> Deserialize<'de>>(args: &[&str], stdout: &str) -> Result<T
     })
 }
 
+struct ChangedRuns {
+    listed_ids: Option<Vec<u64>>,
+    changed: Vec<Changed>,
+    etag: Option<String>,
+}
+
 /// The waiting runs of `workflow` of `repo` that are the User's (`me`): their ids, and the ones whose `(run_id, updated_at)` is
 /// not in `stored` with the `pending_deployments` read for them. A run with nothing the User can approve is not kept.
+/// When `etag` is provided and the server returns 304 Not Modified, `listed_ids` is None and `changed` is empty.
+/// When 200 OK is returned, returns `Some(ids)` for `listed_ids`, `changed` runs, and optional new `etag`.
 fn changed_runs(
     runner: &dyn Runner,
     cwd: &Path,
     me: &str,
     repo: &str,
     workflow: &str,
+    etag: Option<&str>,
     stored: &[(i64, String, bool, Option<String>)],
-) -> Result<(Vec<u64>, Vec<Changed>), CpdError> {
-    // pro-d468: parallel jobs keep a run `in_progress` or `queued` while its deployment is already approvable.
-    let mut workflow_runs = Vec::new();
-    for status in ["waiting", "in_progress", "queued"] {
+) -> Result<ChangedRuns, CpdError> {
+    let waiting_path =
+        format!("repos/{repo}/actions/workflows/{workflow}/runs?status=waiting&per_page=100");
+    let mut waiting_args: Vec<String> = vec!["api".into(), "--include".into()];
+    let etag_header = etag.map(|e| format!("If-None-Match: {e}"));
+    if let Some(ref h) = etag_header {
+        waiting_args.push("-H".into());
+        waiting_args.push(h.clone());
+    }
+    waiting_args.push(waiting_path);
+    let waiting_args_ref: Vec<&str> = waiting_args.iter().map(String::as_str).collect();
+
+    let waiting_resp = api_with_include(runner, cwd, &waiting_args_ref)?;
+    if waiting_resp.status == Some(304) {
+        return Ok(ChangedRuns {
+            listed_ids: None,
+            changed: Vec::new(),
+            etag: None,
+        });
+    }
+
+    let waiting_runs: Runs = parsed(&waiting_args_ref, &waiting_resp.body)?;
+    let mut workflow_runs = waiting_runs.workflow_runs;
+
+    // Active (in_progress, queued) runs are read without conditional headers.
+    for status in ["in_progress", "queued"] {
         let path =
             format!("repos/{repo}/actions/workflows/{workflow}/runs?status={status}&per_page=100");
         let args = ["api", path.as_str()];
@@ -361,7 +516,11 @@ fn changed_runs(
             pending_json: Value::Array(approvable).to_string(),
         });
     }
-    Ok((ids, out))
+    Ok(ChangedRuns {
+        listed_ids: Some(ids),
+        changed: out,
+        etag: waiting_resp.etag,
+    })
 }
 
 /// An entry of `pending_deployments` the User can approve, as `approve` reads it.
