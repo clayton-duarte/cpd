@@ -331,6 +331,8 @@ impl GithubSource {
                 && !(plan.heavy.is_empty() && plan.absent.is_empty() && plan.meta.is_empty())
             {
                 let light = PollPlan {
+                    authored_after: plan.authored_after.clone(),
+                    reviews_after: plan.reviews_after.clone(),
                     heavy: Vec::new(),
                     absent: Vec::new(),
                     meta: Vec::new(),
