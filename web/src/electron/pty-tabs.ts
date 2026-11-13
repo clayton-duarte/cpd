@@ -23,7 +23,6 @@
 //     `<alias>` is a host alias in `hosts`;
 //   - anything else -> null.
 
-import { tuiAttachCommand } from "../server/cpd-argv.ts";
 import type { PtySize, TabStatus } from "./channels.ts";
 import { CPD_TUI_COMMAND } from "./pty.ts";
 import type { PtyProcess, PtySpawnOptions } from "./pty.ts";
@@ -61,7 +60,7 @@ export function tabCommand(tabId: string, hosts: SshHost[]): TabCommand | null {
   if (tabId.startsWith(SSH_PREFIX)) {
     const alias = tabId.slice(SSH_PREFIX.length);
     if (alias !== "" && hosts.some((host) => host.alias === alias)) {
-      return tuiAttachCommand(alias);
+      return { file: "ssh", args: ["-t", alias, "cpd", "tui", "--attach"] };
     }
   }
   return null;

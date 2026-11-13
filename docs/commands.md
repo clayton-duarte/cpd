@@ -22,7 +22,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 10. [`session`](#10-session)
 10a. [`board`](#10a-board)
 11. [`events`](#11-events)
-11a. [`cockpit serve` (removed)](#11a-cockpit-serve)
+11a. [`cockpit serve`](#11a-cockpit-serve)
 12. [`watch`](#12-watch)
 13. [`tui` (removed)](#13-tui)
 14. [`doctor`, `config`, `tiers`, `models`, `preset`](#14-doctor-config-tiers-models-preset)
@@ -290,6 +290,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd session switch-failed` (§10.18a, internal) | none | no | yes |
 | `cpd session switched` (§10.18b, internal) | none | no | yes |
 | `cpd serve` (§12a) | none | no | no |
+| `cpd cockpit serve` (§11a) | none | no | yes |
 | `cpd upgrade` (§14.4c) | none | yes | no |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
@@ -316,7 +317,6 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | bare `cpd` (§13.3) | open the cockpit | none. `tmux -u -L cpd attach -t cpd` attaches to the tmux server (contract §6.2) |
 | `cpd tui view` and its views (§13.2, internal) | the cockpit's panes and dialogs | none |
 | `cpd tui action` (§9.12, §9.13, §13.2, internal) | the StatusBar's and the popups' clicks | none |
-| `cpd cockpit serve` (§11a) | the NDJSON stream for the WebUI backend | the WebUI's direct WebSocket to the core engine (contract §5.8) |
 | `cpd desktop`, `cpd desktop release` (§14.4a, §14.4b) | the Electron shell: launch, preview, release | the browser (pro-d567; docs/architecture/client.md) |
 | `cpd argv-check` (contract §5.6, hidden) | the parse-only check of the WebUI's argv bridge | none; it goes with the bridge that Plan 4 `webui-core-ws` deletes |
 
@@ -4090,7 +4090,7 @@ Idempotent: read-only; the same `--since` replays the same lines.
 
 ## 11a. `cockpit serve`
 
-**Removed** (decision pro-d529, Plan `drop-cli-tui`). `cpd cockpit serve` is no longer a command: the WebUI connects to the core engine directly over its WebSocket (contract §5.8; pi-native-core.md §5.1). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
+**Restored** (decision pro-d577, bug b37; it supersedes the removal of decision pro-d529, Plan `drop-cli-tui`). The WebUI backend gets its live snapshot and event stream from this command again. The body below is the command as specified; §2 lists it among the commands the binary does not have yet, until the Job that implements it lands.
 
 The WebUI backend's state and event stream (Plan `cpd-realtime-engine`; its invariants are contract §5.5). One process replaces the backend's spawns: the four list commands and `plan show` that it ran on every refresh, and the `events follow` child whose lines triggered them. A committed change reaches the stream without a spawn.
 
@@ -4307,10 +4307,10 @@ Status: decided by pro-d566, pro-d567, pro-d570, pro-d541 and pro-d542. As of th
 
 ### 13.1 `tui`
 
-**Removed** (pro-d529). `cpd tui [--attach] [--respawn]` is no longer a command. The engine is restarted by `cpd watch --ensure` (§12); only tmux keep-alive stays (pi-native-core.md §3.3). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
+**Removed** (pro-d529). `cpd tui [--respawn]` is no longer a command. The engine is restarted by `cpd watch --ensure` (§12); only tmux keep-alive stays (pi-native-core.md §3.3). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
 
 ```
-cpd tui [--attach] [--respawn]
+cpd tui [--respawn]
 ```
 
 Builds the cockpit (§6.1, §6.2) unless it exists and starts the engine.
@@ -4325,15 +4325,11 @@ Effects, each only when missing:
 - **tmux version** (hs-d294): when the server runs an older tmux than the installed one, marks a restart pending (`run/tmux-restart.pending`, §13.3) and says so on stderr; it never restarts the server itself, since it may run inside it. The engine does it once nothing is in the way.
 - No rows of its own; moving a Lead appends `session-moved`.
 
-| Precondition | Code | Exit |
-|---|---|---|
-| with `--attach`: stdin and stdout are a terminal | `not_a_terminal` | 3 |
-
 ```json
-{"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
+{"ok": true, "built": true, "socket": "cpd", "session": "cpd", "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2); bare `cpd` is the same attach with the follow-ups of §13.3. Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died is respawned (`respawn-pane`, amendment 9, §19), never duplicated and one that is gone is added again, so a second run adds nothing; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died is respawned (`respawn-pane`, amendment 9, §19), never duplicated and one that is gone is added again, so a second run adds nothing; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
@@ -4912,7 +4908,7 @@ User decision hs-d259 (2026-10-19), Plan pi-pin, PR `bare`. **Bare `cpd` opens t
 4. **tmux version:** when the cockpit's tmux server runs an older tmux than the installed client (`tmux -L <socket> display -p '#{version}'` against `tmux -V`; hs-d166), restart the server onto the installed tmux **when it is safe**, reopen every Lead and Manager Session that had a pane (same pi session file, same place: the chat slot, its parked window, a Context's window), then attach. When it is not safe, **hold, drain, restart** (User, hs-d294):
    - **Safe** means: no Attempt `starting`, `running` or `merging` and no Lead or Manager Session mid-turn (state `working`; a `blocked` Session has a dialog open, so it is also not safe). Restarting stops every pi in the server; Leads and Managers resume from their session files.
    - **Safe now:** bare `cpd` restarts the server itself, in its own process (it runs in a terminal outside the server): it records every Lead and Manager Session with a live pane and its place (`chat`, or parked: its `park-<label>` window, or a Manager's `ctx-<context>` window); `kill-server`; `cpd tui` (the cockpit on the installed tmux, which also runs `watch --ensure`; the last chat Lead is back in the chat slot); then each Session in the same place: the one of the chat slot as `session open` does, the others in a new window running `cpd session run <id>`, which resumes the Session's pi file, each with `session-moved`. It then attaches with the installed tmux and says in one line how many Sessions it reopened.
-   - **Not safe:** it **marks a restart pending** (the file `$CPD_HOME/run/tmux-restart.pending`, JSON `{"at", "server", "installed", "failed"}`; no store change), attaches at once with the **server's own tmux binary** (its path from the server pid: on Linux `/proc/<pid>/exe`, on macOS read with `libproc`), because a newer client cannot attach to an older server (`open terminal failed: not a terminal`, hs-n224) and prints one line saying so and that the restart happens once nothing is in the way. `cpd tui` does the same marking when it finds the server older (it never restarts the server itself, since it may run inside it) and `tui --attach` attaches with the server's own binary then as well.
+   - **Not safe:** it **marks a restart pending** (the file `$CPD_HOME/run/tmux-restart.pending`, JSON `{"at", "server", "installed", "failed"}`; no store change), attaches at once with the **server's own tmux binary** (its path from the server pid: on Linux `/proc/<pid>/exe`, on macOS read with `libproc`), because a newer client cannot attach to an older server (`open terminal failed: not a terminal`, hs-n224) and prints one line saying so and that the restart happens once nothing is in the way. `cpd tui` does the same marking when it finds the server older (it never restarts the server itself, since it may run inside it).
    - **While a restart is pending, the engine starts no new Attempt** (`scheduling`'s hold, contract §3.7); running Attempts finish normally. It is a planned hold, not an error: `cpd doctor` shows it as the `tmux_restart` check ("tmux restart pending", §14.1). Once none runs (no Attempt `starting`, `running` or `merging`) and no Lead or Manager Session is `working` or `blocked`, the engine starts the restart **detached** (`cpd watch --restart-tmux`, internal; `setsid`, its log `run/tmux-restart.log`), because the restart kills the server the engine itself runs in. The detached process takes `locks/tmux-restart.lock`, checks again that it is safe, does what "safe now" does, clears the pending file and logs the result. Then the engine, started again by `cpd tui`, schedules as usual. The User reconnects with bare `cpd`.
    - **A failed restart** keeps the pending file with `failed` (`at`, `code`, `reason`) and the engine that runs again appends one `error` Event (`source: "watch"`, `code` of the failure, `details: {at, server, installed, log}`); a failed restart holds nothing. The next bare `cpd` finding the server still older tries again (a failed file is marked afresh); finding it as new as the installed tmux, it says the failure in one line and removes the file. Never from inside the cockpit's own server.
 
@@ -6740,7 +6736,7 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 7 | §5.3 and §5.4, `--session` selection | "a Lead of Plan P" is the Session that is `plans.lead_session`; any other Session, side forks included, follows only Events addressed to itself | §10.3, §11 |
 
 | 9 | §6.3, tmux commands | `respawn-pane`, for a dead pane of the cockpit's layout | §13.1 |
-| 10 | §1.2, output | `session run`, `tui view` and `tui --attach` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
+| 10 | §1.2, output | `session run` and `tui view` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
 | 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
 | 12 | §6.1, global options | the options `focus-events on`, `pane-active-border-style fg=blue` and `pane-border-format` (titles, Title Case, unpadded, a grey pill with black text and a blue one with black text when focused, hs-d475, hs-d534 (replacing hs-d530's): a Session pane's `@cpd_title` and another pane's command, `Worker · <job> (Read-Only)`; none for the tree's CPD mark, the plan and widgets panes, a Session pane without a `@cpd_title`, the chat placeholder and the StatusBar), the root `MouseDown1Pane` binding and the `pane-died` hook that respawns only a pane with `@cpd_view`: all set at every server start, not only by `cpd tui` | §13.1 |
 | 13 | §6.2, §6.3 | a Worker view pane carries `@cpd_view worker`, `@cpd_job` and `@cpd_attempt`, opens with `split-window -h -d -l 50%` and retargets with `respawn-pane -k`; tmux commands `respawn-pane -k`, `set-hook` and `display-popup` | §13.2 |

@@ -35,6 +35,12 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum CockpitCommand {
+    /// Serve snapshots and Events as NDJSON on stdout until stdin ends (commands.md §11a)
+    Serve,
+}
+
+#[derive(Subcommand, Debug)]
 pub enum Command {
     /// Contexts and their records (commands.md §3)
     #[command(subcommand)]
@@ -124,6 +130,9 @@ pub enum Command {
     Prune(prune::Args),
     /// Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29)
     Janitor,
+    /// The WebUI backend's state and event stream (commands.md §11a)
+    #[command(subcommand)]
+    Cockpit(CockpitCommand),
     /// Tag the commit that set the workspace version (commands.md §26.1)
     Tag,
     /// The release plumbing (commands.md §26.2)
@@ -161,6 +170,12 @@ pub fn run_with(
 
 fn run_scoped(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
+    // `cpd argv-check` (docs/contract.md §5.6): the web-to-CLI argv contract test's parse-only
+    // check. Handled before clap so it stays out of `cpd --help`, the root help tree and the two
+    // generated files a clap command would change (docs/interface.md, pi/test/cpd-usage.json).
+    if argv.get(1).and_then(|word| word.to_str()) == Some("argv-check") {
+        return crate::argv_check::run();
+    }
     let root_help =
         matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
@@ -224,6 +239,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Resource(c) => resource::run(ports, c),
         Command::Prune(a) => prune::command(a),
         Command::Janitor => janitor::pass(&mut cpd_core::env::Env::open_with(ports)?),
+        Command::Cockpit(CockpitCommand::Serve) => cpd_core::cockpit::run_stdio(),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
         Command::Version(VersionCommand::Sync { print }) => {
             release_exit(version_sync::sync(&repo_root()?, print))
