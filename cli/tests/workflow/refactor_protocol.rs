@@ -1,10 +1,8 @@
 //! Refactor protocol red tests (commands.md §34, decisions pro-d579 / pro-d581).
 
-#[path = "common/mod.rs"]
-mod common;
-
-use common::Run;
-use common::fx::Fx;
+use crate::common;
+use crate::common::Run;
+use crate::common::fx::Fx;
 use std::path::PathBuf;
 
 const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
@@ -71,7 +69,7 @@ impl RefactorFixture {
     }
 }
 
-mod refactor_protocol {
+mod tests {
     use super::*;
 
     /// Decision pro-d579 / pro-d581, commands.md §34.1 rule 2, §34.3:

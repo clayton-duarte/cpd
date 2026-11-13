@@ -37,7 +37,6 @@ mod pr_stacked_ready;
 mod pr_view;
 mod pr_view_feedback;
 mod publish_reconcile;
-#[path = "../refactor_protocol.rs"]
 mod refactor_protocol;
 mod repair_dispatch_race;
 mod repo_hooks;
