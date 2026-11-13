@@ -404,3 +404,29 @@ it("a slow obsolete plan read cannot start classification or publish over the ne
   expect(payloads.map((p) => p.transcript.map((i) => i.text))).toEqual([["u2"]]);
   expect(completions(sent)).toHaveLength(1);
 });
+
+it.each(["null", "rejected"])("does not persist an older fallback under the new entry when classification is %s", async (failure) => {
+  let stored = { entryId: "u1", completion: done };
+  let calls = 0;
+  const writes: string[] = [];
+  const fresh: Completion = { ...done, label: "open_work", text: "Open work", tone: "blocked" };
+  const service = createCompletionService({
+    classifier: { classify: () => {
+      calls++;
+      if (calls === 1) return failure === "rejected" ? Promise.reject(new Error("offline")) : Promise.resolve(null);
+      return Promise.resolve(fresh);
+    } },
+    planOf: async () => plan(1),
+    store: { get: async () => stored, put: async (_id, entryId, completion) => { writes.push(entryId); stored = {entryId, completion}; } },
+  });
+  const sent: SessionServerMessage[] = [];
+  const tracker = service.track(lead, (m) => sent.push(m));
+  tracker.observe(tail([user("u2")])); await flush();
+  const afterFailure = { writes: [...writes], entry: stored.entryId };
+  expect(completions(sent).at(-1)).toMatchObject({ completion: done });
+  tracker.observe(tail([user("u2")])); await flush();
+  expect(afterFailure).toEqual({ writes: [], entry: "u1" });
+  expect(calls).toBe(2);
+  expect(completions(sent).at(-1)).toMatchObject({ completion: fresh });
+  expect(writes).toEqual(["u2"]);
+});

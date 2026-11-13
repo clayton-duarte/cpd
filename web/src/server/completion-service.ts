@@ -47,6 +47,7 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
         }
         if (!current()) return;
         let result: Completion | null;
+        let persistResult = true;
         const hit = cache.get(key);
         if (stored !== null && stored.entryId === entryId) result = stored.completion;
         else if (hit !== undefined) result = hit;
@@ -62,13 +63,15 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
               }
             });
           }
-          result = (await p) ?? stored?.completion ?? null;
+          const classified = await p;
+          persistResult = classified !== null;
+          result = classified ?? stored?.completion ?? null;
         }
         if (result === null || !current()) return;
         if (latest.get(ref.id) === request) {
           last.set(ref.id, result);
           const store = deps.store;
-          if (store !== undefined) {
+          if (store !== undefined && persistResult) {
             // Only persistence waits for earlier writes; classification and UI stay concurrent.
             const write = (writes.get(ref.id) ?? Promise.resolve()).then(async () => {
               if (current() && latest.get(ref.id) === request) await store.put(ref.id, entryId, result);
