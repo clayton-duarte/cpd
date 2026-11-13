@@ -256,7 +256,7 @@ export function createWsServer(deps: WsServerDeps): Disposable {
       }
       const gate = typeof deps.started === "function" ? deps.started() : deps.started;
       void gate
-        .then(() => hub.handle(raw))
+        .then(() => { if (!closed) return hub.handle(raw); })
         .catch((error: unknown) => deps.onError?.(error));
     });
 

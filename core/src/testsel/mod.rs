@@ -258,12 +258,22 @@ pub fn run(
     for (file, title) in web {
         // Vitest prefixes nested titles with `describe > `, so anchor at the start or after a separator.
         let pattern = format!("(?:^| > ){}", &pi_pattern(&title)[1..]);
+        let reports = tempfile::Builder::new()
+            .prefix("cpd-test-")
+            .tempdir()
+            .map_err(|e| internal(format!("cpd test: cannot create report directory: {e}.")))?;
+        let report = reports.path().join("vitest.json");
+        let report_path = report.to_string_lossy();
         let args = [
             "--filter",
             "cpd-web-client",
             "exec",
             "vitest",
             "run",
+            "--reporter=default",
+            "--reporter=json",
+            "--outputFile",
+            report_path.as_ref(),
             "--testNamePattern",
             pattern.as_str(),
             file.as_str(),
@@ -271,6 +281,12 @@ pub fn run(
         let output = process(ports, "pnpm", "pnpm", &args, &root)?;
         forward(out, err, &output)?;
         if !output.status.success() {
+            status = 1;
+        } else if !fs::read(&report).is_ok_and(|bytes| web_ran(&bytes, &root.join(&file), &title)) {
+            write(
+                err,
+                &format!("cpd test: no passed execution confirmed for '{title}' in {file}\n"),
+            )?;
             status = 1;
         }
     }
@@ -423,6 +439,52 @@ fn pi_name(name: &str) -> Option<(&str, &str)> {
     let (file, title) = name.split_once("::")?;
     let is_pi = file.starts_with("pi/test/") && file.ends_with(".test.ts") && !title.is_empty();
     is_pi.then_some((file, title))
+}
+
+/// A successful runner exit alone does not prove a selected test ran: Vitest succeeds on all-skipped files.
+/// Require passed assertions for the requested file/title in its isolated JSON report.
+fn web_ran(bytes: &[u8], file: &Path, title: &str) -> bool {
+    let (Ok(report), Ok(file)) = (serde_json::from_slice::<Value>(bytes), file.canonicalize())
+    else {
+        return false;
+    };
+    if report["success"] != true {
+        return false;
+    }
+    let Some(results) = report["testResults"].as_array() else {
+        return false;
+    };
+    let mut found = false;
+    for result in results {
+        let same_file = result["name"]
+            .as_str()
+            .and_then(|name| Path::new(name).canonicalize().ok())
+            .is_some_and(|name| name == file);
+        if !same_file {
+            continue;
+        }
+        let Some(assertions) = result["assertionResults"].as_array() else {
+            continue;
+        };
+        for assertion in assertions {
+            let Some(leaf) = assertion["title"].as_str() else {
+                continue;
+            };
+            let mut chain = assertion["ancestorTitles"]
+                .as_array()
+                .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+                .unwrap_or_default();
+            chain.push(leaf);
+            if leaf != title && chain.join(" > ") != title {
+                continue;
+            }
+            if assertion["status"] != "passed" {
+                return false;
+            }
+            found = true;
+        }
+    }
+    found
 }
 
 /// Whether the collected tests name `title`: an item's `name` equals the title, or its last `' > '`-separated

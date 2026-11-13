@@ -134,3 +134,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Run(args) => driver::run(args),
     }
 }
+
+#[cfg(test)]
+mod test_removal_tests;
