@@ -351,20 +351,48 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
     Ok(!shared)
 }
 
-/// `run/watch-stopped`: the stop stamp the engine writes when it stops, one RFC 3339 UTC time. Stub path.
+/// `run/watch-stopped`: the stop stamp the engine writes when it stops, one RFC 3339 UTC time.
 #[must_use]
 pub fn engine_stop_stamp(home: &CpdHome) -> std::path::PathBuf {
     home.run_dir().join("watch-stopped")
 }
 
-/// When the engine went down, from the stop stamp (RFC 3339 UTC); `None` without a stamp. Stub: a later Job.
-pub fn engine_down_since(_home: &CpdHome) -> Result<Option<String>, CpdError> {
-    Ok(None)
+/// When the engine went down, from the stop stamp (RFC 3339 UTC); `None` without a stamp.
+pub fn engine_down_since(home: &CpdHome) -> Result<Option<String>, CpdError> {
+    let path = engine_stop_stamp(home);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text.trim().to_owned()).filter(|t| !t.is_empty())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(CpdError::new(
+            ErrorCode::StoreFailed,
+            format!(
+                "Cannot read the engine's stop stamp {}: {e}.",
+                path.display()
+            ),
+        )),
+    }
 }
 
-/// Why the engine is down: `Some("install")` while `run/cpd-install.json` says `restarting`. Stub: a later Job.
-pub fn engine_restart_reason(_home: &CpdHome) -> Result<Option<&'static str>, CpdError> {
-    Ok(None)
+/// Why the engine is down: `Some("install")` while `run/cpd-install.json` says `restarting`.
+pub fn engine_restart_reason(home: &CpdHome) -> Result<Option<&'static str>, CpdError> {
+    let path = home.run_dir().join("cpd-install.json");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot read {}: {e}.", path.display()),
+            ));
+        }
+    };
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("{} is not JSON: {e}.", path.display()),
+        )
+    })?;
+    Ok((value["status"] == "restarting").then_some("install"))
 }
 
 /// The one-line form of a two-row label (pro-d171), as every Event text names an item: Row 1 and Row 2 joined with `: `;

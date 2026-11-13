@@ -2,7 +2,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -11,6 +11,11 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::ports::Ports;
 
 use super::report::Failure;
+
+/// The longest shutdown waits for a running poll.
+const SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
+/// The step of that wait.
+const SHUTDOWN_STEP: Duration = Duration::from_millis(50);
 
 /// A poll that ended: its result and when it ended.
 pub(super) struct Finished {
@@ -92,15 +97,27 @@ impl PollRun {
         }
     }
 
+    #[cfg(test)]
     /// Blocks until the job ended; `None` when the result was already taken.
     pub(super) fn wait(&mut self) -> Option<Finished> {
         self.result.take()?.recv().ok()
     }
 
     /// Shutdown's bounded wait: the result when the poll ends within 5 s of `clock`, else `None` and the poll is
-    /// abandoned. Stub: a later Job.
-    #[allow(dead_code)] // stub: used by the implementation
-    pub(super) fn shutdown(&mut self, _clock: Arc<dyn Clock>) -> Option<Finished> {
-        todo!("the bounded shutdown wait")
+    /// abandoned (its thread ends with the process), so the engine releases `watch.lock` promptly.
+    pub(super) fn shutdown(&mut self, clock: Arc<dyn Clock>) -> Option<Finished> {
+        let deadline = clock.now() + SHUTDOWN_BOUND;
+        loop {
+            if let Some(finished) = self.try_take() {
+                return Some(finished);
+            }
+            self.result.as_ref()?;
+            let now = clock.now();
+            if now >= deadline {
+                self.result = None;
+                return None;
+            }
+            clock.sleep(SHUTDOWN_STEP.min(deadline - now));
+        }
     }
 }
