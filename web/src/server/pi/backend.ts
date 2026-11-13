@@ -1,5 +1,6 @@
 import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
+import { createAskDiagSink } from "../ask-diag.ts";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, PI_SEND_TEXT_MAX, WINDOW_SIZE, WebError, toWireError } from "../../protocol/domain.ts";
@@ -77,7 +78,7 @@ export type AskDiagRecord = { readonly at: string; readonly side: "web"; readonl
 export type AskDiagSink = (record: AskDiagRecord) => void;
 
 export function createPiBackend(deps: {
-  /** Injectable diagnostics sink (stub: not yet used). */
+  /** Injectable diagnostics sink; defaults to appending to `<cpdHome>/run/ask-diag.log`. */
   diag?: AskDiagSink;
   cpd: Cpd;
   fs: FileBoundary;
@@ -93,6 +94,7 @@ export function createPiBackend(deps: {
   /** One source per attach: pass a factory when the backend serves several sessions. */
   live?: LiveSource | (() => LiveSource);
 }): SessionBackend {
+  const sink: AskDiagSink = deps.diag ?? (createAskDiagSink(deps.cpdHome) as AskDiagSink);
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
   async function attach(session: ResolvedSession, emit: SessionEmit): Promise<SessionHandle> {
@@ -346,7 +348,24 @@ export function createPiBackend(deps: {
       listModels: () => Promise.reject(unsupported(REASON.model)),
       async respond(dialogId, response) {
         if (response.method === "ask_user_question") {
+          const diag = (event: string, data: Record<string, unknown> = {}): void => {
+            try {
+              sink({ at: new Date(deps.now()).toISOString(), side: "web", event, session: sessionId, dialogId, ...data });
+            } catch {
+              // diagnostics never change behaviour
+            }
+          };
+          diag("respond.received", {
+            method: response.method,
+            outcome: response.outcome,
+            ...(response.outcome === "answered"
+              ? { answers: response.result.answers.map((a) => ({ kind: a.kind, answerLength: (a.answer ?? "").length })) }
+              : {}),
+          });
           if (!openQuestions.has(dialogId) || answeringQuestions.has(dialogId)) {
+            diag("respond.refused", {
+              reason: !openQuestions.has(dialogId) ? "dialog is not an open question" : "dialog is already being answered",
+            });
             throw new WebError("invalid_message", `no answerable question ${dialogId}`, { field: "dialogId" });
           }
           const askPath = `${deps.cpdHome}/run/ask/${sessionId}.json`;
@@ -368,6 +387,7 @@ export function createPiBackend(deps: {
           }
           // The file boundary creates parent directories. Only acknowledge
           // delivery once its write succeeds, so failures leave the dialog open.
+          diag("respond.written", { path: askPath });
           openQuestions.delete(dialogId);
           out({
             type: "session.dialogResolved",
@@ -380,6 +400,7 @@ export function createPiBackend(deps: {
             try {
               await nodeFs.stat(askPath);
               await nodeFs.rm(askPath, { force: true });
+              diag("respond.escape_sent");
               const shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
               const pane =
                 typeof (shown["session"] as Record<string, unknown> | undefined)?.["tmux_pane"] === "string"
