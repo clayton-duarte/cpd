@@ -1020,3 +1020,46 @@ fn a_failing_heavy_read_does_not_leave_the_other_rows_stale() {
         .expect("endpoint row");
     assert_eq!(row.error_count, 1, "the failure is recorded");
 }
+
+/// `gh` whose heavy document fails without a rate limit and whose searches-only retry is rate limited.
+struct HeavyFailsThenLimited;
+
+impl Handler for HeavyFailsThenLimited {
+    fn handle(&self, call: &Call) -> Reply {
+        let heavy = call
+            .args
+            .iter()
+            .any(|a| a.starts_with("query=") && a.contains("...Heavy"));
+        if heavy {
+            Reply::exit(1, "", "")
+        } else {
+            Reply::exit(1, "", "API rate limit exceeded")
+        }
+    }
+}
+
+#[test]
+fn a_rate_limited_light_retry_pauses_the_endpoint() {
+    let mut rig = Rig::new();
+    let (mut stored, mut moved) = (pr(1), pr(2));
+    rig.seed(&stored, true);
+    rig.seed(&moved, true);
+    stored.checks = vec![("build", "FAILURE")];
+    moved.oid = "b2";
+    moved.updated = "U2";
+    rig.state().authored = vec![stored, moved];
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(HeavyFailsThenLimited));
+    let error = rig.pass(0).unwrap_err();
+    assert_eq!(
+        error.details()["rate_limited"],
+        true,
+        "the retry's rate limit is the pass's error"
+    );
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert!(
+        endpoint::is_paused(&row, rig.t0 + Duration::from_secs(1)),
+        "the endpoint is paused through the rate-limit path"
+    );
+}

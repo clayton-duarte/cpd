@@ -317,10 +317,20 @@ impl GithubSource {
                     absent: Vec::new(),
                     meta: Vec::new(),
                 };
-                if let Ok(light_read) = poll(&light) {
-                    first_failure = read.err();
-                    read = Ok(light_read);
-                    plan = light;
+                match poll(&light) {
+                    Ok(light_read) => {
+                        first_failure = read.err();
+                        read = Ok(light_read);
+                        plan = light;
+                    }
+                    // A rate-limited retry is the endpoint's rate limit; any other retry failure keeps the original error.
+                    Err(retry)
+                        if retry.details().get("rate_limited").and_then(Value::as_bool)
+                            == Some(true) =>
+                    {
+                        read = Err(retry);
+                    }
+                    Err(_) => {}
                 }
             }
         }
