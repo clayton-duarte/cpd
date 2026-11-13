@@ -43,9 +43,62 @@ pub(super) trait Boundary {
 
 /// Re-seal a Job's fingerprint when only recorded replace-test redirects of
 /// its needs explain the drift; refuse otherwise (`reseal_unexplained`).
-#[allow(dead_code)] // the command wiring is the implementing Job's
-pub(super) fn reseal(_env: &mut Env, _plan: &PlanId, _key: &str) -> Result<(), CpdError> {
-    todo!("job reseal")
+pub(super) fn reseal(env: &mut Env, plan: &PlanId, key: &str) -> Result<(), CpdError> {
+    env.store.write("job reseal", |tx| {
+        let all = jobs::load(tx, plan)?;
+        let job = all
+            .iter()
+            .find(|j| j.key == key)
+            .ok_or_else(|| refused("Job does not exist."))?;
+        let Some(stored) = job.fingerprint.clone() else {
+            return Err(refused("Job is not locked."));
+        };
+        let found = jobs::locked_fingerprint(job);
+        if stored == found {
+            return Ok(());
+        }
+        // Undo every completed redirect (new key back to its source); the
+        // drift is explained only if that reproduces the sealed value.
+        let mut redirects: Vec<(String, String)> = Vec::new();
+        {
+            let mut s = tx.prepare("SELECT new_key, source FROM test_replacements WHERE plan = ?1 AND state = 'complete'")?;
+            let rows = s.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            for row in rows {
+                redirects.push(row?);
+            }
+        }
+        let mut before = job.clone();
+        for _ in 0..=redirects.len() {
+            for need in &mut before.needs {
+                if let Some((_, source)) = redirects.iter().find(|(n, _)| n == need) {
+                    *need = source.clone();
+                }
+            }
+        }
+        if before.needs == job.needs || jobs::locked_fingerprint(&before) != stored {
+            return Err(CpdError::new(
+                ErrorCode::LockedJobTampered,
+                format!("Job {key} fingerprint drift is not explained by a recorded replace-test redirect (reseal_unexplained)."),
+            ));
+        }
+        tx.execute(
+            "UPDATE jobs SET fingerprint = ?3 WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), key, found],
+        )?;
+        let text = format!("Resealed {key} fingerprint after recorded replace-test redirects of its needs.");
+        append(tx, NewEvent::job_edited(text, ["fingerprint"]).plan(plan.clone()).job(JobKey::parse(key)?))?;
+        Ok(())
+    })
+}
+
+pub(super) fn reseal_command(args: super::ResealArgs) -> Result<crate::output::Output, CpdError> {
+    let plan = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+    caller(&mut env, &plan)?;
+    reseal(&mut env, &plan, args.key.as_str())?;
+    Ok(crate::output::Output::success(
+        json!({"key": args.key, "fields": ["fingerprint"]}),
+    ))
 }
 
 fn refused(text: impl Into<String>) -> CpdError {
@@ -234,6 +287,20 @@ pub(super) fn replace(
             tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", params![plan.as_str(), dependent, request.new_key])?;
         }
         // Redirecting is only valid while the complete graph still satisfies TDD.
+        let graph = jobs::load(tx, plan)?;
+        // A redirect changes the dependents' needs, an input of their
+        // fingerprint: refresh those that were sealed and unchanged.
+        for dependent in graph.iter().filter(|j| j.needs.contains(&request.new_key)) {
+            let mut prior = dependent.clone();
+            for need in &mut prior.needs {
+                if *need == request.new_key {
+                    *need = request.source.clone();
+                }
+            }
+            if dependent.fingerprint.as_deref() == Some(jobs::locked_fingerprint(&prior).as_str()) {
+                tx.execute("UPDATE jobs SET fingerprint = ?3 WHERE plan = ?1 AND key = ?2", params![plan.as_str(), dependent.key, jobs::locked_fingerprint(dependent)])?;
+            }
+        }
         let graph = jobs::load(tx, plan)?;
         for dependent in graph.iter().filter(|j| j.needs.contains(&request.new_key)) {
             super::check_test_job_required(&graph, plan, dependent)?;
