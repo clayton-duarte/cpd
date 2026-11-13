@@ -41,10 +41,12 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
   const { dialog } = view;
   const toggles = useChatToggles();
   const sessionKey = view.ref?.key ?? view.id;
+  const planReview = dialog?.method === "cpd_plan_review";
   const isBusy = view.busy || view.pending.some((p) => p.state === "sending");
   return (
     <div
       data-chat-dropzone
+      className={planReview ? "flex min-h-0 flex-1 flex-col" : undefined}
       onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
       onDrop={(e) => {
         if (!hasFiles(e)) return;
@@ -59,7 +61,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         completion={view.completion ?? null}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
       />
-      <Transcript
+      {planReview ? null : <Transcript
         items={view.transcript.items}
         hasEarlier={view.transcript.hasEarlier}
         busy={isBusy}
@@ -70,7 +72,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         sessionKey={sessionKey}
         thinking={toggles.thinking}
         tools={toggles.tools}
-      />
+      />}
       {dialog === null ? (
         <Composer
           ref={composer}
