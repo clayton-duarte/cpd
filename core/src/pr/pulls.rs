@@ -59,9 +59,45 @@ pub fn ready_to_merge_sql(alias: &str) -> String {
         "COALESCE({alias}.state = 'open' AND {alias}.draft = 0 AND {alias}.merge_state = 'clean' \
          AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch \
          AND {alias}.base_contained = 1 AND {alias}.head_oid IS NOT NULL \
-         AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid({alias}.feedback) THEN {alias}.feedback ELSE '[]' END) f \
-                         WHERE json_extract(f.value, '$.kind') = 'thread'), 0)"
+         AND {}, 0)",
+        no_open_thread_sql(alias)
     )
+}
+
+/// 1 when no review thread is unresolved on GitHub (pro-d588): the stored `open_threads` (answered threads included), else, for a row
+/// read before that column, the thread items of `feedback`.
+pub fn no_open_thread_sql(alias: &str) -> String {
+    format!(
+        "(CASE WHEN json_valid({alias}.open_threads) THEN json_array_length({alias}.open_threads) = 0 \
+         ELSE NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid({alias}.feedback) THEN {alias}.feedback ELSE '[]' END) f \
+                          WHERE json_extract(f.value, '$.kind') = 'thread') END)"
+    )
+}
+
+/// The review threads unresolved on GitHub, answered or not (pro-d588).
+pub fn unresolved_threads(conn: &Connection, repo: &str, number: i64) -> Result<usize, CpdError> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT CASE WHEN json_valid(open_threads) THEN json_array_length(open_threads) \
+                    ELSE (SELECT count(*) FROM json_each(CASE WHEN json_valid(feedback) THEN feedback ELSE '[]' END) f \
+                          WHERE json_extract(f.value, '$.kind') = 'thread') END \
+             FROM pull_requests WHERE repo = ?1 AND number = ?2",
+            rusqlite::params![repo, number],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    Ok(usize::try_from(n).unwrap_or(0))
+}
+
+/// Stores what `read` found beyond the feedback: the unresolved threads and the review history. Writes nothing when both are held.
+fn store_read(tx: &WriteTxn<'_>, id: i64, read: &Read) -> Result<(), CpdError> {
+    let text = |v: &[String]| serde_json::to_string(v).expect("logins are plain data");
+    tx.execute(
+        "UPDATE pull_requests SET open_threads = ?1, reviewers = ?2 WHERE id = ?3 AND (open_threads IS NOT ?1 OR reviewers IS NOT ?2)",
+        rusqlite::params![text(&read.open_threads), text(&read.reviewers), id],
+    )?;
+    Ok(())
 }
 
 pub(crate) const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
@@ -324,11 +360,18 @@ pub(super) fn upsert(
         membership,
     } = listed;
     let Some(before) = find(tx, &polled.repo, polled.number)? else {
+        let after = insert(tx, polled, *membership, read)?;
+        if let Some(r) = read {
+            store_read(tx, after.id, r)?;
+        }
         return Ok(Some(Change {
             before: None,
-            after: insert(tx, polled, *membership, read)?,
+            after,
         }));
     };
+    if let Some(r) = read {
+        store_read(tx, before.id, r)?;
+    }
     // A listing that carries a head stores it at once (never erases it), whether or not anything else changed.
     if let Some(head) = &polled.head_oid {
         tx.execute(

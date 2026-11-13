@@ -3,9 +3,12 @@
 
 use std::path::Path;
 
-use super::rereview::{Push, comment_text, post};
+use super::comments::{MARKER, parse};
+use super::pulls::ready_to_merge_sql;
+use super::rereview::{Push, comment_text, pass, post};
 use crate::config::Config;
 use crate::home::CpdHome;
+use crate::janitor_tests::Rig;
 use crate::store::Store;
 use crate::swr::source::github_write::target_of;
 
@@ -132,4 +135,103 @@ fn config_rereview_bots_default_and_override() {
     )
     .unwrap();
     assert_eq!(config.pr.rereview_bots, names(&["x-bot"]));
+}
+
+const CONFIGURED: [&str; 2] = [CLAUDE, CODEX];
+
+/// A rig whose Workflow `api` is open on pull request 801 at head `new`, with the given review history.
+fn rig(reviewers: &str, rereview_head: Option<&str>) -> (Rig, Store) {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    rig.sql(&format!(
+        "UPDATE pull_requests SET state = 'open', head_oid = 'new', feedback = '[]', reviewers = '{reviewers}', rereview_head = {} WHERE number = 801;",
+        rereview_head.map_or("NULL".to_owned(), |h| format!("'{h}'"))
+    ));
+    let store = Store::open(&rig.home, 5000).unwrap();
+    (rig, store)
+}
+
+fn pass_asks(store: &mut Store) -> Vec<String> {
+    pass(store, now(), &names(&CONFIGURED)).unwrap()
+}
+
+#[test]
+fn answered_thread_still_blocks_merge_ready() {
+    // The thread's last comment is a `cpd pr reply`: no feedback item, but GitHub still shows it unresolved.
+    let comment = |id: &str, body: &str| serde_json::json!({"id": id, "author": {"login": "codex"}, "body": body, "url": "u", "createdAt": "2026-10-20T09:00:00Z"});
+    let page = |nodes: Vec<serde_json::Value>| serde_json::json!({"totalCount": nodes.len(), "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": nodes});
+    let thread = serde_json::json!({"id": "T1", "isResolved": false, "isOutdated": false, "path": "a.rs",
+        "comments": page(vec![comment("C1", "P1 finding"), comment("C2", &format!("fixed\n\n{MARKER}"))])});
+    let pr = serde_json::json!({"id": "PR_1", "updatedAt": "2026-10-20T10:00:00Z",
+        "reviewThreads": page(vec![thread]), "comments": page(vec![]), "reviews": page(vec![])});
+    let answer = serde_json::json!({"data": {"viewer": {"login": "me"}, "rateLimit": {}, "p0": {"pullRequest": pr}}}).to_string();
+    let read = parse(&[("acme/pay", 801)], &answer, &[]).unwrap().remove(0);
+    assert!(read.items.is_empty(), "the answered thread is no feedback");
+    assert_eq!(read.open_threads, names(&["T1"]));
+
+    let (rig, mut s) = rig("[]", None);
+    rig.sql(&format!(
+        "UPDATE pull_requests SET merge_state = 'clean', base_ref = 'main', default_branch = 'main', base_contained = 1,
+                draft = 0, feedback = '[]', open_threads = '{}' WHERE number = 801;",
+        serde_json::to_string(&read.open_threads).unwrap()
+    ));
+    let ready = |s: &mut Store| {
+        s.read(|c| {
+            Ok(c.query_row(
+                &format!(
+                    "SELECT {} FROM pull_requests r WHERE r.number = 801",
+                    ready_to_merge_sql("r")
+                ),
+                [],
+                |r| r.get::<_, i64>(0),
+            )? != 0)
+        })
+        .unwrap()
+    };
+    assert!(!ready(&mut s), "an answered but unresolved thread blocks");
+    rig.sql("UPDATE pull_requests SET open_threads = '[]' WHERE number = 801;");
+    assert!(ready(&mut s), "resolved: ready (guards a vacuous pass)");
+}
+
+#[test]
+fn rereview_selects_bot_with_answered_threads() {
+    // Feedback is empty (every thread answered), yet the bot is in the review history and a push moved the head.
+    let (_rig, mut s) = rig(&format!("[\"{CODEX}\"]"), Some("old"));
+    assert_eq!(pass_asks(&mut s), names(&[CODEX]));
+    assert_eq!(comments(&mut s).len(), 1);
+}
+
+#[test]
+fn rereview_claim_and_enqueue_are_atomic() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = store(&dir);
+    s.write("test", |tx| {
+        tx.execute_batch(
+            "CREATE TRIGGER no_mutation BEFORE INSERT ON swr_mutations BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let (reviewers, configured) = (names(&[CODEX]), names(&[CODEX]));
+    post(&mut s, now(), &push("aaa", &reviewers, &configured)).expect_err("the enqueue fails");
+    let claims: i64 = s
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM pr_rereview_asks", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(claims, 0, "no bot is recorded as asked without a mutation");
+}
+
+#[test]
+fn rereview_not_requested_for_head_bot_already_reviewed() {
+    let history = format!("[\"{CODEX}\"]");
+    // First poll after the upgrade: the bot has findings, the pass has seen no head yet: it asks nothing and records the head.
+    let (rig, mut s) = rig(&history, None);
+    assert!(pass_asks(&mut s).is_empty());
+    assert!(comments(&mut s).is_empty());
+    // Same head again: nothing.
+    assert!(pass_asks(&mut s).is_empty());
+    // A push moves the head after the feedback: the bot is asked once.
+    rig.sql("UPDATE pull_requests SET head_oid = 'newer' WHERE number = 801;");
+    assert_eq!(pass_asks(&mut s), names(&[CODEX]));
+    assert!(pass_asks(&mut s).is_empty());
+    assert_eq!(comments(&mut s).len(), 1);
 }

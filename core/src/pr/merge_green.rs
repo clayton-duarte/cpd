@@ -45,12 +45,8 @@ pub(super) fn merge_green(ports: &Ports, args: MergeArgs) -> Result<Output, CpdE
         .with("number", number)
         .with("checks", e.row.checks.as_str()));
     }
-    let open_threads = e
-        .feedback
-        .iter()
-        .flatten()
-        .filter(|i| i.kind == super::comments::Kind::Thread)
-        .count();
+    // The threads GitHub shows unresolved, answered ones included: a queued or posted reply does not clear the gate.
+    let open_threads = store.read(|conn| super::pulls::unresolved_threads(conn, &repo, number))?;
     if open_threads > 0 {
         return Err(CpdError::new(
             ErrorCode::ChecksNotGreen,

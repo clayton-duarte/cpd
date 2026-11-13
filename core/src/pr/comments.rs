@@ -38,6 +38,10 @@ pub struct Read {
     pub number: i64,
     pub updated_at: String,
     pub items: Vec<Item>,
+    /// The ids of the review threads GitHub still shows unresolved, answered by `cpd pr reply` or not (pro-d588).
+    pub open_threads: Vec<String>,
+    /// The logins that authored a review thread comment, issue comment or review: the review history, answered or not.
+    pub reviewers: Vec<String>,
 }
 
 /// The most any connection of the read holds: `first: 100` and `last: 100`. More is `gh_failed`.
@@ -245,6 +249,24 @@ pub fn parse(
             ));
         }
         let mut items = Vec::new();
+        let open_threads: Vec<String> = pull
+            .threads
+            .nodes
+            .iter()
+            .filter(|t| !t.resolved && !t.comments.nodes.is_empty())
+            .map(|t| t.id.clone())
+            .collect();
+        let mut reviewers: Vec<String> = pull
+            .threads
+            .nodes
+            .iter()
+            .flat_map(|t| t.comments.nodes.iter().map(|c| &c.author))
+            .chain(pull.comments.nodes.iter().map(|c| &c.author))
+            .chain(pull.reviews.nodes.iter().map(|r| &r.author))
+            .filter_map(|a| a.as_ref().map(|a| a.login.clone()))
+            .collect();
+        reviewers.sort();
+        reviewers.dedup();
         for thread in &pull.threads.nodes {
             let (Some(first), Some(last)) =
                 (thread.comments.nodes.first(), thread.comments.nodes.last())
@@ -320,6 +342,8 @@ pub fn parse(
             number,
             updated_at: pull.updated_at,
             items,
+            open_threads,
+            reviewers,
         });
     }
     Ok(reads)
