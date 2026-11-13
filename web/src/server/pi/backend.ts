@@ -255,6 +255,7 @@ export function createPiBackend(deps: {
         out(m);
       },
       (ts) => committed.has(ts),
+      (callId) => tail.normalizer.completedTools.has(callId),
     );
 
     const POLL_MS = 250;
