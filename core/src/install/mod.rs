@@ -13,6 +13,7 @@ use std::time::Duration;
 
 mod adapter;
 mod follow_up;
+pub use follow_up::restart_waiter;
 mod packages;
 pub mod shell;
 pub mod worktree;

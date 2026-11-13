@@ -1137,7 +1137,7 @@ fn restart_waiter_runs_ensure_once_when_lock_frees() {
     rig.old
         .release_at(Duration::from_secs(90), rig.fakes.clock.elapsed());
 
-    super::follow_up::restart_waiter(&rig.ports, &rig.install, &rig.installed_cpd());
+    super::follow_up::restart_waiter(&rig.ports, &rig.install.cpd_home, &rig.installed_cpd());
 
     let ensures = rig
         .follow_ups()

@@ -8,6 +8,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::Install;
+use crate::home::CpdHome;
 use crate::host::runner::NO_DEADLINE;
 use crate::host::spawn::{Pid, Signal};
 use crate::host::tmux;
@@ -305,7 +306,7 @@ impl FollowUps<'_> {
             // Hand off: after the full wait (an explicit shorter `lock_wait` is a caller's own bound and is not handed
             // off), a detached waiter starts the engine once the lock frees, so the install never leaves it down.
             let handoff = if self.install.lock_wait >= super::DEFAULT_LOCK_WAIT {
-                write_install_state(self.ports, self.install, "restarting");
+                write_install_state(self.ports, &self.install.cpd_home, "restarting");
                 if self.cpd(&WAITER_ARGS).ok() {
                     "; a detached waiter starts it when the lock frees"
                 } else {
@@ -374,13 +375,12 @@ pub(super) fn run(ports: &Ports, install: &Install, dest: &Path, err: &mut dyn W
 pub(super) const WAITER_ARGS: [&str; 2] = ["watch", "--ensure-when-free"];
 
 /// The longest the waiter waits for the lock: an hour, so a lock that never frees ends it.
-#[allow(dead_code)] // the `watch --ensure-when-free` command that calls the waiter is a later change
 const WAITER_BOUND: Duration = Duration::from_secs(3600);
 
 /// Writes `run/cpd-install.json` as `{"status":<status>,"since":<now>}`.
-fn write_install_state(ports: &Ports, install: &Install, status: &str) {
+fn write_install_state(ports: &Ports, cpd_home: &CpdHome, status: &str) {
     use time::format_description::well_known::Rfc3339;
-    let run_dir = install.cpd_home.run_dir();
+    let run_dir = cpd_home.run_dir();
     let since = ports
         .clock
         .utc()
@@ -394,9 +394,8 @@ fn write_install_state(ports: &Ports, install: &Install, status: &str) {
 
 /// The waiter's body: waits (on the clock) for `locks/watch.lock` to be free, then runs `cpd watch --ensure` once,
 /// and marks the install `ok` again. Idempotent: `cpd watch --ensure` is.
-#[allow(dead_code)] // the `watch --ensure-when-free` command that calls the waiter is a later change
-pub(super) fn restart_waiter(ports: &Ports, install: &Install, dest: &Path) {
-    let lock = install.cpd_home.watch_lock();
+pub fn restart_waiter(ports: &Ports, cpd_home: &CpdHome, dest: &Path) {
+    let lock = cpd_home.watch_lock();
     let mut waited = Duration::ZERO;
     while waited < WAITER_BOUND && !FollowUps::lock_free(&lock).unwrap_or(true) {
         ports.clock.sleep(LOCK_STEP);
@@ -404,9 +403,9 @@ pub(super) fn restart_waiter(ports: &Ports, install: &Install, dest: &Path) {
     }
     let mut cmd = Command::new(dest);
     cmd.args(["watch", "--ensure"])
-        .env("CPD_HOME", install.cpd_home.root());
+        .env("CPD_HOME", cpd_home.root());
     if done(ports.runner.output(&mut cmd, "cpd", NO_DEADLINE)).ok() {
-        write_install_state(ports, install, "ok");
+        write_install_state(ports, cpd_home, "ok");
     }
 }
 
