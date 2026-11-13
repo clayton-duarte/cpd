@@ -1260,14 +1260,38 @@ fn classify_web_name() {
     );
 }
 
+fn writes_web_report(receipt: Option<String>) -> impl Fn(&Call) -> bool + Send + Sync + 'static {
+    move |call| {
+        if !call.args.iter().any(|a| a == "vitest") {
+            return false;
+        }
+        if let Some(body) = &receipt
+            && let Some(path) = call
+                .args
+                .windows(2)
+                .find(|a| a[0] == "--outputFile")
+                .map(|a| &a[1])
+        {
+            fs::write(path, body).unwrap();
+        }
+        true
+    }
+}
+
+fn passed_web_report(root: &Path, title: &str) -> String {
+    write(root, "web/sample.test.tsx", "// a collected fixture");
+    json!({ "success": true, "testResults": [{ "name": root.join("web/sample.test.tsx"), "assertionResults": [{ "title": title, "status": "passed", "ancestorTitles": ["suite"] }] }] }).to_string()
+}
+
 /// A web name runs through the web package's vitest, filtered by the exact title.
 #[test]
 fn dispatch_web_name_runs_vitest() {
     let s = Sample::new();
+    let report = passed_web_report(&s.root, "renders a button");
     let fakes = s.fakes(|r| {
         r.on(
             "pnpm",
-            |c| c.args.iter().any(|a| a == "vitest"),
+            writes_web_report(Some(report)),
             Reply::ok("✓ renders a button (2ms)\n"),
         )
     });
@@ -1278,6 +1302,16 @@ fn dispatch_web_name_runs_vitest() {
         .filter(|c| c.args.iter().any(|a| a == "vitest"))
         .map(words)
         .collect();
+    assert_eq!(out.status, 0, "{}", out.what());
+    let report_at = vitest[0]
+        .iter()
+        .position(|a| *a == "--outputFile")
+        .expect("isolated JSON report");
+    let report_path = vitest[0][report_at + 1];
+    assert!(
+        !Path::new(report_path).exists(),
+        "execution report is cleaned after the run"
+    );
     assert_eq!(
         vitest,
         [vec![
@@ -1286,6 +1320,10 @@ fn dispatch_web_name_runs_vitest() {
             "exec",
             "vitest",
             "run",
+            "--reporter=default",
+            "--reporter=json",
+            "--outputFile",
+            report_path,
             "--testNamePattern",
             "(?:^| > )renders a button$",
             "web/sample.test.tsx"
@@ -1309,10 +1347,11 @@ fn dispatch_web_name_runs_vitest() {
 #[test]
 fn web_title_with_regex_metacharacters_is_escaped_and_anchored() {
     let s = Sample::new();
+    let report = passed_web_report(&s.root, "a.c (1+1) [x]");
     let fakes = s.fakes(|r| {
         r.on(
             "pnpm",
-            |c| c.args.iter().any(|a| a == "vitest"),
+            writes_web_report(Some(report)),
             Reply::ok("✓ a.c (1+1) [x] (2ms)\n"),
         )
     });
@@ -1323,6 +1362,16 @@ fn web_title_with_regex_metacharacters_is_escaped_and_anchored() {
         .filter(|c| c.args.iter().any(|a| a == "vitest"))
         .map(words)
         .collect();
+    assert_eq!(out.status, 0, "{}", out.what());
+    let report_at = vitest[0]
+        .iter()
+        .position(|a| *a == "--outputFile")
+        .expect("isolated JSON report");
+    let report_path = vitest[0][report_at + 1];
+    assert!(
+        !Path::new(report_path).exists(),
+        "execution report is cleaned after the run"
+    );
     assert_eq!(
         vitest,
         [vec![
@@ -1331,6 +1380,10 @@ fn web_title_with_regex_metacharacters_is_escaped_and_anchored() {
             "exec",
             "vitest",
             "run",
+            "--reporter=default",
+            "--reporter=json",
+            "--outputFile",
+            report_path,
             "--testNamePattern",
             r"(?:^| > )a\.c \(1\+1\) \[x\]$",
             "web/sample.test.tsx"
@@ -1511,4 +1564,112 @@ fn pi_and_rust_names_unchanged() {
         Kind::Rust,
         "a Rust name stays a Rust name"
     );
+}
+
+#[test]
+fn web_run_rejects_missing_skipped_and_unrelated_execution_reports() {
+    for (label, status, file, title, contents, expected) in [
+        (
+            "missing",
+            "passed",
+            "web/sample.test.tsx",
+            "wanted",
+            None,
+            1,
+        ),
+        (
+            "malformed",
+            "passed",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("not JSON"),
+            1,
+        ),
+        (
+            "skipped",
+            "pending",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("report"),
+            1,
+        ),
+        (
+            "todo",
+            "todo",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("report"),
+            1,
+        ),
+        (
+            "other title",
+            "passed",
+            "web/sample.test.tsx",
+            "other",
+            Some("report"),
+            1,
+        ),
+        (
+            "other file",
+            "passed",
+            "web/other.test.tsx",
+            "wanted",
+            Some("report"),
+            1,
+        ),
+        (
+            "ran",
+            "passed",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("report"),
+            0,
+        ),
+    ] {
+        let s = Sample::new();
+        write(&s.root, "web/sample.test.tsx", "// a collected fixture");
+        write(
+            &s.root,
+            "web/other.test.tsx",
+            "// another collected fixture",
+        );
+        let receipt = contents.map(|body| if body == "report" {
+            json!({ "success": true, "testResults": [{ "name": s.root.join(file), "assertionResults": [{ "title": title, "status": status, "ancestorTitles": ["suite"] }] }] }).to_string()
+        } else { body.to_owned() });
+        let fakes = s.fakes(|r| {
+            r.on(
+                "pnpm",
+                writes_web_report(receipt),
+                Reply::ok("all skipped can still exit zero\n"),
+            )
+        });
+        let out = s.run(&fakes, &["web/sample.test.tsx::wanted"]);
+        assert_eq!(out.status, expected, "{label}: {}", out.what());
+    }
+}
+
+#[test]
+fn web_run_confirms_nested_titles_and_rejects_a_skipped_matching_assertion() {
+    for skipped in [false, true] {
+        let s = Sample::new();
+        write(&s.root, "web/sample.test.tsx", "// a collected fixture");
+        let mut assertions =
+            vec![json!({ "title": "wanted", "status": "passed", "ancestorTitles": ["suite"] })];
+        if skipped {
+            assertions.push(
+                json!({ "title": "wanted", "status": "pending", "ancestorTitles": ["suite"] }),
+            );
+        }
+        let report = json!({ "success": true, "testResults": [{ "name": s.root.join("web/sample.test.tsx"), "assertionResults": assertions }] }).to_string();
+        let fakes = s.fakes(|r| {
+            r.on(
+                "pnpm",
+                writes_web_report(Some(report)),
+                Reply::ok("output preserved\n"),
+            )
+        });
+        let out = s.run(&fakes, &["web/sample.test.tsx::suite > wanted"]);
+        assert_eq!(out.status, if skipped { 1 } else { 0 }, "{}", out.what());
+        assert!(out.stdout.contains("output preserved"));
+    }
 }
