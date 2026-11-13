@@ -7,6 +7,7 @@ import { FakeScheduler } from "../../testing/scheduler.ts";
 import { createDurableBackend } from "./backend.ts";
 import type { SessionEmit, SessionHandle } from "../hub/connection.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
+import { connectHost, type SocketLike } from "./client.ts";
 import type { HostClient, HostFrame } from "./client.ts";
 
 type Obj = Record<string, unknown>;
@@ -544,4 +545,44 @@ describe("durable backend", () => {
       ]);
     });
   });
+});
+
+
+it.each(["attach", "models"])("bounds durable startup when %s is never acknowledged", async (phase) => {
+  const scheduler = new FakeScheduler();
+  let feed: (chunk: string) => void = () => {};
+  const writes: string[] = [];
+  let ended = 0;
+  const socket: SocketLike = { write: (line) => { writes.push(line); }, end: () => { ended++; },
+    onData: (handler) => { feed = handler; return { dispose() {} }; }, onClose: () => ({ dispose() {} }) };
+  const connecting = connectHost("/run/host/s1.sock", { factory: { connect: async () => socket }, scheduler });
+  await tick();
+  feed(JSON.stringify(new FakeHost([]).client().welcome)+"\n");
+  const client = await connecting;
+  const backend = createDurableBackend({ connect: async () => client, cpd: { json: async () => ({ ok: true }) },
+    git: { branch: async () => "main" }, scheduler });
+  let outcome: unknown = null;
+  const messages: SessionServerMessage[] = [];
+  const attaching = backend.attach(SESSION, (m) => messages.push(m)).then((handle) => { outcome = handle; }, (error: unknown) => { outcome = error; });
+  await tick();
+  expect(writes.map((line) => JSON.parse(line).type)).toEqual(["hello", "attach"]);
+  if (phase === "models") {
+    feed(JSON.stringify({ type: "attached", req: "r1", mode: "view", epoch: "e1", from_seq: 0, head_seq: 1, client_id: "c1" })+"\n");
+    feed(JSON.stringify(viewFrame([]))+"\n");
+    await tick();
+    expect(writes.map((line) => JSON.parse(line).type)).toEqual(["hello", "attach", "list_models"]);
+  }
+  scheduler.advance(5001);
+  await tick();
+  const afterDeadline = outcome;
+  const closedAtDeadline = ended;
+  client.close();
+  await attaching;
+  if (phase === "attach") {
+    expect(afterDeadline).toMatchObject({ code: "host_unreachable" });
+    expect(closedAtDeadline).toBe(1);
+  } else {
+    expect(afterDeadline).not.toBeNull();
+    expect(messages.some((m) => m.type === "session.attached")).toBe(true);
+  }
 });
