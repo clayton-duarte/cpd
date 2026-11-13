@@ -250,88 +250,223 @@ pub fn check_over(
     .with("paths", json!(paths)))
 }
 
-/// One test case found in a test file: its name and how many assertions its body holds.
+/// One test case found in a test file: its scoped identity and how many assertions its body holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestCase {
+    /// The scoped identity: the Rust module path (`m::a`) or the JS describe suites (`s > a`) before the name, and
+    /// `#2`, `#3` after it for a later case of the same scope and name.
     pub name: String,
     pub assertions: usize,
 }
 
-/// The name in `src` after a leading `fn ` or a quoted `it("…"`/`test("…"` title.
-fn case_name(line: &str) -> Option<String> {
-    let t = line.trim_start();
-    if let Some(rest) = t
-        .strip_prefix("fn ")
-        .or_else(|| t.strip_prefix("async fn "))
-    {
-        let n: String = rest
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        return (!n.is_empty()).then_some(n);
-    }
-    for open in ["it(", "test(", "it.only(", "test.only("] {
+const JS_CASES: [&str; 4] = ["it(", "test(", "it.only(", "test.only("];
+const JS_SUITES: [&str; 4] = ["describe(", "describe.only(", "describe.skip(", "suite("];
+
+/// The text of the first quoted title after an opening call such as `it(`.
+fn quoted_title(rest: &str) -> Option<String> {
+    let q = rest
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '"' | '\'' | '`'))?;
+    let body = &rest[1..];
+    body.find(q).map(|end| body[..end].to_owned())
+}
+
+/// The identifier after `keyword ` at the start of `t`.
+fn ident_after(t: &str, keyword: &str) -> Option<String> {
+    let rest = t.strip_prefix(keyword)?;
+    let n: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    (!n.is_empty()).then_some(n)
+}
+
+enum Opener {
+    Case(String),
+    /// A scope: its label and the separator that follows it in an identity.
+    Scope(String, &'static str),
+}
+
+/// What `t` (a line without its leading attributes) opens: a Rust `mod`, a JS suite, a JS case, or (after a
+/// `#[test]`) a Rust `fn`.
+fn opener(t: &str, rust_test: bool) -> Option<Opener> {
+    for open in JS_CASES {
         if let Some(rest) = t.strip_prefix(open) {
-            let q = rest
-                .chars()
-                .next()
-                .filter(|c| matches!(c, '"' | '\'' | '`'))?;
-            let body = &rest[1..];
-            return body.find(q).map(|end| body[..end].to_owned());
+            return quoted_title(rest).map(Opener::Case);
         }
+    }
+    for open in JS_SUITES {
+        if let Some(rest) = t.strip_prefix(open) {
+            return quoted_title(rest).map(|l| Opener::Scope(l, " > "));
+        }
+    }
+    let mut t = t;
+    while let Some(rest) = t.strip_prefix("pub ").or_else(|| t.strip_prefix("async ")) {
+        t = rest;
+    }
+    if t.starts_with("mod ") && !t.trim_end().ends_with(';') {
+        return ident_after(t, "mod ").map(|l| Opener::Scope(l, "::"));
+    }
+    if rust_test {
+        return ident_after(t, "fn ").map(Opener::Case);
     }
     None
 }
 
-fn is_assertion(line: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with("assert") || t.starts_with("expect(") || t.contains("assert.")
+/// The assertions in `s`: each `assert…(`/`assert…!(`/`assert.…` and each `expect(` at a word start.
+fn count_assertions(s: &str) -> usize {
+    let b = s.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut n = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if i > 0 && word(b[i - 1]) {
+            i += 1;
+            continue;
+        }
+        if s[i..].starts_with("expect(") {
+            n += 1;
+        } else if s[i..].starts_with("assert") {
+            let mut j = i;
+            while j < b.len() && word(b[j]) {
+                j += 1;
+            }
+            if j < b.len() && matches!(b[j], b'!' | b'(' | b'.') {
+                n += 1;
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    n
+}
+
+/// The `{` and `}` of `s` outside double-quoted strings, as (opens, closes).
+fn braces(s: &str) -> (i32, i32) {
+    let (mut open, mut close, mut quoted, mut escaped) = (0, 0, false, false);
+    for c in s.chars() {
+        if quoted {
+            match (escaped, c) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '{' => open += 1,
+            '}' => close += 1,
+            _ => {}
+        }
+    }
+    (open, close)
+}
+
+struct Frame {
+    depth: i32,
+    seen: bool,
+    label: String,
+    sep: &'static str,
+    case: Option<usize>,
 }
 
 /// The test cases in `src`, in order: Rust `#[test]` fns and `it`/`test` calls (node:test, vitest, jest), each with
-/// its assertion count (lines until the next case start).
+/// its scoped identity and the assertions of its body, a declaration line's included. Scopes are Rust `mod`s and JS
+/// `describe` suites; braces end a case.
 pub fn test_cases(src: &str) -> Vec<TestCase> {
     let mut cases: Vec<TestCase> = Vec::new();
-    let mut rust_pending = false;
-    let mut open = false;
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut depth = 0;
+    let mut rust_test = false;
     for line in src.lines() {
-        let t = line.trim();
-        if t.starts_with("#[test]") || t.starts_with("#[tokio::test") {
-            rust_pending = true;
-            open = false;
+        let mut t = line.trim_start();
+        while t.starts_with("#[") {
+            let Some(end) = t.find(']') else { break };
+            if t.starts_with("#[test") || t.starts_with("#[tokio::test") {
+                rust_test = true;
+            }
+            t = t[end + 1..].trim_start();
+        }
+        if t.is_empty() {
             continue;
         }
-        let js = ["it(", "test(", "it.only(", "test.only("]
-            .iter()
-            .any(|p| t.starts_with(p));
-        if (rust_pending || js)
-            && let Some(name) = case_name(line)
-        {
-            cases.push(TestCase {
-                name,
-                assertions: 0,
+        let depth_before = depth;
+        let mut fresh = false;
+        if let Some(found) = opener(t, rust_test) {
+            let (label, sep, case) = match found {
+                Opener::Case(name) => {
+                    rust_test = false;
+                    let scope: String = stack
+                        .iter()
+                        .filter(|f| f.case.is_none())
+                        .map(|f| format!("{}{}", f.label, f.sep))
+                        .collect();
+                    let mut id = format!("{scope}{name}");
+                    let mut n = 1;
+                    while cases.iter().any(|c| c.name == id) {
+                        n += 1;
+                        id = format!("{scope}{name}#{n}");
+                    }
+                    cases.push(TestCase {
+                        name: id,
+                        assertions: 0,
+                    });
+                    (name, "", Some(cases.len() - 1))
+                }
+                Opener::Scope(label, sep) => (label, sep, None),
+            };
+            stack.push(Frame {
+                depth: depth_before,
+                seen: false,
+                label,
+                sep,
+                case,
             });
-            open = true;
-            rust_pending = false;
-            continue;
+            fresh = true;
         }
-        if open
-            && is_assertion(line)
-            && let Some(c) = cases.last_mut()
+        let (open, close) = braces(t);
+        depth += open - close;
+        for f in &mut stack {
+            f.seen |= depth > f.depth;
+        }
+        if fresh && open > 0 && let Some(f) = stack.last_mut() {
+            f.seen = true;
+        }
+        if let Some(i) = stack.iter().rev().find_map(|f| f.case) {
+            cases[i].assertions += count_assertions(t);
+        }
+        if fresh
+            && open == 0
+            && t.trim_end().ends_with(");")
+            && let Some(f) = stack.last_mut()
         {
-            c.assertions += 1;
+            f.seen = true;
+            f.depth = depth;
+        }
+        while stack.last().is_some_and(|f| f.seen && depth <= f.depth) {
+            stack.pop();
         }
     }
     cases
 }
 
-/// `Ok` when `head` keeps every test case of `base` with no fewer assertions, or the case is in `approved`;
-/// otherwise `tests_removed`.
+/// Whether `approved` names the case `id`: by its scoped identity, or by its bare name.
+fn is_approved(approved: &[String], id: &str) -> bool {
+    let bare = id.rsplit([':', '>']).next().unwrap_or(id).trim();
+    approved.iter().any(|a| a == id || a == bare)
+}
+
+/// `Ok` when `head` keeps every test case of `base` (matched by scoped identity) with no fewer assertions, or the
+/// case is in `approved`; otherwise `tests_removed`.
 pub fn check_tests_kept(base: &str, head: &str, approved: &[String]) -> Result<(), CpdError> {
     let head_cases = test_cases(head);
     let mut lost = Vec::new();
     for b in test_cases(base) {
-        if approved.contains(&b.name) {
+        if is_approved(approved, &b.name) {
             continue;
         }
         match head_cases.iter().find(|h| h.name == b.name) {
@@ -350,6 +485,21 @@ pub fn check_tests_kept(base: &str, head: &str, approved: &[String]) -> Result<(
         ),
     )
     .with("tests", json!(lost)))
+}
+
+/// The text of `path` at `rev`; `None` when `rev` has no such path.
+pub fn file_at(dir: &Path, rev: &str, path: &str) -> Result<Option<String>, CpdError> {
+    let spec = format!("{rev}:{path}");
+    let out = run(dir, &["show", &spec])?;
+    match out.code {
+        0 => Ok(Some(out.stdout)),
+        128 => Ok(None),
+        code => Err(CpdError::new(
+            ErrorCode::GitFailed,
+            format!("git show {spec} exited {code}."),
+        )
+        .with("stderr", out.stderr)),
+    }
 }
 
 /// Record the Lead's excuse for removing test `name`: adds it to `approved` and returns the event text the User
