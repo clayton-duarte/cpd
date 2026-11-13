@@ -402,3 +402,38 @@ describe("isBusy", () => {
     expect(isBusy(facts, "working")).toBe(true);
   });
 });
+
+it("queued appends settle busy only after the matching final transcript content is emitted", async () => {
+  const s = await attached();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const original = s.cpd.json.bind(s.cpd);
+  let armed = true;
+  s.cpd.json = async (args) => {
+    if (args[1] === "show" && armed) { armed = false; await gate; }
+    return original(args);
+  };
+  const before = s.out.length;
+  s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n`);
+  s.watch.fire(); await flush();
+  const final = JSON.stringify({ type: "message", id: "final", message: { role: "assistant", stopReason: "stop", timestamp: 123, content: [{ type: "text", text: "final answer" }] } });
+  s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n${final}\n`);
+  s.watch.fire(); await flush();
+  release(); await flush(); await flush();
+  const events = s.out.slice(before);
+  const answer = events.findIndex((m) => m.type === "session.append" && JSON.stringify(m.items).includes("final answer"));
+  const settled = events.findIndex((m) => m.type === "session.status" && !m.busy);
+  expect(answer).toBeGreaterThanOrEqual(0);
+  expect(settled).toBeGreaterThan(answer);
+  await s.handle.dispose();
+});
+
+it("the first recorded transcript uses the engine state returned by its polling read", async () => {
+  const s = await attached({ ref: { state: "stopped", file: undefined } });
+  await s.handle.submit({ clientSubmissionId: "first", text: "hello", images: [], whenBusy: "followUp" });
+  s.cpd.show = { ...s.cpd.show, state: "working", file: FILE };
+  s.scheduler.advance(250); await flush();
+  const status = s.out.filter((m) => m.type === "session.status").at(-1);
+  expect(status).toMatchObject({ busy: true });
+  await s.handle.dispose();
+});
