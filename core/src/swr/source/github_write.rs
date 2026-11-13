@@ -470,7 +470,7 @@ impl GithubSource {
                 }
             }
             ("pr", "reply") => self.reply(cx, runner, cwd, repo, number, &vars),
-            ("pr", "post_comment") => {
+            ("pr", "post_comment" | "comment") => {
                 let sent = gh::pull_request_id(runner, cwd, repo, number)
                     .and_then(|id| gh::reply_to_comment(runner, cwd, &id, &text("body")));
                 sent.map_or_else(|e| retry(&e), |_| ExecOutcome::Done)

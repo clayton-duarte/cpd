@@ -609,6 +609,8 @@ fn poll_pass(
         Outcome::default()
     };
 
+    // pro-d588: a bot with feedback on a head the engine has not asked about yet is asked to re-review it.
+    super::rereview::pass(&mut env.store, now, &env.config.pr.rereview_bots)?;
     report_unresolved(env, &unresolved)?;
     let reopened = rebind_reopened(env)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.

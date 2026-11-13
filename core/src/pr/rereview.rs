@@ -65,9 +65,64 @@ pub fn post(
             now,
             &target,
             "comment",
-            json!({"body": comment_text(bot)}),
+            // `head_sha` keeps the dedupe of the outbox from merging the asks of two pushes.
+            json!({"body": comment_text(bot), "head_sha": push.head_sha}),
             None,
         )?;
     }
     Ok(fresh)
+}
+
+/// The re-review pass of a poll: for each open Workflow whose open pull request has a known head and open feedback from a
+/// bot in `configured`, asks that bot once per head. Reads only the store, so a poll that changed nothing posts nothing.
+pub fn pass(
+    store: &mut Store,
+    now: OffsetDateTime,
+    configured: &[String],
+) -> Result<Vec<String>, CpdError> {
+    if configured.is_empty() {
+        return Ok(Vec::new());
+    }
+    type Row = (String, String, String, i64, String, String);
+    let rows: Vec<Row> = store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT w.plan, w.key, r.repo, r.number, r.head_oid, r.feedback FROM pull_requests r
+             JOIN workflows w ON w.pull_request = r.id AND w.status = 'open'
+             JOIN plans p ON p.id = w.plan AND p.archived_at IS NULL
+             WHERE r.state = 'open' AND r.head_oid IS NOT NULL AND r.feedback IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })?;
+    let mut asked = Vec::new();
+    for (plan, workflow, repo, number, head_sha, feedback) in rows {
+        let items: Vec<super::comments::Item> =
+            serde_json::from_str(&feedback).map_err(CpdError::bad_row)?;
+        let reviewers: Vec<String> = items.into_iter().map(|i| i.author).collect();
+        asked.extend(post(
+            store,
+            now,
+            &Push {
+                plan: &plan,
+                workflow: &workflow,
+                repo: &repo,
+                number,
+                head_sha: &head_sha,
+                reviewers: &reviewers,
+                configured,
+            },
+        )?);
+    }
+    Ok(asked)
 }
