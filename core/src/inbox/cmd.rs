@@ -245,6 +245,14 @@ pub(crate) fn list_in(env: &mut Env, args: ListArgs) -> Result<Output, CpdError>
     let mut items = Vec::new();
     // An absent engine with no live Manager is an open item with no Context: neither `--closed` nor `--context` lists it.
     let running = model::engine_running(home)?;
+    let (down_since, restart_reason) = if running {
+        (None, None)
+    } else {
+        (
+            model::engine_down_since(home)?,
+            model::engine_restart_reason(home)?,
+        )
+    };
     if !running && !manager && !args.closed && args.context.is_none() {
         items.push(engine_down(now));
     }
@@ -268,7 +276,7 @@ pub(crate) fn list_in(env: &mut Env, args: ListArgs) -> Result<Output, CpdError>
             .count()
     };
     Ok(Output::success(json!({
-        "engine": {"running": running},
+        "engine": {"running": running, "down_since": down_since, "restart_reason": restart_reason},
         "items": items,
         "hidden": {"snoozed": count("snoozed"), "dismissed": count("dismissed"), "claimed": count("claimed")},
         "events_cursor": cursor,
@@ -907,6 +915,53 @@ mod tests {
     use crate::home::CpdHome;
     use crate::inbox::model::{Condition, reconcile};
     use crate::store::Store;
+
+    #[test]
+    fn inbox_list_emits_engine_restart_status_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+        std::fs::create_dir_all(home.run_dir()).unwrap();
+        std::fs::write(model::engine_stop_stamp(&home), "2026-01-01T12:34:56Z\n").unwrap();
+        std::fs::write(
+            home.run_dir().join("cpd-install.json"),
+            r#"{"status":"restarting","since":"2026-01-01T12:34:56Z"}"#,
+        )
+        .unwrap();
+        let (config, _) =
+            crate::config::Config::parse("version = 1\nmachine = \"m1\"\n", &home.config())
+                .unwrap();
+        let store = Store::open(&home, 5000).unwrap();
+        let mut env = Env {
+            home,
+            config,
+            store,
+            ports: Ports::real(),
+            catalog: None,
+        };
+        let args = || ListArgs {
+            context: None,
+            all: false,
+            closed: false,
+            limit: None,
+        };
+        let Output::Success(fields) = list_in(&mut env, args()).unwrap() else {
+            panic!("success")
+        };
+        assert_eq!(
+            fields["engine"],
+            json!({"running": false, "down_since": "2026-01-01T12:34:56Z", "restart_reason": "install"})
+        );
+        std::fs::create_dir_all(env.home.watch_lock().parent().unwrap()).unwrap();
+        let lock = std::fs::File::create(env.home.watch_lock()).unwrap();
+        assert!(crate::lock::try_lock(&lock).unwrap());
+        let Output::Success(fields) = list_in(&mut env, args()).unwrap() else {
+            panic!("success")
+        };
+        assert_eq!(
+            fields["engine"],
+            json!({"running": true, "down_since": null, "restart_reason": null})
+        );
+    }
 
     fn condition(urgency: Urgency, subject: &str) -> Condition {
         Condition {
