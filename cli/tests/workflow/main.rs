@@ -37,7 +37,7 @@ mod pr_stacked_ready;
 mod pr_view;
 mod pr_view_feedback;
 mod publish_reconcile;
-mod refactor_protocol;
+mod workflow_refactor_protocol;
 mod repair_dispatch_race;
 mod repo_hooks;
 mod workflow;
