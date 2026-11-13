@@ -1,23 +1,23 @@
 {
   "version": 1,
   "repository": "https://github.com/clayton-duarte/skills",
-  "revision": "b62b929017b7bdafded41763b10ec1eb0c1fae95",
+  "revision": "53523a3e5fcaf68aad249410fb391e53a0531bfe",
   "path": "skills/repo-qa",
   "files": {
-    "README.md": "25d6326b998134fe0a60c6f775c40ff854070a52374ed49ebc1c1f289f633eae",
-    "SKILL.md": "7be4f55a3b99d13457405027528444804fa44df3ddf03bee4e9c22cedfc6c501",
+    "README.md": "27f886fb16dde03ddf5b268644489f8b918d81cb16c302e9f354f748d8f12f0e",
+    "SKILL.md": "b8771af2caa16fc7eef74f563a3e9dd4f46a0695234ea420a6cc46213bddded6",
     "assets/config.example.json": "f2172748341b34dca9712a60cf8f49766821b241dd1e770c7e77c7b23b523eb4",
-    "assets/handoff.md": "67b5b4d0f2e2cf87d4d416f46d77e5e0c4368a6cd31ca202d4f91569a06c9c6a",
+    "assets/handoff.md": "b1be8613838f3446a866119a93368738fe6a562b0c27de26b1dd2c00f5665ea9",
     "assets/issue.md": "f46a3c140c2ae0a0061d6e745abdaa63f231e7abaddbaaa6a29839c235a24548",
     "assets/pr.md": "c8508959c60d53fef894ac4c4467d1ebfacbea4b9d74489a9171ebd4ed5fef82",
     "assets/profile.md": "cac26bbe9441cdb656471e011888476959ced4a8001952227ed8821d1ade1bb6",
     "assets/run.example.json": "15791a56d6a09e5348466adfd1a811897a14297506bb931c9d15d2026a2342a0",
-    "references/PROTOCOL.md": "383ac4440dade3ce155a38f254378efbbf3523a38283a6f9a77eb42867cfc08b",
-    "references/RESEARCH.md": "2c516dde3ecfabe6ba8ef94c1ed874e116efdbabdfdc6d805bcb1e76bc92dfa6",
+    "references/PROTOCOL.md": "5acdee4c879ffc92615486ffd616adbfe8a266e7de262ce24b60c5acae38bca4",
+    "references/RESEARCH.md": "de4ec95344778c2a83d2868fe3103e93c4afdceb024f856a667e651833e09d85",
     "scripts/codex-usage-reader.py": "825ca678e746cdf4438fce88489f8934b3ad5ffa5e768e7fa7311d934ca1dd26",
     "scripts/codex-usage-reader.test.py": "07e1663da227eaed5f6edb23ac4ad64a262e19f4ae719caca5cf55acbd35a3b9",
-    "scripts/portability.test.mjs": "8013858f0da4ceee0be3ea60e60cc863d02c618dc88be88ac05710d8462e8a78",
-    "scripts/qa.mjs": "466f0906f8fa1a32885ded617e94a54c997dfcfe22ddb052668aa2691b1d1e55",
-    "scripts/qa.test.mjs": "21b7ba2d1a63d04c3b6449af7f940485e8d3b7a02a785251c34c4913ff4f6d86"
+    "scripts/portability.test.mjs": "678be8f938f0e2145b35fe591af7de4f00d54e7bf5b152929ba9b0474784f7d7",
+    "scripts/qa.mjs": "eeb07d80eae951a134b44b3cbb093407c16d30c44937f70e46368f6bfc9b90eb",
+    "scripts/qa.test.mjs": "ac56c4e4fb0e5f215feebcb762018ce3ab3d1d881cef32c39772e9a397c62b52"
   }
 }

@@ -148,12 +148,58 @@ export function createGuard(input, { readUsage, clock = () => new Date() } = {})
       can_create_pr: (weekly?.allowed ?? true) && (effective.prs === null || effective.prs > 0) };
   }
 
+  function prStatus(api = github, batch = null, descriptor = null) {
+    const budget = status(api, clock(), batch, descriptor);
+    if (budget.weekly_allowance?.allowed === false) return { exit: 3, result: { ...budget, refused: "pr-status" } };
+    const pullRequests = [];
+    for (const repo of REPOS) {
+      const seen = new Set();
+      for (let page = 1; ; page++) {
+        const items = api([`repos/${repo}/pulls?state=open&per_page=100&page=${page}`]);
+        if (!Array.isArray(items)) throw new Error(`Invalid open PR response for ${repo}`);
+        const previousSize = seen.size;
+        for (const item of items) {
+          if (!item || !Number.isInteger(item.number) || item.number <= 0 || !(item.body === null || typeof item.body === "string")) {
+            throw new Error(`Invalid open PR response for ${repo}`);
+          }
+          if (seen.has(item.number)) continue;
+          seen.add(item.number);
+          if (!item.body?.includes(MARKER)) continue;
+          const info = api([`repos/${repo}/pulls/${item.number}`]);
+          if (!info || info.number !== item.number || !["open", "closed"].includes(info.state)
+              || !(info.body === null || typeof info.body === "string")) throw new Error(`Invalid PR metadata for ${repo}#${item.number}`);
+          if (info.state === "closed" || !info.body?.includes(MARKER)) continue;
+          if (![true, false, null].includes(info.mergeable) || !/^[0-9a-f]{40}$/i.test(info.head?.sha ?? "")
+              || !/^[0-9a-f]{40}$/i.test(info.base?.sha ?? "") || !nonempty(info.head?.ref) || !nonempty(info.base?.ref)) {
+            throw new Error(`Unverifiable mergeability for ${repo}#${item.number}`);
+          }
+          pullRequests.push({ repository: repo, number: info.number, url: info.html_url ?? `https://github.com/${repo}/pull/${info.number}`,
+            head_sha: info.head.sha, base_sha: info.base.sha, head_branch: info.head.ref, base_branch: info.base.ref,
+            mergeable: info.mergeable, mergeability: info.mergeable === null ? "pending" : info.mergeable ? "mergeable" : "conflicted" });
+        }
+        if (items.length < 100) break;
+        if (seen.size === previousSize) throw new Error(`Open PR pagination made no progress for ${repo}`);
+      }
+    }
+    if (budget.weekly_allowance !== null) {
+      const fresh = readWeeklyUsage(config.weekly_allowance, clock(), readUsage);
+      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(budget.weekly_allowance.resets_at)) > 1000) throw new Error("Weekly window changed; explicit authorization is required");
+      budget.weekly_allowance = fresh;
+      budget.can_create_issue &&= fresh.allowed;
+      budget.can_create_pr &&= fresh.allowed;
+      if (!fresh.allowed) return { exit: 3, result: { ...budget, pull_requests: pullRequests, refused: "pr-status" } };
+    }
+    return { exit: pullRequests.some((pr) => !pr.mergeable) ? 4 : 0,
+      result: { ...budget, checked_at: clock().toISOString(), pull_requests: pullRequests } };
+  }
+
   function run(args, api = github, read = (file) => readFileSync(file, "utf8"), batch = null, descriptor = null) {
     const [command, repo, ...rest] = args;
     if (command === "status" && args.length === 1) return { exit: 0, result: status(api, clock(), batch, descriptor) };
+    if (command === "pr-status" && args.length === 1) return prStatus(api, batch, descriptor);
     if (!["issue", "pr"].includes(command) || !REPOS.includes(repo)
         || rest.length !== (command === "issue" ? 2 : 3) || rest.some((s) => !nonempty(s))) {
-      throw new Error("Usage: qa.mjs [--config FILE] [--run FILE] status | issue OWNER/REPO TITLE BODY_FILE | pr OWNER/REPO HEAD TITLE BODY_FILE");
+      throw new Error("Usage: qa.mjs [--config FILE] [--run FILE] status | pr-status | issue OWNER/REPO TITLE BODY_FILE | pr OWNER/REPO HEAD TITLE BODY_FILE");
     }
     const [head, title, file] = command === "pr" ? rest : [undefined, ...rest];
     const body = read(file);
@@ -171,7 +217,7 @@ export function createGuard(input, { readUsage, clock = () => new Date() } = {})
     const result = api([`repos/${repo}/${command === "pr" ? "pulls" : "issues"}`, "--method", "POST", "--input", "-"], payload);
     return { exit: 0, result: { number: result.number, url: result.html_url, repository: repo, kind: command } };
   }
-  return { config, REPOS, MARKER, batchMarker, runMarker, day, status, run };
+  return { config, REPOS, MARKER, batchMarker, runMarker, day, status, prStatus, run };
 }
 
 export function cli(args, { configFile = "qa.config.json", batch = process.env.QA_BATCH ?? null } = {}) {

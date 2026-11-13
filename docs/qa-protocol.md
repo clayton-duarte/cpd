@@ -8,10 +8,10 @@ in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pi
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
 
-Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/53523a3e5fcaf68aad249410fb391e53a0531bfe/skills/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/SKILL.md) and
-[adoption guide](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/53523a3e5fcaf68aad249410fb391e53a0531bfe/skills/repo-qa/SKILL.md) and
+[adoption guide](https://github.com/clayton-duarte/skills/blob/53523a3e5fcaf68aad249410fb391e53a0531bfe/skills/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -99,7 +99,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers. The current run has null cardinal caps, fresh live usage (maximum60 seconds), and no reset batch.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [canonical kit README](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/README.md) defines fields, exit codes and limits.
+The [canonical kit README](https://github.com/clayton-duarte/skills/blob/53523a3e5fcaf68aad249410fb391e53a0531bfe/skills/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 
@@ -172,7 +172,7 @@ has no usable login; revocation or loss of that volume can require authorization
 This authenticates allowance reads and does not start a new QA run or reset limits.
 The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fresh
 reading was66% remaining; that historical number is not a gate for later work.
-Source PR3 merged with green CI at `b62b929017b7bdafded41763b10ec1eb0c1fae95`; this consumer pins that reviewed revision. User alone merges CPD.
+Source PR3 supplied persistent authentication; User-merged PR6 added proactive PR upkeep. This consumer pins reviewed revision `53523a3e5fcaf68aad249410fb391e53a0531bfe`. User alone merges CPD.
 
 
 ## Proactive PR upkeep
@@ -185,9 +185,10 @@ before new discovery. Pending mergeability is unconfirmed and needs another
 read. Recheck after pushing; a mergeable flag does not replace CI or review.
 The User still reviews and merges every PR.
 
-The portable implementation is proposed in
+The portable implementation merged in
 [skills #6](https://github.com/clayton-duarte/skills/pull/6), tracked by
-[skills #5](https://github.com/clayton-duarte/skills/issues/5). Until a reviewed
-source pin includes `pr-status`, perform the same read-only inspection through
-GitHub's PR API. The vendor remains unchanged; this standing User policy applies
-independently of the consumer update.
+[skills #5](https://github.com/clayton-duarte/skills/issues/5). The reviewed
+source pin includes `pr-status`; use it for the mergeability gate and inspect
+CI/review feedback separately. When the CLI connection is unavailable, native
+GitHub API inspection supplies the same read-only inputs. The standing User
+policy applies independently of a consumer update.

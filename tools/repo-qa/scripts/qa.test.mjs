@@ -327,3 +327,102 @@ test("creation refreshes usage through status and immediately before POST", () =
     assert.equal(reads, scenario === "fresh" ? 3 : changedRead);
   }
 });
+
+test("PR upkeep reports conflicted owned PRs and ignores unmarked ones without writing", () => {
+  const guard = createGuard(fixture, { clock: () => now });
+  const result = guard.run(["pr-status"], (args) => {
+    assert.equal(args.length, 1, "all calls are GETs");
+    if (args[0].includes("/issues?")) return [];
+    if (args[0].includes("/pulls?")) return args[0].includes(REPOS[0])
+      ? [{ number: 1, body: MARKER }, { number: 2, body: "another operator" }] : [];
+    assert.equal(args[0], `repos/${REPOS[0]}/pulls/1`);
+    return { number: 1, state: "open", body: MARKER, title: "owned fix", html_url: "https://example.test/pr/1",
+      head: { sha: "a".repeat(40), ref: "qa/fix" }, base: { sha: "b".repeat(40), ref: "main" }, mergeable: false };
+  });
+  assert.equal(result.exit, 4);
+  assert.equal(result.result.pull_requests.length, 1);
+  assert.equal(result.result.pull_requests[0].mergeability, "conflicted");
+  assert.equal(result.result.pull_requests[0].head_sha, "a".repeat(40));
+});
+
+const prInfo = (number, mergeable = true, extra = {}) => ({ number, state: "open", body: MARKER,
+  head: { sha: "a".repeat(40), ref: `qa/${number}` }, base: { sha: "b".repeat(40), ref: "main" }, mergeable, ...extra });
+
+test("PR upkeep paginates all open attributed PRs across repositories and older runs", () => {
+  const calls = [];
+  const guard = createGuard(fixture, { clock: () => now });
+  const checked = guard.run(["pr-status"], ([path]) => {
+    calls.push(path);
+    if (path.includes("/issues?")) return [];
+    if (path.includes("/pulls?")) {
+      if (path.includes(REPOS[1])) return [{ number: 3, body: MARKER }];
+      return path.endsWith("page=1")
+        ? Array.from({ length: 100 }, (_, i) => ({ number: i + 1, body: i === 0 ? `${MARKER}\nold run` : null }))
+        : [{ number: 101, body: `${MARKER}\nold run` }];
+    }
+    const number = Number(path.split("/").at(-1));
+    return prInfo(number, number === 101 ? null : true);
+  });
+  assert.equal(checked.exit, 4);
+  assert.deepEqual(checked.result.pull_requests.map((p) => [p.repository, p.number, p.mergeability]),
+    [[REPOS[0], 1, "mergeable"], [REPOS[0], 101, "pending"], [REPOS[1], 3, "mergeable"]]);
+  assert.ok(calls.some((p) => p.includes("/pulls?") && p.endsWith("page=2")));
+  assert.ok(!calls.some((p) => p.endsWith("/pulls/2")), "unmarked PRs are not inspected");
+});
+
+test("mergeable PRs pass while PRs closed or unmarked during inspection leave the active set", () => {
+  const guard = createGuard(fixture, { clock: () => now });
+  const result = guard.prStatus(([path]) => {
+    if (path.includes("/issues?")) return [];
+    if (path.includes("/pulls?")) return [{ number: 1, body: MARKER }, { number: 2, body: MARKER }, { number: 3, body: MARKER }];
+    const number = Number(path.split("/").at(-1));
+    return prInfo(number, true, number === 2 ? { state: "closed" } : number === 3 ? { body: null } : {});
+  });
+  assert.equal(result.exit, 0);
+  assert.equal(result.result.pull_requests.length, 2, "only the active owned PR in each repo remains");
+  assert.equal(result.result.checked_at, now.toISOString());
+});
+
+test("PR upkeep fails closed on malformed metadata, API failures and repeated pagination", () => {
+  const guard = createGuard(fixture, { clock: () => now });
+  for (const info of [null, {}, prInfo(2), prInfo(1, "true"), { ...prInfo(1), mergeable: undefined }, prInfo(1, true, { head: {} })]) {
+    assert.throws(() => guard.prStatus(([path]) => {
+      if (path.includes("/issues?")) return [];
+      if (path.includes("/pulls?")) return [{ number: 1, body: MARKER }];
+      return info;
+    }), /metadata|mergeability/);
+  }
+  assert.throws(() => guard.prStatus(([path]) => {
+    if (path.includes("/issues?")) return [];
+    throw new Error("PR API unavailable");
+  }), /unavailable/);
+  assert.throws(() => guard.prStatus(([path]) => path.includes("/issues?") ? [] : {}), /open PR response/);
+  const repeated = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, body: null }));
+  assert.throws(() => guard.prStatus(([path]) => path.includes("/issues?") ? [] : repeated), /pagination made no progress/);
+});
+
+test("PR upkeep checks fresh allowance before and after PR metadata reads", () => {
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  const initial = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+    remaining_percent: 70, resets_at: "2026-11-16T00:14:45Z", ordinary_usage_allowed: true, spend_control_reached: false };
+  for (const scenario of ["blocked", "revoked", "stale", "reset"]) {
+    let sample = { ...initial, remaining_percent: scenario === "blocked" ? 49 : 70 };
+    let current = now.getTime(), prCalls = 0;
+    const guard = createGuard(config, { clock: () => new Date(current), readUsage: () => sample });
+    const api = ([path]) => {
+      if (path.includes("/issues?")) return [];
+      prCalls++;
+      if (scenario === "revoked") sample = { ...sample, remaining_percent: 49 };
+      if (scenario === "stale") current += 61_000;
+      if (scenario === "reset") sample = { ...sample, resets_at: "2026-11-17T00:14:45Z" };
+      return [];
+    };
+    if (["stale", "reset"].includes(scenario)) assert.throws(() => guard.prStatus(api), /stale|window changed/i);
+    else {
+      const result = guard.prStatus(api);
+      assert.equal(result.exit, 3);
+      assert.equal(result.result.can_create_pr, false);
+    }
+    if (scenario === "blocked") assert.equal(prCalls, 0);
+  }
+});

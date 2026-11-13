@@ -251,3 +251,6 @@ method/command is tracked in skills#5 and proposed in skills#6. Research:
 https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request (accessed2026-11-13).
 This is a User operating decision and documented API behavior, not a claim of
 universal consensus. Consumers update immutable reviewed pins separately.
+
+
+The User merged skills#6 on 2026-11-13. CPD now pins reviewed source 53523a3e5fcaf68aad249410fb391e53a0531bfe, including the read-only `pr-status` gate. The vendor manifest hashes the exact upstream tracked files. Weekly cross-process window binding remains tracked in skills#4/PR#7; the active native helper also pins this run's authorized reset, so no later weekly window is allowed.

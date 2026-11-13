@@ -72,6 +72,7 @@ From the target repo root (or pass an absolute `--config` path):
 
 ```sh
 node tools/repo-qa/scripts/qa.mjs --config qa.config.json --run qa-run.json status
+node tools/repo-qa/scripts/qa.mjs --config qa.config.json --run qa-run.json pr-status
 node tools/repo-qa/scripts/qa.mjs --config qa.config.json --run qa-run.json issue OWNER/REPO 'Concrete finding' /tmp/qa-issue.md
 node tools/repo-qa/scripts/qa.mjs --config qa.config.json --run qa-run.json pr OWNER/REPO qa/123-fix 'Concrete change' /tmp/qa-pr.md
 ```
@@ -95,6 +96,19 @@ updates consume neither cap. Search and local counters are not the ledger. Long
 runs extend the listing window to their recorded start; keep that start immutable.
 The two-day ordinary lookback is conservatively wider than Toronto's original
 26-hour window; exact local creation-day filtering still determines day counts.
+
+`pr-status` is a read-only upkeep gate for all open PRs carrying the configured
+scope marker, including previous runs and older PRs outside the counting lookback.
+It paginates each configured repo, fetches current head/base and nullable GitHub
+mergeability, and reports `mergeable`, `conflicted` or `pending`. Exit 4 means
+conflicted/pending PRs need attention before new discovery; pending metadata needs
+a later read. Exit 1 means metadata/API work could not be verified; exit 3 means
+weekly allowance refused the check. Maintenance stays available when only creation
+count caps are exhausted. No PR, review or branch is modified by this command.
+Inspect CI/review feedback too: mergeability alone is not approval or a passed gate.
+The reported revisions are a snapshot; recheck after base/head changes and after
+pushing a conflict resolution. Resolve on the existing branch, preserve both
+intended changes, run relevant checks, and leave the User to review/merge.
 
 Exit 0 means successful status/creation (status can report exhaustion); 3 means
 creation refused at a cap; 1 means invalid input or unverifiable/failed API work.
@@ -213,7 +227,7 @@ the blocked test and run it in an authorized environment; do not silently skip i
 
 > Read `<kit>/SKILL.md`, the target repo's QA profile/config, applicable agent
 > instructions, and the canonical run handoff. Ground yourself in current code,
-> issues and PR feedback. This User instruction starts/resumes run `<ID>` under
+> issues and PR feedback, CI and mergeability. This User instruction starts/resumes run `<ID>` under
 > the attached/referenced descriptor and authorized repository scope. Recheck
 > live budgets, follow the QA Protocol, document decisions, and leave a durable
 > handoff. Stop at the configured count/weekly limits, unavailable telemetry or an explicit stop. User reviews and merges.

@@ -82,3 +82,19 @@ The cloud subscription's native model connection supplies no exposed account-met
 tool; do not claim that being an OpenAI-hosted agent grants the workspace billing
 credentials. This correction follows the User's explicit demand to avoid repeated
 sign-ins; it supersedes treating ephemeral auth as the only supported reader mode.
+
+
+## Proactive pull-request upkeep
+
+A User correction exposed that CI/review checks alone can miss merge conflicts
+introduced by a changed base. Adopt read-only enumeration of all open attributed
+PRs at iteration start and after observed head/base changes, followed by conflict
+resolution and scoped validation on their existing branches. GitHub's
+[get pull request API](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)
+documents nullable `mergeable` and inspected head/base refs; pending computation
+requires another read. The [list API](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests)
+supports paginated open PRs. Consulted2026-11-13. This is an explicit operating
+requirement and API behavior, not a universal consensus claim. The command uses
+existing Node/gh infrastructure, makes no writes and adds no dependency,
+scheduler or automatic merge. Metadata is a snapshot, so CI/reviews and changed
+revisions must still be checked by the agent.

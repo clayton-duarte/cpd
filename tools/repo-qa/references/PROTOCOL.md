@@ -72,7 +72,11 @@ At the start of a run and every iteration:
 
 1. Read current User scope/decisions, this Protocol, repo profile/config,
    applicable agent/contributor instructions, run descriptor and last canonical
-   handoff. Recover outstanding CI/review work before discovering more. Recheck
+   handoff. Recover outstanding CI/review/conflict work before discovering more.
+   Run `pr-status` for every open attributed QA PR, including older runs; resolve
+   conflicts on its existing branch and run scoped checks. Pending mergeability
+   is unconfirmed and must be rechecked. Repeat after observing base/head changes
+   and after pushing a resolution; never merge the PR autonomously. Recheck
    GitHub budgets and configured live weekly allowance; copied counts in a handoff are historical observations.
 2. Verify working tree ownership/cleanliness, base branch/SHA, origin and tools.
    Use the project's pinned versions. Fetch current base safely; never discard
@@ -179,7 +183,8 @@ restart is not a root fix and is not authorized by a local QA run.
    or the repo's equivalent: resulting behavior, implementation/tradeoffs,
    validation and material limitations. The issue holds research/rationale.
    User review/merge remains required. A PR is not a resolved issue.
-6. Monitor CI/review feedback and correct failures caused by this change on the
+6. Monitor mergeability, CI and review feedback; resolve conflicts and correct
+   failures caused by this change on the
    same PR, preserving markers. Keep enough state to resume queued/running CI.
    Do not claim it passed because a scoped test passed. Do not modify another
    agent's unrelated PR merely because it is red.
