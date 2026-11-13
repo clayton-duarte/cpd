@@ -132,7 +132,7 @@ node tools/repo-qa/scripts/qa.mjs --config qa.config.json --run qa-run.json stat
 Keep the reader process alive; it holds the expressly authorized login in memory,
 polls every 30 seconds and publishes only sanitized usage via atomic mode-0600
 files. It performs no inference, account reset or credit purchase, reads no auth
-file, and does not persist a login. Termination/errors remove its snapshot. A lost
+file, and does not persist a login. Orderly termination/errors remove its snapshot; an uncatchable kill leaves a file that expires within60 seconds. A lost
 process/login needs a new explicit device sign-in; do not promise that a cloud
 session survives disconnects or that a reader can keep an inactive agent running.
 The helper is telemetry, not an autonomous agent scheduler. Use a private local

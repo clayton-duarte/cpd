@@ -8,10 +8,10 @@ in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pi
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
 
-Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/8709cc91732954dd8f3388e87fef95a2a1abf889/skills/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/8709cc91732954dd8f3388e87fef95a2a1abf889/skills/repo-qa/SKILL.md) and
-[adoption guide](https://github.com/clayton-duarte/skills/blob/8709cc91732954dd8f3388e87fef95a2a1abf889/skills/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/SKILL.md) and
+[adoption guide](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -99,7 +99,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers. The current run has null cardinal caps, fresh live usage (maximum60 seconds), and no reset batch.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [canonical kit README](https://github.com/clayton-duarte/skills/blob/8709cc91732954dd8f3388e87fef95a2a1abf889/skills/repo-qa/README.md) defines fields, exit codes and limits.
+The [canonical kit README](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 

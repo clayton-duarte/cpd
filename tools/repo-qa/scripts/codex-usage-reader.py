@@ -10,7 +10,9 @@ import json
 import math
 import os
 from pathlib import Path
-import selectors
+import queue
+import signal
+import threading
 import subprocess
 import sys
 import tempfile
@@ -49,6 +51,9 @@ def main():
     args = parser.parse_args()
     if not 0 < args.min_remaining <= 100:
         parser.error("--min-remaining must be in (0,100]")
+    def terminate(*_):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM, terminate)
     output = args.output.absolute()
     # Explicit output destination; existing snapshots never authorize a new reader.
     output.unlink(missing_ok=True)
@@ -57,8 +62,14 @@ def main():
             proc = subprocess.Popen(["codex", "app-server", "--stdio", "-c", 'sqlite_home='+json.dumps(work),
                                      "-c", 'cli_auth_credentials_store="ephemeral"'],
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
-            selector = selectors.DefaultSelector()
-            selector.register(proc.stdout, selectors.EVENT_READ)
+            lines = queue.Queue()
+
+            def receive():
+                for line in proc.stdout:
+                    lines.put(line)
+                lines.put(None)
+
+            threading.Thread(target=receive, daemon=True).start()
 
             def send(value):
                 proc.stdin.write(json.dumps(value)+"\n")
@@ -76,12 +87,13 @@ def main():
                         output.unlink(missing_ok=True)
                         send(dict(id=3, method="account/rateLimits/read", params={}))
                         pending, deadline = True, current+15
-                    if not selector.select(timeout=1):
+                    try:
+                        line = lines.get(timeout=1)
+                    except queue.Empty:
                         if proc.poll() is not None:
                             raise RuntimeError("Codex app-server exited")
                         continue
-                    line = proc.stdout.readline()
-                    if not line:
+                    if line is None:
                         raise RuntimeError("Codex app-server closed")
                     message = json.loads(line)
                     if "error" in message and message.get("id") in (1, 2, 3):
@@ -112,7 +124,6 @@ def main():
                         pending, next_poll, deadline = False, time.monotonic()+30, float("inf")
             finally:
                 output.unlink(missing_ok=True)
-                selector.close()
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)

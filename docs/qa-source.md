@@ -6,7 +6,7 @@ Migration tracking: [#1152](https://github.com/clayton-duarte/cpd/issues/1152).
 CPD's `tools/repo-qa` is a pinned, unmodified consumer snapshot, not another
 source of truth. [tools/repo-qa.upstream.json](../tools/repo-qa.upstream.json) records
 the immutable upstream commit, package path and SHA-256 of every package file.
-The pin is `8709cc91732954dd8f3388e87fef95a2a1abf889`. CPD tests reject changed, added, removed or
+The pin is `21937426e984fdd7fa3bab00739d20453eec49d9`. CPD tests reject changed, added, removed or
 non-file entries that differ from that snapshot.
 
 The User asked for a standalone source repository. Keeping a pinned copy preserves

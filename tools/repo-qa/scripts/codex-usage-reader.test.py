@@ -1,6 +1,11 @@
 import importlib.util
 from pathlib import Path
 import time
+import os
+import subprocess
+import sys
+import tempfile
+import json
 import unittest
 
 spec = importlib.util.spec_from_file_location("reader", Path(__file__).with_name("codex-usage-reader.py"))
@@ -35,6 +40,43 @@ class UsageTests(unittest.TestCase):
         data["rateLimitsByLimitId"]["codex"]["primary"]["windowDurationMins"] = 10080
         with self.assertRaises(ValueError):
             reader.normalize(data)
+
+
+    def test_coalesced_app_server_replies_stop_at_threshold_and_remove_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "codex"
+            fake.write_text("#!/usr/bin/env python3\n" + r'''
+import json, sys, time
+assert 'cli_auth_credentials_store="ephemeral"' in sys.argv
+assert 'app-server' in sys.argv
+def send(value):
+    print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        send({"id":1,"result":{}})
+    elif method == "account/login/start":
+        # Both messages may be buffered by a text reader in one OS read.
+        sys.stdout.write(json.dumps({"id":2,"result":{"verificationUrl":"https://example.invalid/activate","userCode":"fake-code"}})+"\n"+json.dumps({"method":"account/login/completed","params":{"success":True}})+"\n")
+        sys.stdout.flush()
+    elif method == "account/rateLimits/read":
+        for used in (30,51):
+            send({"id":3,"result":{"accountId":"must-not-leak","ordinaryUsageAllowed":True,"rateLimitsByLimitId":{"codex":{"limitId":"codex","spendControlReached":False,"secondary":{"usedPercent":used,"windowDurationMins":10080,"resetsAt":int(time.time()+86400)}}}}})
+''')
+            fake.chmod(0o700)
+            snapshot = root / "usage.json"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("codex-usage-reader.py")),
+                                     "--output", str(snapshot), "--min-remaining", "50"],
+                                    env={**os.environ, "PATH":str(root)+os.pathsep+os.environ["PATH"]},
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            values = [json.loads(line) for line in result.stdout.splitlines()]
+            self.assertEqual([v["remaining_percent"] for v in values if "remaining_percent" in v], [70,49])
+            self.assertEqual(values[-1], {"paused":True})
+            self.assertNotIn("must-not-leak", result.stdout+result.stderr)
+            self.assertFalse(snapshot.exists())
 
 
 if __name__ == "__main__":
