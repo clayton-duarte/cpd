@@ -332,6 +332,7 @@ error_codes! {
     SessionRunning = "session_running" => Refused,
     DescriptionRequired = "description_required" => Refused,
     JiraRequired = "jira_required" => Refused,
+    DocsForbidden = "docs_forbidden" => Refused,
     JiraTitleInvalid = "jira_title_invalid" => Refused,
     DescriptionInvalid = "description_invalid" => Refused,
     AdoptNotOpen = "adopt_not_open" => Refused,
