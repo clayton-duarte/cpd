@@ -109,6 +109,8 @@ export interface InboxRow {
 export interface InboxModel {
   readonly openCount: number; // items.length (the list holds open, visible items only)
   readonly engineRunning: boolean;
+  readonly engineDownSince?: string | null; // RFC 3339 time the engine went down; null/absent while running or unknown
+  readonly engineRestartReason?: string | null; // e.g. "install" while `cpd install` is restarting the engine; else null
   readonly hidden: { readonly claimed: number; readonly dismissed: number; readonly snoozed: number };
   readonly rows: readonly InboxRow[]; // source order (rank order of cpd)
   readonly cursor: number;
@@ -229,4 +231,9 @@ export interface SettingsChanges {
   readonly experimental?: Partial<Record<SettingsSwitch, boolean>>;
   /** The machine-wide Worker count, when the User changed it (air-d70). */
   readonly concurrency?: number;
+}
+
+/** Parses the engine fields of an inbox model from its wire shape. Stub: not implemented yet. */
+export function parseInboxEngine(_raw: unknown): { engineRunning: boolean; engineDownSince: string | null; engineRestartReason: string | null } {
+  return { engineRunning: true, engineDownSince: null, engineRestartReason: null };
 }

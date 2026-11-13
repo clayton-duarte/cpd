@@ -155,6 +155,19 @@ describe("readmodel", () => {
     ]);
   });
 
+  it("maps engine down since and restart reason", async () => {
+    const { cpd } = fakeCpd({}, {
+      "inbox list": async () => ({
+        ok: true, items: [], hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, events_cursor: 9,
+        engine: { running: false, down_since: "2026-01-15T12:00:00Z", restart_reason: "install" },
+      }),
+    });
+    const { inbox } = await createReadModel(cpd).loadAll(null);
+    expect(inbox.engineRunning).toBe(false);
+    expect(inbox.engineDownSince).toBe("2026-01-15T12:00:00Z");
+    expect(inbox.engineRestartReason).toBe("install");
+  });
+
   it("a failing cpd command yields a typed error and keeps the previous snapshot", async () => {
     let fail = false;
     const { cpd } = fakeCpd({ context: [context("c1")] }, {
