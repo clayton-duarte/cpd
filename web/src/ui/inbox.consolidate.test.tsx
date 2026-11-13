@@ -103,3 +103,17 @@ it("error toast stays dismissable and not stuck Sending when send throws while c
   click(dismissBtn());
   expect(toast()).toBeNull();
 });
+
+it("a lost report acknowledgement releases Report and Dismiss without replay after reconnect", () => {
+  const transport = errorToastApp();
+  click(reportBtn());
+  expect(reportBtn()?.textContent).toBe("Sending…");
+  act(() => transport.emitStatus("closed"));
+  act(() => transport.emitStatus("open"));
+  act(() => transport.emitMessage(snapshot));
+  expect(reports(transport)).toHaveLength(1);
+  expect(reportBtn()?.textContent).not.toBe("Sending…");
+  expect(dismissBtn()?.disabled).toBe(false);
+  click(dismissBtn());
+  expect(toast()).toBeNull();
+});
