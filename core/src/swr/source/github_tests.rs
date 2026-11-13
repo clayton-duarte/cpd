@@ -968,7 +968,6 @@ fn a_deploys_rate_limit_pauses_until_the_rest_reset_not_the_graphql_one() {
     );
 }
 
-<<<<<<< HEAD
 /// `gh` whose GraphQL answers an empty body (exit 1) whenever the document asks for heavy fields, as a document GitHub cannot
 /// answer does; a light document goes to the [`World`].
 struct HeavyFails(Arc<World>);
@@ -1062,7 +1061,9 @@ fn a_rate_limited_light_retry_pauses_the_endpoint() {
     assert!(
         endpoint::is_paused(&row, rig.t0 + Duration::from_secs(1)),
         "the endpoint is paused through the rate-limit path"
-=======
+    );
+}
+
 #[test]
 fn a_deploys_rate_limit_never_shortens_an_active_graphql_floor_pause() {
     let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
@@ -1085,6 +1086,5 @@ fn a_deploys_rate_limit_never_shortens_an_active_graphql_floor_pause() {
         row.paused_until,
         Some(graphql_reset),
         "the later floor pause stands"
->>>>>>> origin/swr-commit/fixreview
     );
 }
