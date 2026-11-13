@@ -35,22 +35,26 @@ fn show(fx: &Fx, id: &str) -> Value {
     fx.cpd(&["protocol", "bug", "show", id]).ok()["bug"].clone()
 }
 
-/// `cpd protocol bug mitigate <id> --mitigation <text>` as Session `session`, and its `bug` object.
+/// The issue every mitigation of these tests names (`--issue` is required: a bug is not mitigated without its issue).
+const ISSUE: &str = "https://github.com/clayton-duarte/cpd/issues/1156";
+
+/// `cpd protocol bug mitigate <id> --mitigation <text> --issue <ISSUE>` as Session `session`, and its `bug` object.
 fn mitigate(fx: &Fx, id: &str, mitigation: &str, session: &str) -> Value {
-    fx.cpd_with(
-        fx.env.root(),
-        &[
-            "protocol",
-            "bug",
-            "mitigate",
-            id,
-            "--mitigation",
-            mitigation,
-        ],
-        &[("CPD_SESSION", session)],
-    )
-    .ok()["bug"]
-        .clone()
+    mitigate_run(fx, id, mitigation, &["--issue", ISSUE], session).ok()["bug"].clone()
+}
+
+/// `cpd protocol bug mitigate <id> --mitigation <text> <extra>` as Session `session`, as it is.
+fn mitigate_run(fx: &Fx, id: &str, mitigation: &str, extra: &[&str], session: &str) -> common::Run {
+    let mut args = vec![
+        "protocol",
+        "bug",
+        "mitigate",
+        id,
+        "--mitigation",
+        mitigation,
+    ];
+    args.extend(extra);
+    fx.cpd_with(fx.env.root(), &args, &[("CPD_SESSION", session)])
 }
 
 /// The bug ids of a `protocol bug list` result, in order.
@@ -176,6 +180,8 @@ fn close_requires_a_root_fix_and_a_regression_test() {
     );
     assert_eq!(show(&fx, "b1")["status"], "open");
 
+    mitigate(&fx, "b1", "A stopgap.", "s-42");
+
     // Both: it closes, keeping the root-fix reference and the regression test, and records when.
     let bug = fx
         .cpd(&[
@@ -232,4 +238,239 @@ fn list_shows_open_bugs_and_their_mitigation_state() {
         .cpd(&["protocol", "bug", "list", "--status", "open"])
         .ok();
     assert_eq!(ids(&open), ["b1", "b2"]);
+}
+
+/// A mitigation without `--issue` is refused `issue_required`, exit 3, and writes nothing: the bug stays unmitigated.
+#[test]
+fn mitigate_without_issue_is_refused() {
+    let fx = bug_fx();
+    report(&fx, "the engine stopped ticking", "No tick for an hour.");
+
+    let run = mitigate_run(&fx, "b1", "Restarted the engine.", &[], "s-42");
+    common::refused(&run, "issue_required", 3);
+
+    let bug = show(&fx, "b1");
+    assert!(bug["mitigation"].is_null(), "{bug}");
+    assert!(bug["mitigated_at"].is_null(), "{bug}");
+}
+
+/// An `--issue` that is not `https://github.com/<owner>/<repo>/issues/<N>` is refused `issue_invalid`, exit 2, and writes nothing.
+#[test]
+fn mitigate_with_malformed_issue_is_refused() {
+    let fx = bug_fx();
+    report(&fx, "the engine stopped ticking", "No tick for an hour.");
+
+    for bad in [
+        "1156",
+        "#1156",
+        "https://github.com/clayton-duarte/cpd/pull/1156",
+        "https://github.com/clayton-duarte/cpd/issues/",
+        "https://github.com/clayton-duarte/cpd/issues/abc",
+        "https://example.com/clayton-duarte/cpd/issues/1156",
+    ] {
+        let run = mitigate_run(
+            &fx,
+            "b1",
+            "Restarted the engine.",
+            &["--issue", bad],
+            "s-42",
+        );
+        common::refused(&run, "issue_invalid", 2);
+        assert!(show(&fx, "b1")["mitigation"].is_null(), "{bad} was stored");
+    }
+}
+
+/// The issue is stored on the bug: `mitigate`, `show` and `list` print it as `issue`; an unmitigated bug has `issue` null.
+#[test]
+fn mitigate_records_issue_shown_by_show_and_list() {
+    let fx = bug_fx();
+    report(&fx, "first bug", "one");
+    report(&fx, "second bug", "two");
+    assert!(show(&fx, "b1")["issue"].is_null());
+
+    let bug = mitigate(&fx, "b1", "A stopgap.", "s-42");
+    assert_eq!(bug["issue"], ISSUE, "{bug}");
+    assert_eq!(show(&fx, "b1")["issue"], ISSUE);
+
+    let all = fx.cpd(&["protocol", "bug", "list"]).ok();
+    let bugs = all["bugs"].as_array().unwrap_or_else(|| panic!("{all}"));
+    assert_eq!(bugs[0]["issue"], ISSUE, "{all}");
+    assert!(bugs[1]["issue"].is_null(), "{all}");
+}
+
+/// `bug close --root-fix` of a bug with no issue is refused `bug_issue_required`, exit 3, and the bug stays open.
+#[test]
+fn close_root_fix_refused_without_issue() {
+    let fx = bug_fx();
+    report(&fx, "pr merge refused", "A clean stack was refused.");
+
+    let run = fx.cpd(&[
+        "protocol",
+        "bug",
+        "close",
+        "b1",
+        "--root-fix",
+        "protocol-enforce/ship/b1",
+        "--regression-test",
+        "protocol_bug::close_root_fix_refused_without_issue",
+    ]);
+    common::refused(&run, "bug_issue_required", 3);
+    assert_eq!(show(&fx, "b1")["status"], "open");
+}
+
+/// The repo `pay` (keyed `acme/pay`, with `[test-commands]`), a config and Plan `pay-1` with its Lead, for `workflow add`.
+fn workflow_fx() -> (Fx, String) {
+    let fx = Fx::with_ports();
+    let repo = fx.keyed_repo("pay").canonicalize().unwrap();
+    fx.env.repo_policy(
+        "acme",
+        "pay",
+        "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n",
+    );
+    fx.env.write_config("version = 1\nmachine = \"m1\"\n");
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('pay-1', 'ctx', 'Pay the bills', 'grounding', 'lead1', '1999-12-31T00:00:00.000Z');",
+    );
+    (fx, repo.display().to_string())
+}
+
+/// `cpd workflow add change --repo <repo> --title Change --plan pay-1 --bug <bug>`.
+fn workflow_add_bug(fx: &Fx, repo: &str, bug: &str) -> common::Run {
+    fx.cpd(&[
+        "workflow", "add", "change", "--repo", repo, "--title", "Change", "--shape", "config",
+        "--plan", "pay-1", "--bug", bug,
+    ])
+}
+
+/// `workflow add --bug <id>` of a bug with no issue is refused `bug_issue_required`, exit 3, and adds no Workflow.
+#[test]
+fn workflow_add_bug_refused_without_issue() {
+    let (fx, repo) = workflow_fx();
+    report(&fx, "pr merge refused", "A clean stack was refused.");
+
+    let run = workflow_add_bug(&fx, &repo, "b1");
+    common::refused(&run, "bug_issue_required", 3);
+}
+
+/// `workflow add --bug <id>` of an unknown bug is refused `bug_unknown`, and adds no Workflow.
+#[test]
+fn workflow_add_bug_unknown_is_refused() {
+    let (fx, repo) = workflow_fx();
+
+    let run = workflow_add_bug(&fx, &repo, "b99");
+    // The contract names no exit code for `bug_unknown`: the code is the contract.
+    assert_eq!(run.error()["code"], "bug_unknown", "{run:?}");
+}
+
+/// A bug `b1` with the issue `ISSUE`, for the `workflow add --bug` tests.
+fn issue_bug(fx: &Fx) {
+    report(fx, "pr merge refused", "A clean stack was refused.");
+    mitigate(fx, "b1", "A stopgap.", "s-42");
+}
+
+/// A rerun of `workflow add` with another or a new `--bug` is refused `workflow_exists`; the same `--bug` (or none) is `already`.
+#[test]
+fn workflow_add_rerun_compares_the_bug() {
+    let (fx, repo) = workflow_fx();
+    issue_bug(&fx);
+    report(&fx, "second", "two");
+    mitigate_run(
+        &fx,
+        "b2",
+        "Another.",
+        &[
+            "--issue",
+            "https://github.com/clayton-duarte/cpd/issues/1157",
+        ],
+        "s-42",
+    )
+    .ok();
+
+    // A Workflow added with no bug: a rerun naming one differs.
+    let plain = |fx: &Fx| {
+        fx.cpd(&[
+            "workflow", "add", "plain", "--repo", &repo, "--title", "Change", "--shape", "config",
+            "--plan", "pay-1",
+        ])
+    };
+    plain(&fx).ok();
+    workflow_add_bug(&fx, &repo, "b1").ok();
+    let other = workflow_add_bug(&fx, &repo, "b2");
+    common::refused(&other, "workflow_exists", 3);
+    assert_eq!(workflow_add_bug(&fx, &repo, "b1").ok()["already"], true);
+    let named = fx.cpd(&[
+        "workflow", "add", "plain", "--repo", &repo, "--title", "Change", "--shape", "config",
+        "--plan", "pay-1", "--bug", "b1",
+    ]);
+    common::refused(&named, "workflow_exists", 3);
+}
+
+/// `workflow add --adopt <n> --bug <id>` is refused `adopt_bug_unsupported`, exit 2, before anything is read from GitHub.
+#[test]
+fn workflow_add_adopt_with_bug_is_refused() {
+    let (fx, repo) = workflow_fx();
+    issue_bug(&fx);
+    let run = fx.cpd(&[
+        "workflow", "add", "adopted", "--repo", &repo, "--title", "Change", "--plan", "pay-1",
+        "--adopt", "7", "--bug", "b1",
+    ]);
+    common::refused(&run, "adopt_bug_unsupported", 2);
+}
+
+/// Mitigating a bug that has an issue with another `--issue` is refused `issue_conflict`, exit 3; the same issue is a no-op success.
+#[test]
+fn mitigate_with_another_issue_is_refused() {
+    let fx = bug_fx();
+    report(&fx, "first bug", "one");
+    mitigate(&fx, "b1", "A stopgap.", "s-42");
+
+    let run = mitigate_run(
+        &fx,
+        "b1",
+        "A stopgap.",
+        &["--issue", "https://github.com/clayton-duarte/cpd/issues/9"],
+        "s-42",
+    );
+    common::refused(&run, "issue_conflict", 3);
+    assert_eq!(show(&fx, "b1")["issue"], ISSUE);
+
+    let same = mitigate_run(&fx, "b1", "A new stopgap.", &["--issue", ISSUE], "s-42").ok();
+    assert_eq!(same["bug"]["mitigation"], "A new stopgap.", "{same}");
+}
+
+/// `workflow describe` of a bug-linked Workflow with an open pull request queues the body with the `Fixes` line.
+#[test]
+fn describe_keeps_the_fixes_line_in_the_queued_body() {
+    let (fx, repo) = workflow_fx();
+    issue_bug(&fx);
+    workflow_add_bug(&fx, &repo, "b1").ok();
+    fx.env.sql("UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay-1' AND key = 'change'");
+    fx.env.sql(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/pay', 5, 'https://github.com/acme/pay/pull/5', 'Change', 0, 'open', 'none', 'none', 't', NULL, 't');
+         UPDATE workflows SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 5, pr_url = 'https://github.com/acme/pay/pull/5',
+                pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE number = 5) WHERE plan = 'pay-1' AND key = 'change'",
+    );
+    let file = fx.env.root().join("body.md");
+    std::fs::write(&file, "## What and why\n\nWords.\n").unwrap();
+    let out = fx
+        .cpd(&[
+            "workflow",
+            "describe",
+            "change",
+            "--file",
+            file.to_str().unwrap(),
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
+    assert_eq!(out["queued"], true, "{out}");
+    let body: String = fx
+        .env
+        .query("SELECT json_extract(vars_json, '$.body') FROM swr_mutations");
+    assert!(body.ends_with("Fixes clayton-duarte/cpd#1156"), "{body}");
 }

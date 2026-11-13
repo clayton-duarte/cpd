@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SessionRef, WireFile } from "../../protocol/domain.ts";
 import { PI_SEND_TEXT_MAX } from "../../protocol/domain.ts";
@@ -141,4 +144,29 @@ it("different handles with identical client IDs still get independent attachment
   expect(new Set(s.fs.writes.map((w) => w.path)).size).toBe(2);
   await s.handle.dispose();
   await other.dispose();
+});
+
+
+it.each(["x".repeat(246) + ".txt", "é".repeat(124) + ".txt", "x".repeat(250), "x." + "t".repeat(248)])("stores a valid long picked filename within the component byte limit: %s", async (name) => {
+  const dir = await mkdtemp(join(tmpdir(), "cpd-qa-file-name-"));
+  const s = await setup({ text: "" });
+  try {
+    await writeFile(join(dir, name), "picked content");
+    expect(await readFile(join(dir, name), "utf8")).toBe("picked content");
+    s.fs.write = async (path, bytes) => {
+      await writeFile(join(dir, basename(path)), bytes);
+      s.fs.writes.push({ path, bytes });
+    };
+    await s.handle.submit({ clientSubmissionId: "long-name", text: "review", images: [], files: [{ name, text: "picked content" }], whenBusy: "followUp" });
+    expect(send(s.cpd.calls)).toHaveLength(1);
+    const written = s.fs.writes[0]!;
+    expect(Buffer.byteLength(basename(written.path))).toBeLessThanOrEqual(255);
+    expect(basename(written.path)).toMatch(/^s1-1000-[0-9a-f-]{36}-0-/);
+    if (name.endsWith(".txt")) expect(written.path.endsWith(".txt")).toBe(true);
+    expect(await readFile(join(dir, basename(written.path)), "utf8")).toBe("picked content");
+    expect(send(s.cpd.calls)[0]?.at(-1)).toContain(`[Attached file: ${written.path}]`);
+  } finally {
+    await s.handle.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
