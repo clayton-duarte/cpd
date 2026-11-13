@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use super::{Cx, ExecOutcome, QueryKey, Source};
 use crate::clock::timestamp;
 use crate::error::CpdError;
+use crate::home::CpdHome;
 use crate::pr::swr_read::{self, PollNode, PollPlan, PollRead};
 use crate::swr::outbox::{Coalesce, Mutation};
 use crate::swr::{cache, endpoint};
@@ -80,6 +81,7 @@ struct Stored {
     hydrated: bool,
     /// The stored rollup is failed and a label is excused: the contexts are needed to excuse a Danger (pro-d447).
     held_failure: bool,
+    labels: Vec<String>,
     hydrated_at: Option<OffsetDateTime>,
 }
 
@@ -95,6 +97,26 @@ fn pr_key(repo: &str, number: i64) -> String {
 }
 
 impl GithubSource {
+    /// `pr.excused_labels` of `repo`'s own repo/owner policy (as `pr::poll` resolves it per Workflow), plus the source's own.
+    fn excused_for(&self, home: &CpdHome, repo: &str) -> Result<Vec<String>, CpdError> {
+        use crate::policy::{PolicyKey, resolve_unowned_row};
+        let bad = || {
+            CpdError::new(
+                crate::error::ErrorCode::Usage,
+                format!("{repo:?} is not an owner/name repo."),
+            )
+            .with("repo", repo)
+        };
+        let (owner, name) = repo.split_once('/').ok_or_else(bad)?;
+        let key = PolicyKey::Repo(
+            crate::ids::OwnerLogin::parse(owner)?,
+            crate::ids::RepoName::parse(name)?,
+        );
+        let mut labels = resolve_unowned_row(home, &key)?.policy.pr.excused_labels;
+        labels.extend(self.excused_labels.iter().cloned());
+        Ok(labels)
+    }
+
     /// The rows chosen before the call (swr-github.md §4.1, §3.2).
     fn plan(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<PollPlan, CpdError> {
         let memory = {
@@ -104,6 +126,7 @@ impl GithubSource {
                 .and_then(|m| m.get(&cx.store.path().display().to_string()))
                 .cloned()
         };
+        let home = cx.home;
         let stored: Vec<Stored> = cx.store.read(|c| {
             let mut stmt = c.prepare(
                 "SELECT pr.repo, pr.number,
@@ -131,25 +154,28 @@ impl GithubSource {
                             own,
                             created_at,
                             hydrated: has && same,
-                            held_failure: failed
-                                && swr_read::policy_hold(&labels, &self.excused_labels),
+                            held_failure: failed,
+                            labels,
                             hydrated_at: cache::parse(r.get(4)?).ok().flatten(),
                         },
                         own,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows
-                .into_iter()
-                .map(|(mut s, own)| {
+            let mut out = Vec::with_capacity(rows.len());
+            for (mut s, own) in rows {
+                s.held_failure = s.held_failure
+                    && swr_read::policy_hold(&s.labels, &self.excused_for(home, &s.repo)?);
+                {
                     // Only the User's own pull requests (authored or owned) are hydrated, and a teammate's whose failed rollup
                     // may hide an excused Danger (read again only when its head moved).
                     if !own && !s.held_failure {
                         s.hydrated = true;
                     }
-                    s
-                })
-                .collect())
+                    out.push(s);
+                }
+            }
+            Ok(out)
         })?;
         let mut heavy: Vec<&Stored> = stored.iter().filter(|s| !s.hydrated).collect();
         heavy.sort_by_key(|s| (!s.own, s.hydrated_at));
@@ -268,7 +294,7 @@ impl GithubSource {
             cx.home.root(),
             &plan,
             &cx.config.inbox.bot_reviewers,
-            &self.excused_labels,
+            &|repo| self.excused_for(cx.home, repo),
         );
         let read = match read {
             Ok(read) => read,
@@ -490,7 +516,8 @@ impl GithubSource {
                 .and_then(|j| serde_json::from_str(&j).ok()))
             })?;
             if let Some(detail) = &stored {
-                swr_read::excuse_from_detail(node, detail, &self.excused_labels);
+                let excused = self.excused_for(cx.home, repo)?;
+                swr_read::excuse_from_detail(node, detail, &excused);
             }
             let node = &*node;
             let stored_hash: Option<String> = cx.store.read(|c| {

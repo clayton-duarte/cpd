@@ -77,8 +77,8 @@ pub trait Source: Sync {
     fn coalesce(&self, op_kind: &str) -> Coalesce;
 }
 
-/// The live `github` source the registry carries. `GithubSource` carries the policy's excused labels; the registry
-/// names it with none, and the engine fills them where it drives the pass.
+/// The live `github` source the registry carries. `GithubSource` resolves each PR repo's `pr.excused_labels` from its
+/// policy; the registry adds no labels of its own.
 static GITHUB: github::GithubSource = github::GithubSource {
     excused_labels: Vec::new(),
 };
