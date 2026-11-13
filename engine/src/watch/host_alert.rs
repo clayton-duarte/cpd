@@ -80,3 +80,24 @@ fn failed(engine: &mut Engine, error: &CpdError) {
     }
     engine.fail(Step::HostAlert, About::Machine, error);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restarting_raises_no_install_state_invalid_and_sets_nothing() {
+        let read = InstallState::parse(r#"{"status":"restarting","since":"2026-01-15T12:00:00Z"}"#)
+            .map(Some);
+        assert!(
+            read.is_ok(),
+            "restarting is not install_state_invalid: {read:?}"
+        );
+        assert_eq!(call(None, &read), None, "the option stays unset");
+        assert_eq!(
+            call(Some("dirty"), &read),
+            Some(vec!["set".to_owned(), "-gu".to_owned(), OPTION.to_owned()]),
+            "a restart clears an earlier alert"
+        );
+    }
+}
