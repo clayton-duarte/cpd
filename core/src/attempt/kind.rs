@@ -284,3 +284,24 @@ fn run_tests(
         _ => Ok(()),
     }
 }
+
+/// What the repo's `related` command ended as.
+#[allow(dead_code)] // stub: the Gate wiring lands with the impl Job
+pub(crate) struct RelatedRun {
+    pub exit: i32,
+    /// One test name per line.
+    pub stdout: String,
+}
+
+/// The tests the Gate runs: the changed tests, unioned with what `related` (the `[test-commands]` key, with `{{ files }}`
+/// the changed files) prints; a non-zero exit is `gate_related_failed`. No `related` is the changed tests alone.
+/// STUB: the old behaviour.
+#[allow(dead_code)] // stub: the Gate wiring lands with the impl Job
+pub(crate) fn gate_tests(
+    _related: Option<&str>,
+    _changed_files: &[String],
+    changed_tests: &[String],
+    _run: &mut dyn FnMut(&str) -> RelatedRun,
+) -> Result<Vec<String>, CpdError> {
+    Ok(changed_tests.to_vec())
+}

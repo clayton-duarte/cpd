@@ -418,6 +418,7 @@ impl TestCommandsSet {
             build: build.clone(),
             run: run.clone(),
             list: self.list.clone(),
+            related: None,
         };
         tests
             .validate()
