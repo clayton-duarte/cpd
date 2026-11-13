@@ -638,3 +638,16 @@ test("loop guard: a WebUI User message clears the trip and starts a turn", async
   assert.notEqual((await settled(f)).at(-1), LABEL, "unblocked");
   assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true, false]);
 });
+
+test("loop guard: runs that each end cleanly within the window still trip the guard", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+
+  for (let i = 0; i < 21; i++) {
+    await selfTurn(f);
+    await f.pi.fire("agent_end");
+  }
+  await waitFor("the blocked state", () => stateCalls(f).includes(LABEL));
+  assert.deepEqual(await probe(f), GATED, "the 21st run tripped it");
+});
