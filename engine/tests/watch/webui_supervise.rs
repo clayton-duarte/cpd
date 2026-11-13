@@ -74,9 +74,10 @@ archive_sleep_seconds = 86400
         fs::create_dir_all(serve_ts.parent().unwrap()).expect("create web server dir");
         fs::write(&serve_ts, "// prod server").expect("write serve.ts");
 
-        // Place package.json in preview_dir
+        // Place web/package.json in preview_dir: the web app lives in web/
+        fs::create_dir_all(preview_dir.join("web")).expect("create preview web dir");
         fs::write(
-            preview_dir.join("package.json"),
+            preview_dir.join("web/package.json"),
             r#"{"name":"cpd-preview"}"#,
         )
         .expect("write preview package.json");
@@ -190,7 +191,7 @@ pub fn engine_restart_spawns_prod_and_preview_servers() {
         .expect("preview server launch should be recorded");
     assert_eq!(
         preview_launch.cwd.as_ref(),
-        Some(&fx.preview_dir),
-        "preview server must be launched with cwd = preview_dir resolved from checkout"
+        Some(&fx.preview_dir.join("web")),
+        "preview server must be launched with cwd = preview_dir/web when web/package.json exists"
     );
 }
