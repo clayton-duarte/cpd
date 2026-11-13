@@ -897,6 +897,7 @@ fn deploys_rig(deploys: Reply) -> (Rig, Arc<WithDeploys>) {
     (rig, handler)
 }
 
+/// The stored `last_ok_at` of the github endpoint.
 fn last_ok(rig: &mut Rig) -> Option<String> {
     rig.text("SELECT last_ok_at FROM swr_endpoints WHERE endpoint = 'github'")
 }
