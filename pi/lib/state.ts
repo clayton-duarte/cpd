@@ -1,3 +1,6 @@
+import type { Host } from "./host.ts";
+import type { Run } from "./run.ts";
+
 /** commands.md §15.4: the facts the adapter keeps and the state they give. */
 export type Wanted = { state: "working" | "stopped" } | { state: "idle"; reply?: true } | { state: "blocked" | "waiting"; label: string };
 
@@ -201,4 +204,19 @@ export class Reporter {
         this.pump();
       });
   }
+}
+
+/** Publish an approval as human-blocked for the lifetime of its editor prompt. */
+export function approvalPrompt<T>(host: Host, run: Run, title: string, show: () => Promise<T>): Promise<T> {
+  return run.facts.ownPrompt(async () => {
+    const key = `approval:${title}`;
+    run.facts.open(key, `approval: ${title}`, "human");
+    host.refresh(run);
+    try {
+      return await show();
+    } finally {
+      run.facts.close(key);
+      host.refresh(run);
+    }
+  });
 }

@@ -175,6 +175,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd secret delete` | Archive an item (§24.5) | Lead, Manager | |
 | `cpd secret allow` | Let a Worker's Attempt read one field of one item (§24.6) | Lead | |
 | `cpd secret approve` | Record the User's approval for another vault (adapter) (§24.7) | internal | |
+| `cpd secret check` | Check the 1Password session before asking for approval | internal | |
 | `cpd gate` | The Gate's leak check, after the command of `scripts/gate-run.sh` (commands.md §26) | | |
 | `cpd gate finish` | Check what the run left behind, stop and remove it, report it (the Gate's leak check) | | |
 | `cpd host` | Repair the cpd checkout after a skipped install (commands.md §9.11) | | |

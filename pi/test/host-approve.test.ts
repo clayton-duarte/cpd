@@ -1,9 +1,10 @@
+import { Facts } from "../lib/state.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { createHost, type Host } from "../lib/host.ts";
 import { registerHostApproveTool } from "../lib/hostapprove.ts";
 import type { Run } from "../lib/run.ts";
-import { Fixture } from "./fake.ts";
+import { Fixture, waitFor as waitForDialog } from "./fake.ts";
 
 // commands.md §15.18 "The pi tool cpd_host_approve", driven through the fake host.
 // The exact dialog sentence is the doc's: the tool provides it because pi gives the dialog no title.
@@ -17,7 +18,7 @@ function setup(t: TestContext, role: string | undefined, ui = true) {
   const f = new Fixture();
   t.after(() => f.close());
   const host: Host = createHost(f.pi, { env: process.env });
-  if (role !== undefined) host.run = { info: { role, name: NAME, plan: role === "manager" ? null : "p1", planLead: role === "lead" }, facts: { ownPrompt: <T>(show: () => Promise<T>) => show() } } as unknown as Run;
+  if (role !== undefined) host.run = { info: { role, name: NAME, plan: role === "manager" ? null : "p1", planLead: role === "lead" }, facts: new Facts() } as unknown as Run;
   host.ctx = (ui ? f.pi.ctx() : { ...f.pi.ctx(), ui: undefined }) as Host["ctx"];
   registerHostApproveTool(host);
   const tool = f.pi.tools.find((x) => x.name === "cpd_host_approve");
@@ -42,7 +43,7 @@ test("the tool cpd_host_approve is for Manager Sessions only", async (t) => {
 test("Allow once runs cpd host approve and tells the Manager to run cpd host repair now", async (t) => {
   const { f, tool, hostCalls } = setup(t, "manager");
   const running = f.pi.runTool(tool, { reason: REASON });
-  const d = f.pi.openDialog("select");
+  const d = await waitForDialog("approval dialog", () => f.pi.openDialog("select"));
   assert.ok(d, "the dialog is open");
   assert.equal(d.title, TITLE);
   assert.deepEqual(d.options, ["Allow once", "Deny"]);
@@ -55,7 +56,7 @@ test("Allow once runs cpd host approve and tells the Manager to run cpd host rep
 test("Deny runs nothing and tells the Manager not to retry", async (t) => {
   const { f, tool, hostCalls } = setup(t, "manager");
   const running = f.pi.runTool(tool, { reason: REASON });
-  const d = f.pi.openDialog("select");
+  const d = await waitForDialog("approval dialog", () => f.pi.openDialog("select"));
   assert.ok(d, "the dialog is open");
   d.answer("Deny");
   const out = await running;

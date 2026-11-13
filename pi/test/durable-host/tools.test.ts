@@ -120,7 +120,7 @@ test("cpd_secret_approve asks select Allow once Deny with the pi title and runs 
   assert.equal(records.selected.length, 1);
   assert.equal(records.selected[0].title, "s-lead asks to get in vault prod: item i, field f. Reason: need it");
   assert.deepEqual([...records.selected[0].options], ["Allow once", "Deny"]);
-  assert.deepEqual(records.cpd, [["secret", "approve", "--action", "get", "--vault", "prod", "--item", "i", "--field", "f"]]);
+  assert.deepEqual(records.cpd, [["secret", "check"], ["secret", "approve", "--action", "get", "--vault", "prod", "--item", "i", "--field", "f"]]);
   assert.equal(res.content[0].text, "Approved for one command in the next 10 minutes: run it now.");
 });
 

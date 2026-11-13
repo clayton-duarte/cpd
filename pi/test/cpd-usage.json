@@ -1470,6 +1470,16 @@
     },
     "required": []
   },
+  "secret check": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "secret create": {
     "flags": {
       "--field": true,

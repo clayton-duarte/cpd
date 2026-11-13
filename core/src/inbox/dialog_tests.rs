@@ -172,3 +172,42 @@ fn the_plan_review_and_loop_guard_labels_are_still_not_dialogs() {
     f.state("mgr", "blocked", crate::session::LOOP_GUARD_LABEL);
     assert!(f.dialogs().is_empty());
 }
+
+#[test]
+fn pending_dialog_creates_inbox_item_and_dual_resolves() {
+    use super::model::{Filter, State, list, reconcile};
+    let mut f = fixture("dispatch");
+    f.state("l-pay", "blocked", "approval: publish release");
+    let pending = f.dialogs();
+    reconcile(&mut f.store, &pending, T).unwrap();
+    let open = f
+        .store
+        .read(|c| {
+            list(
+                c,
+                &Filter {
+                    context: None,
+                    state: State::Open,
+                },
+            )
+        })
+        .unwrap();
+    let item = open.iter().find(|i| i.kind == Kind::Dialog).unwrap();
+    assert_eq!(item.label, "pay waits for your approval: publish release");
+    f.state("l-pay", "working", "");
+    let resolved = f.dialogs();
+    reconcile(&mut f.store, &resolved, "2026-01-01T00:01:00.000Z").unwrap();
+    let open = f
+        .store
+        .read(|c| {
+            list(
+                c,
+                &Filter {
+                    context: None,
+                    state: State::Open,
+                },
+            )
+        })
+        .unwrap();
+    assert!(!open.iter().any(|i| i.kind == Kind::Dialog));
+}
