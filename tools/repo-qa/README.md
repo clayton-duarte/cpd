@@ -1,5 +1,9 @@
 # Portable repository QA
 
+Canonical source: [`clayton-duarte/skills`, `skills/repo-qa`](https://github.com/clayton-duarte/skills/tree/main/skills/repo-qa).
+Improve the package there; adopters pin a source commit and keep their own project
+profile/config. See the source repository's migration record for provenance.
+
 This directory is a self-contained QA Protocol and budget guard. Copy the whole
 `repo-qa` directory into a repository you control; configure its policy; give any
 agent [SKILL.md](SKILL.md) as its entry point. It needs no CPD service, pi runtime,

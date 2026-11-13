@@ -2,14 +2,16 @@
 
 The QA Protocol was adopted through [#1116](https://github.com/clayton-duarte/cpd/pull/1116)
 and its permanent 20/10 limits through [#1132](https://github.com/clayton-duarte/cpd/pull/1132).
-The portable implementation is proposed in [#1148](https://github.com/clayton-duarte/cpd/issues/1148).
+The portable implementation was adopted through [#1149](https://github.com/clayton-duarte/cpd/pull/1149).
+Canonical ownership is moving to [`clayton-duarte/skills`](https://github.com/clayton-duarte/skills)
+in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pinned consumer](qa-source.md).
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The measured pilot is paused for distillation.
 
-Read [the reusable QA Protocol](../tools/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859/skills/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](../tools/repo-qa/SKILL.md) and
-[adoption guide](../tools/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859/skills/repo-qa/SKILL.md) and
+[adoption guide](https://github.com/clayton-duarte/skills/blob/9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859/skills/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -67,11 +69,13 @@ Historical `docs/research/quality.md` is a lead list, not current proof.
 ## Budget configuration and commands
 
 [qa.config.json](../qa.config.json) is the canonical executable policy for this
-shared CPD/dotfiles group: **20 new issues and 10 new PRs per America/Toronto day**,
-or explicitly User-reset batch. Configured PR base is `main` in both repos.
+shared CPD/dotfiles/skills group: **20 new issues and 10 new PRs per America/Toronto day**,
+or explicitly User-reset batch. Configured PR base is `main` in all three repos.
+CPD remains the product priority; skills changes maintain the shared toolkit.
 One serialized creator covers the group. Other agents must not overlap it under
 a second config/scope. New agents' grouping/caps need explicit owner agreement;
-this extraction does not expand CPD's scope or reset its budget.
+the skills repo is counted as the explicitly authorized toolkit source. This
+migration adds no fresh allowance and performs no budget reset.
 
 Historical attribution `<!-- cpd-repo-qa:v1 -->` and batch markers are unchanged.
 `scripts/qa.mjs` remains the CPD entry point and supports `CPD_QA_BATCH`; the
@@ -96,7 +100,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [kit README](../tools/repo-qa/README.md) defines fields, exit codes and limits.
+The [canonical kit README](https://github.com/clayton-duarte/skills/blob/9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859/skills/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 
@@ -106,6 +110,11 @@ absolute tool/worktree paths as prerequisites. Follow [scoped implementation](im
 and `scripts/test-changed`. Run applicable lint/fmt before commit and tests for
 changed behavior/callers. No JS/TS formatter/linter is currently configured for
 QA tooling; syntax/whitespace are not semantic lint. CI runs the complete gate.
+
+The local `tools/repo-qa` directory is a vendored consumer of that source, not
+a second editable implementation. Its source commit and per-file hashes are in
+`tools/repo-qa.upstream.json`; tests refuse drift. See [source ownership/update
+rules](qa-source.md). Normal CPD checkout/CI needs no cross-repo fetch or credentials.
 
 For this dependency-free kit:
 
