@@ -104,19 +104,19 @@ fn materialize(root: &Path, files: &[(&str, &str)]) {
 }
 
 /// What a fixture models.
-struct Spec<'a> {
+pub(super) struct Spec<'a> {
     /// The Job's kind.
-    kind: &'a str,
+    pub(super) kind: &'a str,
     /// The Job's stored Spec `touches`, as the JSON array `jobs.touches` holds.
-    touches: &'a str,
+    pub(super) touches: &'a str,
     /// The repo policy's `[generated] paths`.
-    generated: &'a [&'a str],
+    pub(super) generated: &'a [&'a str],
     /// The files the Attempt's commit changes, over the base's tree.
-    changed: &'a [(&'a str, &'a str)],
+    pub(super) changed: &'a [(&'a str, &'a str)],
     /// The files the base branch `main` gains after the Attempt branched, which the Attempt merges when `brings_base`.
-    base_ahead: &'a [(&'a str, &'a str)],
+    pub(super) base_ahead: &'a [(&'a str, &'a str)],
     /// Whether the Attempt's commit is the merge of the base's tip (a base merge), or its own commit on the branch point.
-    brings_base: bool,
+    pub(super) brings_base: bool,
 }
 
 impl<'a> Default for Spec<'a> {
@@ -134,21 +134,21 @@ impl<'a> Default for Spec<'a> {
 
 /// A PR `pay/api` on its Lead Branch `cpd/pay/api`, one Job `a` of the Spec's kind whose Attempt `a-a1` is `running` on
 /// `cpd/pay/a` in a worktree of the fake git, and a `$CPD_HOME` whose owner and repo policy files are written.
-struct Rig {
+pub(super) struct Rig {
     _tmp: TempDir,
     fakes: Fakes,
-    env: Env,
+    pub(super) env: Env,
     universe: Arc<Mutex<Universe>>,
     repo: RepoId,
     /// The branch point of the Attempt: the Lead Branch tip, and the merge base of the base branch.
     base: Oid,
     /// The Attempt's worktree, a real temp directory of the fake git.
     root: PathBuf,
-    plan: PlanId,
-    id: AttemptId,
+    pub(super) plan: PlanId,
+    pub(super) id: AttemptId,
 }
 
-fn rig(spec: Spec<'_>) -> Rig {
+pub(super) fn rig(spec: Spec<'_>) -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().canonicalize().unwrap();
     let fakes = Fakes::new();
@@ -270,7 +270,7 @@ fn rig(spec: Spec<'_>) -> Rig {
 
 impl Rig {
     /// `cpd attempt submit a-a1 --plan pay`, from the Attempt's worktree, on the fakes' ports.
-    fn submit(&mut self) -> Result<Output, CpdError> {
+    pub(super) fn submit(&mut self) -> Result<Output, CpdError> {
         let previous = std::env::current_dir().unwrap();
         std::env::set_current_dir(&self.root).unwrap();
         let args = SubmitArgs {
@@ -303,7 +303,7 @@ impl Rig {
     }
 
     /// One column of the Attempt's row.
-    fn attempt(&mut self, column: &str) -> Option<String> {
+    pub(super) fn attempt(&mut self, column: &str) -> Option<String> {
         self.one(&format!(
             "SELECT {column} FROM attempts WHERE plan = 'pay' AND id = 'a-a1'"
         ))
@@ -340,7 +340,7 @@ impl Rig {
 }
 
 /// The refusal `code` (exit 3) of `result`.
-fn refused(result: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
+pub(super) fn refused(result: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
     match result {
         Ok(out) => panic!("expected {code:?}, got a success: {out:?}"),
         Err(e) => {

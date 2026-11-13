@@ -421,3 +421,16 @@ pub(super) fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathB
         ))),
     }
 }
+
+/// The Lead waives the declared `touches` path `path` of Job `job` as unchanged, with a required `reason`
+/// (`cpd job approve-untouched`). STUB: records nothing.
+#[cfg(test)]
+pub(crate) fn waive_untouched(
+    _env: &mut Env,
+    _plan: &PlanId,
+    _job: &str,
+    _path: &str,
+    _reason: &str,
+) -> Result<(), CpdError> {
+    Ok(())
+}
