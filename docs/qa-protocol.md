@@ -8,10 +8,10 @@ in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pi
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
 
-Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/SKILL.md) and
-[adoption guide](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/SKILL.md) and
+[adoption guide](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -99,7 +99,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers. The current run has null cardinal caps, fresh live usage (maximum60 seconds), and no reset batch.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [canonical kit README](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/README.md) defines fields, exit codes and limits.
+The [canonical kit README](https://github.com/clayton-duarte/skills/blob/b62b929017b7bdafded41763b10ec1eb0c1fae95/skills/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 
@@ -172,4 +172,4 @@ has no usable login; revocation or loss of that volume can require authorization
 This authenticates allowance reads and does not start a new QA run or reset limits.
 The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fresh
 reading was66% remaining; that historical number is not a gate for later work.
-Source PR3 must merge before this updated consumer pin; User alone merges.
+Source PR3 merged with green CI at `b62b929017b7bdafded41763b10ec1eb0c1fae95`; this consumer pins that reviewed revision. User alone merges CPD.

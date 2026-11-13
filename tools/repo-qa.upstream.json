@@ -1,10 +1,10 @@
 {
   "version": 1,
   "repository": "https://github.com/clayton-duarte/skills",
-  "revision": "d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f",
+  "revision": "b62b929017b7bdafded41763b10ec1eb0c1fae95",
   "path": "skills/repo-qa",
   "files": {
-    "README.md": "53d65de489f5699c7f6dfe12c8300baf158dd038c4f693a1efd3d24fa7cfc5e6",
+    "README.md": "25d6326b998134fe0a60c6f775c40ff854070a52374ed49ebc1c1f289f633eae",
     "SKILL.md": "7be4f55a3b99d13457405027528444804fa44df3ddf03bee4e9c22cedfc6c501",
     "assets/config.example.json": "f2172748341b34dca9712a60cf8f49766821b241dd1e770c7e77c7b23b523eb4",
     "assets/handoff.md": "67b5b4d0f2e2cf87d4d416f46d77e5e0c4368a6cd31ca202d4f91569a06c9c6a",
@@ -14,10 +14,10 @@
     "assets/run.example.json": "15791a56d6a09e5348466adfd1a811897a14297506bb931c9d15d2026a2342a0",
     "references/PROTOCOL.md": "383ac4440dade3ce155a38f254378efbbf3523a38283a6f9a77eb42867cfc08b",
     "references/RESEARCH.md": "2c516dde3ecfabe6ba8ef94c1ed874e116efdbabdfdc6d805bcb1e76bc92dfa6",
-    "scripts/codex-usage-reader.py": "6ec1b2538ec4663e7b510f885a32d5bc0d36c3c63849af4299031c73a8fcf1d4",
-    "scripts/codex-usage-reader.test.py": "402a1837f4ed152b4ad453fb7c6b46d0ff9319776e222cefdd17ed70a9c55c86",
+    "scripts/codex-usage-reader.py": "825ca678e746cdf4438fce88489f8934b3ad5ffa5e768e7fa7311d934ca1dd26",
+    "scripts/codex-usage-reader.test.py": "07e1663da227eaed5f6edb23ac4ad64a262e19f4ae719caca5cf55acbd35a3b9",
     "scripts/portability.test.mjs": "8013858f0da4ceee0be3ea60e60cc863d02c618dc88be88ac05710d8462e8a78",
-    "scripts/qa.mjs": "dd15647aaa4eadca8ff8f0395159fdcbf5ab00c7cf1432178130fd34d67291fa",
-    "scripts/qa.test.mjs": "639cd9761309b9e25513abe4719e8fef55a91f58e59e9ff17b508c2ec2f70103"
+    "scripts/qa.mjs": "466f0906f8fa1a32885ded617e94a54c997dfcfe22ddb052668aa2691b1d1e55",
+    "scripts/qa.test.mjs": "21b7ba2d1a63d04c3b6449af7f940485e8d3b7a02a785251c34c4913ff4f6d86"
   }
 }

@@ -79,7 +79,7 @@ export function github(args, input) {
   }));
 }
 
-export function createGuard(input, { readUsage } = {}) {
+export function createGuard(input, { readUsage, clock = () => new Date() } = {}) {
   const config = validateConfig(input);
   const REPOS = config.repositories.map((r) => r.name);
   const MARKER = `<!-- ${config.scope}:v1 -->`;
@@ -91,8 +91,8 @@ export function createGuard(input, { readUsage } = {}) {
     return `${parts.year}-${parts.month}-${parts.day}`;
   };
 
-  function status(api = github, now = new Date(), batch = null, runInput = null) {
-    const weekly = config.weekly_allowance === null ? null : readWeeklyUsage(config.weekly_allowance, now, readUsage);
+  function status(api = github, now = clock(), batch = null, runInput = null) {
+    let weekly = config.weekly_allowance === null ? null : readWeeklyUsage(config.weekly_allowance, now, readUsage);
     const today = day(now);
     if (batch !== null && (typeof batch !== "string" || !/^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{0,39}$/.test(batch) || !batch.startsWith(`${today}-`))) {
       throw new Error("QA_BATCH must be a dated batch identifier for today's configured timezone");
@@ -130,6 +130,11 @@ export function createGuard(input, { readUsage } = {}) {
         if (seen.size === previousSize) throw new Error(`Pagination made no progress for ${repo}`);
       }
     }
+    if (weekly !== null) {
+      const fresh = readWeeklyUsage(config.weekly_allowance, clock(), readUsage);
+      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(weekly.resets_at)) > 1000) throw new Error("Weekly window changed; explicit authorization is required");
+      weekly = fresh;
+    }
     const dailyRemaining = remaining(config.limits, counts);
     const runRemaining = run === null ? null : remaining(run.limits, runCounts);
     const effective = Object.fromEntries(["issues", "prs"].map((k) => {
@@ -145,7 +150,7 @@ export function createGuard(input, { readUsage } = {}) {
 
   function run(args, api = github, read = (file) => readFileSync(file, "utf8"), batch = null, descriptor = null) {
     const [command, repo, ...rest] = args;
-    if (command === "status" && args.length === 1) return { exit: 0, result: status(api, new Date(), batch, descriptor) };
+    if (command === "status" && args.length === 1) return { exit: 0, result: status(api, clock(), batch, descriptor) };
     if (!["issue", "pr"].includes(command) || !REPOS.includes(repo)
         || rest.length !== (command === "issue" ? 2 : 3) || rest.some((s) => !nonempty(s))) {
       throw new Error("Usage: qa.mjs [--config FILE] [--run FILE] status | issue OWNER/REPO TITLE BODY_FILE | pr OWNER/REPO HEAD TITLE BODY_FILE");
@@ -153,10 +158,12 @@ export function createGuard(input, { readUsage } = {}) {
     const [head, title, file] = command === "pr" ? rest : [undefined, ...rest];
     const body = read(file);
     if (!nonempty(body)) throw new Error("Body file must not be empty");
-    const budget = status(api, new Date(), batch, descriptor);
+    const budget = status(api, clock(), batch, descriptor);
     if (!(command === "issue" ? budget.can_create_issue : budget.can_create_pr)) return { exit: 3, result: { ...budget, refused: command } };
-    if (config.weekly_allowance !== null && !readWeeklyUsage(config.weekly_allowance, new Date(), readUsage).allowed) {
-      return { exit: 3, result: { refused: command, reason: "weekly allowance" } };
+    if (config.weekly_allowance !== null) {
+      const fresh = readWeeklyUsage(config.weekly_allowance, clock(), readUsage);
+      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(budget.weekly_allowance.resets_at)) > 1000) throw new Error("Weekly window changed; explicit authorization is required");
+      if (!fresh.allowed) return { exit: 3, result: { refused: command, reason: "weekly allowance" } };
     }
     const markers = [MARKER, ...(batch === null ? [] : [batchMarker(batch)]), ...(descriptor === null ? [] : [runMarker(descriptor.id)])];
     const payload = { title, body: `${markers.join("\n")}\n\n${body}` };

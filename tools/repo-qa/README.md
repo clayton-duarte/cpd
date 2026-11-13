@@ -165,6 +165,15 @@ platform improvement would be a read-only native allowance tool; no such tool
 is exposed to this agent. Cloud model access and a separate workspace CLI login
 must not be assumed to share quota-read authorization.
 
+The reader pins the first observed weekly reset. It stops and removes its snapshot
+when that window expires or a subsequent response changes it. A new window needs
+explicit User authorization; persistent authentication does not renew QA authority.
+Live reads may differ by one second due to reset-time rounding; tolerate that
+rounding while keeping the reader expiry at the earliest observed boundary.
+The guard refreshes status after GitHub pagination and rejects a window change
+within a status/creation operation. One-shot users must also preserve the initially
+authorized window in their run handoff and stop before spending reset allowance.
+
 A continuous reader removes its sample on orderly exit/errors; an uncatchable
 kill leaves a file that expires within60 seconds. Use a private local output
 directory; a writable forged snapshot is outside this trusted-operator guard.

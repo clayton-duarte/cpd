@@ -104,11 +104,13 @@ def main():
                 proc.stdin.flush()
 
             send(dict(id=1, method="initialize", params=dict(clientInfo=dict(name="repo-qa-usage", version="1"))))
-            ready, pending, keep_snapshot = False, False, False
+            ready, pending, keep_snapshot, window_reset = False, False, False, None
             deadline, next_poll = time.monotonic()+720, float("inf")
             try:
                 while True:
                     current = time.monotonic()
+                    if window_reset is not None and dt.datetime.now(dt.timezone.utc) >= window_reset:
+                        raise RuntimeError("Authorized weekly window expired; stop QA and obtain new authorization")
                     if current > deadline:
                         raise RuntimeError("Reader timeout; stop QA and authenticate a new reader")
                     if ready and not pending and current >= next_poll:
@@ -156,6 +158,10 @@ def main():
                         ready, next_poll, deadline = True, 0, float("inf")
                     elif message.get("id") == 3:
                         sample = normalize(message.get("result") or {})
+                        reset = dt.datetime.fromisoformat(sample["resets_at"])
+                        if window_reset is not None and abs((reset - window_reset).total_seconds()) > 1:
+                            raise RuntimeError("Authorized weekly window changed; stop QA and obtain new authorization")
+                        window_reset = min(reset, window_reset) if window_reset is not None else reset
                         print(json.dumps(sample), flush=True)
                         if sample["remaining_percent"] < args.min_remaining or not sample["ordinary_usage_allowed"] or sample["spend_control_reached"]:
                             print('{"paused":true}', flush=True)

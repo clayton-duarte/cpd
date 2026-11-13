@@ -248,18 +248,18 @@ test("weekly threshold replaces cardinal caps without erasing audit counts", () 
     remaining_percent: 50, resets_at: "2026-11-16T00:14:45Z", ordinary_usage_allowed: true, spend_control_reached: false };
   const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
   for (const percent of [49, 50, 51]) {
-    const guard = createGuard(config, { readUsage: () => ({ ...sample, remaining_percent: percent }) });
+    const guard = createGuard(config, { clock: () => now, readUsage: () => ({ ...sample, remaining_percent: percent }) });
     const s = guard.status(() => [item(1)], now);
     assert.equal(s.can_create_issue, percent >= 50);
     assert.equal(s.can_create_pr, percent >= 50);
     assert.deepEqual(s.remaining, { issues: null, prs: null });
     assert.deepEqual(s.counts, { issues: 2, prs: 0 });
   }
-  const capped = createGuard({ ...config, limits: { issues: 0, prs: 1 } }, { readUsage: () => sample });
+  const capped = createGuard({ ...config, limits: { issues: 0, prs: 1 } }, { clock: () => now, readUsage: () => sample });
   assert.equal(capped.status(() => [], now).can_create_issue, false);
   assert.equal(capped.status(() => [], now).can_create_pr, true);
   const descriptor = { version: 1, id: "weekly", started_at: now.toISOString(), limits: null, authorization: "User: weekly policy" };
-  assert.equal(createGuard(config, { readUsage: () => sample }).status(() => [], now, null, descriptor).run.remaining, null);
+  assert.equal(createGuard(config, { clock: () => now, readUsage: () => sample }).status(() => [], now, null, descriptor).run.remaining, null);
 });
 
 test("weekly policy rejects missing policy, unsafe freshness and malformed telemetry before GitHub", () => {
@@ -275,26 +275,55 @@ test("weekly policy rejects missing policy, unsafe freshness and malformed telem
   for (const change of [{ sampled_at: "2026-11-13T16:58:59Z" }, { sampled_at: "2026-11-13T17:00:01Z" }, { sampled_at: null },
     { resets_at: now.toISOString() }, { resets_at: "2027-01-01T00:00:00Z" }, { remaining_percent: NaN }, { remaining_percent: -1 },
     { window_minutes: 300 }, { limit_id: "other" }, { ordinary_usage_allowed: null }, { spend_control_reached: null }, { token: "forbidden" }]) {
-    assert.throws(() => createGuard(config, { readUsage: () => ({ ...sample, ...change }) }).status(noApi, now));
+    assert.throws(() => createGuard(config, { clock: () => now, readUsage: () => ({ ...sample, ...change }) }).status(noApi, now));
   }
-  assert.throws(() => createGuard(config, { readUsage: () => { throw new Error("reader unavailable"); } }).status(noApi, now), /reader unavailable/);
+  assert.throws(() => createGuard(config, { clock: () => now, readUsage: () => { throw new Error("reader unavailable"); } }).status(noApi, now), /reader unavailable/);
   for (const change of [{ ordinary_usage_allowed: false }, { spend_control_reached: true }]) {
-    assert.equal(createGuard(config, { readUsage: () => ({ ...sample, ...change }) }).status(() => [], now).can_create_pr, false);
+    assert.equal(createGuard(config, { clock: () => now, readUsage: () => ({ ...sample, ...change }) }).status(() => [], now).can_create_pr, false);
   }
 });
 
-test("creation refreshes weekly usage after GitHub pagination and refuses a changed or stale sample", () => {
-  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
-  const sample = () => ({ version: 1, source: "codex-app-server", sampled_at: new Date().toISOString(), limit_id: "codex", window_minutes: 10080,
-    remaining_percent: 70, resets_at: new Date(Date.now() + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false });
-  for (const second of [() => ({ ...sample(), remaining_percent: 49 }), () => ({ ...sample(), sampled_at: new Date(Date.now() - 61000).toISOString() }), sample]) {
-    let reads = 0, posts = 0;
-    const guard = createGuard(config, { readUsage: () => ++reads === 1 ? sample() : second() });
-    const api = (args) => { if (args.includes("POST")) { posts++; return { number: 1 }; } return []; };
-    if (second === sample) assert.equal(guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason").exit, 0);
-    else if (second().remaining_percent === 49) assert.equal(guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason").exit, 3);
-    else assert.throws(() => guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason"), /stale/);
+test("status refreshes weekly usage after pagination before authorizing work", () => {
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 1 } };
+  for (const scenario of ["stale", "revoked", "fresh", "rounding", "missing", "reset"]) {
+    let current = now.getTime(), reads = 0;
+    const initial = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+      remaining_percent: 70, resets_at: new Date(current + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false };
+    const guard = createGuard(config, { clock: () => new Date(current), readUsage: () => {
+      if (++reads === 1 || scenario === "stale") return initial;
+      if (scenario === "missing") throw new Error("reader unavailable");
+      return { ...initial, sampled_at: new Date(current).toISOString(),
+        remaining_percent: scenario === "revoked" ? 49 : 70,
+        resets_at: scenario === "reset" ? new Date(current + 2 * 86400_000).toISOString() : scenario === "rounding" ? new Date(Date.parse(initial.resets_at) + 1000).toISOString() : initial.resets_at };
+    } });
+    const api = () => { current += 1250; return []; };
+    if (["stale", "missing", "reset"].includes(scenario)) assert.throws(() => guard.run(["status"], api), /stale|unavailable|window/);
+    else {
+      const result = guard.run(["status"], api);
+      assert.equal(result.result.can_create_issue, ["fresh", "rounding"].includes(scenario));
+      assert.equal(result.result.weekly_allowance.remaining_percent, ["fresh", "rounding"].includes(scenario) ? 70 : 49);
+    }
     assert.equal(reads, 2);
-    assert.equal(posts, second === sample ? 1 : 0);
+  }
+});
+
+test("creation refreshes usage through status and immediately before POST", () => {
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  const sample = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+    remaining_percent: 70, resets_at: new Date(now.getTime() + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false };
+  for (const changedRead of [2, 3]) for (const scenario of ["threshold", "stale", "fresh", "reset"]) {
+    let reads = 0, posts = 0;
+    const guard = createGuard(config, { clock: () => now, readUsage: () => {
+      ++reads;
+      if (reads < changedRead) return sample;
+      return { ...sample, remaining_percent: scenario === "threshold" ? 49 : 70,
+        sampled_at: scenario === "stale" ? new Date(now.getTime() - 61000).toISOString() : sample.sampled_at,
+        resets_at: scenario === "reset" ? new Date(now.getTime() + 2 * 86400_000).toISOString() : sample.resets_at };
+    } });
+    const api = (args) => { if (args.includes("POST")) { posts++; return { number: 1 }; } return []; };
+    if (["stale", "reset"].includes(scenario)) assert.throws(() => guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason"), /stale|window/);
+    else assert.equal(guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason").exit, scenario === "fresh" ? 0 : 3);
+    assert.equal(posts, scenario === "fresh" ? 1 : 0);
+    assert.equal(reads, scenario === "fresh" ? 3 : changedRead);
   }
 });
