@@ -130,7 +130,7 @@ export function PlanReviewCard(props: {
     <Item
       variant="outline"
       size="sm"
-      className="mx-4 mb-3 w-auto shrink-0"
+      className="mx-4 mb-3 w-auto flex-1 min-h-0 content-start"
       render={
         <section
           aria-label="Plan review"
@@ -229,10 +229,10 @@ export function PlanReviewCard(props: {
         {hasBody || (asking && !readOnly) ? (
           <ItemFooter
             data-part="decision-bar"
-            className="flex-col items-stretch gap-3 border-t pt-3"
+            className="min-h-0 flex-1 flex-col items-stretch gap-3 border-t pt-3"
           >
             {hasBody ? (
-              <div data-part="body-row" className="flex min-h-0 gap-3">
+              <div data-part="body-row" className="flex min-h-0 flex-1 gap-3">
                 {hasOthers ? (
                   <nav
                     aria-label="Plan sections"
@@ -276,7 +276,7 @@ export function PlanReviewCard(props: {
                     ))}
                   </nav>
                 ) : null}
-                <ScrollArea className="min-w-0 flex-1 [&>[data-slot=scroll-area-viewport]]:max-h-60">
+                <ScrollArea className="min-h-0 min-w-0 flex-1">
                 <div
                   data-part="body"
                   className="flex flex-col gap-4"

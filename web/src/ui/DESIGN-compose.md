@@ -28,6 +28,42 @@ What ChatPane passes (source field → prop):
 
 ---
 
+## 0.1 Plan review dialog layout contract
+
+Status: **decided** (pro-d776, 2026-11-13). The layout of the ChatPane when a Plan review dialog is pending, and how the dialog is cleared.
+
+### A1: Layout while pending
+
+While a `cpd_plan_review` dialog is pending in the open session, the ChatPane displays in the following order, top to bottom:
+
+1. **ChatHeader**: kept visible at the top (DESIGN-chat §1)
+2. **PlanReviewCard**: the review card fills the remaining pane height with `flex-1 min-h-0`; the card is the only flexible child
+3. **Transcript and Composer**: hidden (not rendered or display none)
+
+Inside the PlanReviewCard (DESIGN-compose §5.3):
+
+- **header row and actions** (the title, subtitle, previous, stats, and buttons): remain always visible
+- **body (summary and sections)**: scrollable through `ScrollArea[data-part="body"]`, with `max-h-60` constraint on the summary section as initially rendered; the height grows to accommodate expanded sections
+
+The main `main[aria-label="Chat"]` layout is `flex flex-col min-h-0`; ChatHeader is `shrink-0`; PlanReviewCard is `flex-1 min-h-0`.
+
+### A2: Dismissal and return
+
+No new dismiss UI is added. The dialog is cleared by exactly two means:
+
+1. **User action**: one of the three buttons on the card (Approve & lock, Reject plan, Request changes + Send feedback). The User must complete the flow to close the dialog.
+2. **Server action**: the server sends `session.dialogResolved`, which clears `view.dialog` on the client, and the card unmounts. The Transcript and Composer return.
+
+When the dialog is cleared by either means, the Transcript and Composer are shown again in their original position below ChatHeader (section 0 layout).
+
+### A3: Other dialog methods
+
+Other dialog methods (`ask_user_question`, `secret_approve`, `host_approve`, and any future dialog methods) use the same layout rule as today: the dialog card replaces the Composer while pending, and ChatHeader and Transcript remain visible. The `max-h-60` constraint of A1 applies only to the Plan review's summary section; other dialog types have no such constraint.
+
+The rule holds for all dialog methods: `view.dialog` is non-null ⇒ dialog card shown, Composer hidden; `view.dialog` is null ⇒ Composer shown, no card.
+
+---
+
 ## 1. Composer
 
 File `web/src/ui/composer/Composer.tsx`. Exports `Composer` and `ComposerHandle` (`{ addFiles(files: readonly FileLike[]): Promise<void> }`, KEPT). Built from the shadcn `InputGroup` parts (`web/src/ui/components/input-group.tsx`, DESIGN.md 2f), in the AI Elements `PromptInput` slot layout: header, body, footer. There is no separate `PromptInput` module.
