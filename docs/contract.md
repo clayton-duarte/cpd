@@ -432,6 +432,7 @@ A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `to
 | `urgent` | bool | the **urgent** flag (User, Context record "Urgent Jobs", hs-d238): set by `job add --urgent`, or by `job urgent` on a Job that is `queued` or `draft`; default 0; engine `scheduling` starts urgent Ready Jobs first and may run one beyond `concurrency` (§3.7). **Not a Locked field** and not in any fingerprint (§2.3): it changes no Spec, so a Locked Job may become urgent. A Lead or Manager marks a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or for an incident |
 | `test_approved` | json [text]? | `impl` only: the paths of the red tests the Lead approved this Job to change ("Job kinds" below); null until `job approve-tests`. **Not a Locked field** and in no fingerprint: it changes after the lock |
 | `touches_approved` | json [text]? | the paths the Lead approved this Job to change beyond its Spec `touches` (hs-n641; "Job kinds" below, §7.5); null until `job approve-touches`. **Not a Locked field** and in no fingerprint: it changes after the lock. Not an `impl`-only field: it applies whatever the Job's kind (the touches check itself skips `open`, `update` and explore kinds, so an approval there is unused) |
+| `touches_waived` | json [text]? | the declared `touches` paths the Lead waived as unchanged (b69; `job approve-untouched`); read only by the `touches_unchanged` check, never by the outside-the-touches check. **Not a Locked field**, in no fingerprint. |
 | `title` | text | |
 | `tier` | text? | Tier (§9); null only while `draft` or `cancelled` (a stub draft) |
 | `goal`, `context` | text? | Spec; null only while `draft` or `cancelled` |
@@ -2068,6 +2069,7 @@ CREATE TABLE jobs (
   summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),  -- an explore Job's bounded summary (§2.2 "Explore Jobs"); NOT NULL exactly when an explore Job is merged; added by the migration explore-kinds
   touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),  -- the paths the Lead approved a Job to change beyond its Spec `touches` (§2.2, §7.5); NOT Locked, in no fingerprint; added by the migration job-touches-approved
   waiting_on          TEXT,
+  touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),  -- the declared `touches` the Lead waived as unchanged (b69); read only by the unchanged check
   UNIQUE (plan, key),
   FOREIGN KEY (plan, workflow) REFERENCES "workflows"(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
