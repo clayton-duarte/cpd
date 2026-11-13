@@ -137,7 +137,12 @@ pub(super) fn check(
         .with("job", job.key.as_str())
         .with("jobs", json!(Vec::<String>::new())));
     }
-    run_tests(env, plan, id, &job, &tests, &commands, root, lead)
+    let changed = if job.kind == "impl" && commands.related.is_some() {
+        git::tamper::changed_paths(root, diff_base, sha)?
+    } else {
+        Vec::new()
+    };
+    run_tests(env, plan, id, &job, &tests, &changed, &commands, root, lead)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -147,6 +152,7 @@ fn run_tests(
     id: &AttemptId,
     job: &Job,
     tests: &[String],
+    changed: &[String],
     commands: &RepoTests,
     root: &Path,
     lead: &str,
@@ -258,6 +264,44 @@ fn run_tests(
         }
     }
 
+    // related (an `impl` Job): the tests of the changed files join the named ones; a discovery failure is the Gate's.
+    let all = if job.kind == "impl" {
+        gate_tests(
+            commands.related.as_deref(),
+            changed,
+            tests,
+            &mut |command| {
+                // The command is already rendered: `raw` keeps `go` from rendering it again.
+                let raw = format!("{{% raw %}}{command}{{% endraw %}}");
+                match go("related", &raw, &[], Log::Truncate) {
+                    Ok(Ran {
+                        outcome: HookOutcome::Passed,
+                        log,
+                        ..
+                    }) => RelatedRun {
+                        exit: 0,
+                        stdout: std::fs::read_to_string(log).unwrap_or_default(),
+                    },
+                    Ok(Ran {
+                        outcome: HookOutcome::Failed { exit, .. },
+                        ..
+                    }) => RelatedRun {
+                        exit,
+                        stdout: String::new(),
+                    },
+                    // Could not run (signal, timeout, I/O): not a pass.
+                    _ => RelatedRun {
+                        exit: -1,
+                        stdout: String::new(),
+                    },
+                }
+            },
+        )?
+    } else {
+        tests.to_vec()
+    };
+    let tests = all.as_slice();
+
     // run: a `test` Job's named tests must fail, an `impl` Job's must pass.
     let run = go(
         "run",
@@ -294,7 +338,6 @@ pub(crate) struct RelatedRun {
 
 /// The tests the Gate runs: the changed tests, unioned with what `related` (the `[test-commands]` key, with `{{ files }}`
 /// the changed files) prints; a non-zero exit is `gate_related_failed`. No `related` is the changed tests alone.
-#[allow(dead_code)] // the Gate's run path calls it
 pub(crate) fn gate_tests(
     related: Option<&str>,
     changed_files: &[String],

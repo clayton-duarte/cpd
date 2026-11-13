@@ -956,6 +956,11 @@ fn test_commands(command: &str, cwd: &Path) -> Reply {
     match command.split_once(' ').unwrap_or((command, "")) {
         ("build", _) => Reply::exit(i32::from(cwd.join("BROKEN").exists()), "building\n", ""),
         ("run", _) => Reply::exit(i32::from(!cwd.join("GREEN").exists()), "running\n", ""),
+        ("related", _) => Reply::exit(
+            i32::from(cwd.join("RELATED_BROKEN").exists()),
+            "t::three\n",
+            "",
+        ),
         ("list", name) => Reply::exit(i32::from(!["t::one", "t::two"].contains(&name)), "", ""),
         _ => panic!("a command nothing scripted: {command}"),
     }
@@ -2380,4 +2385,41 @@ fn events_follow_carries_the_attempt_ended_payload() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["kind"], "attempt-ended");
     assert_eq!(lines[0]["data"], metrics);
+}
+
+const TESTS_RELATED: &str = "[test-commands]\n\
+    build = \"build\"\n\
+    run = \"run {{ tests }}\"\n\
+    related = \"related {{ files }}\"\n";
+
+#[test]
+fn a_configured_related_is_run_on_the_changed_files_and_its_tests_join_the_run() {
+    let fx = green(TESTS_RELATED, None);
+    fx.commit("src/lib.rs", "// green\n");
+    fx.commit("GREEN", "x\n");
+    let out = fx.submit().ok();
+    assert_eq!(out["submitted"], true, "{out}");
+    assert_eq!(fx.ran("related"), ["related GREEN src/lib.rs"]);
+    assert_eq!(fx.ran("run"), ["run t::one t::two t::three"]);
+}
+
+#[test]
+fn a_failing_related_refuses_the_submit_gate_related_failed() {
+    let fx = green(TESTS_RELATED, None);
+    fx.commit("src/lib.rs", "// green\n");
+    fx.commit("GREEN", "x\n");
+    fx.commit("RELATED_BROKEN", "x\n");
+    refused(&fx.submit(), "gate_related_failed", 3);
+    assert_eq!(fx.status(), "running");
+    assert!(fx.ran("run").is_empty(), "the run does not start");
+}
+
+#[test]
+fn no_related_key_runs_only_the_named_tests() {
+    let fx = green(TESTS, None);
+    fx.commit("src/lib.rs", "// green\n");
+    fx.commit("GREEN", "x\n");
+    fx.submit().ok();
+    assert!(fx.ran("related").is_empty());
+    assert_eq!(fx.ran("run"), ["run t::one t::two"]);
 }
