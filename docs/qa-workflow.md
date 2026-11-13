@@ -1,4 +1,4 @@
-# Repository QA workflow
+# Repository QA process
 
 Status: proposed until this PR is merged. The loop starts only after the User
 explicitly starts it after merge. No scheduler, live-host access or CPD adoption
@@ -88,7 +88,7 @@ node scripts/qa.mjs pr clayton-duarte/cpd qa/123-short-name 'Concrete change' /t
 The creator reads a literal body file, rechecks both repos immediately before
 creation and injects `<!-- cpd-repo-qa:v1 -->` into the body atomically. Preserve
 that marker through edits; do not delete or transfer counted items. Attribution
-uses the marker, not the author's identity or a mutable workflow label. Creation
+uses the marker, not the author's identity or a mutable process label. Creation
 always targets `main` for PRs. Set any needed labels through GitHub afterward.
 Use `needs-human-input` for unresolved decisions; create that label once if absent.
 
@@ -115,7 +115,7 @@ and stronger coordination, not an unsupported claim of atomic quota enforcement.
 
 At the beginning of every iteration:
 
-1. Read this workflow, its decisions and applicable `AGENTS.md` instructions.
+1. Read this process, its decisions and applicable `AGENTS.md` instructions.
    Run the status script. Read the previous iteration's issue comment, if any.
    Verify clean worktrees, current base SHAs and the existing issues/open PRs.
 2. Search open **and closed** issues, PRs, previous audits and ADRs for duplicates,
@@ -229,7 +229,7 @@ Before implementation, expand the selected issue into an actionable investigatio
    no scheduler is installed. Check existing PR feedback in subsequent sessions.
 7. A PR being opened is not a resolved issue. Let the User's merge close it via
    the linked closing reference when applicable; verify closure after merge and
-   retain residual work as linked issues. CPD adoption and workflow automation
+   retain residual work as linked issues. CPD adoption and process automation
    can be proposed after this process has proved useful.
 
 ## Issue format
