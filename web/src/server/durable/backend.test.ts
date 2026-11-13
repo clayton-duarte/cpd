@@ -602,3 +602,35 @@ it.each(["attach", "models"])("bounds durable startup when %s is never acknowled
     expect(messages.some((m) => m.type === "session.attached")).toBe(true);
   }
 });
+
+it.each(["snapshot", "models", "branch"])("rejects initial attach immediately when the host closes during %s", async (phase) => {
+  const scheduler = new FakeScheduler();
+  let feed: (chunk: string) => void = () => {};
+  const socket: SocketLike = { write: () => {}, end: () => {},
+    onData: (handler) => { feed = handler; return { dispose() {} }; }, onClose: () => ({ dispose() {} }) };
+  const connecting = connectHost("/run/host/s1.sock", { factory: { connect: async () => socket }, scheduler });
+  await tick();
+  feed(JSON.stringify(new FakeHost([]).client().welcome) + "\n");
+  const client = await connecting;
+  let releaseBranch: () => void = () => {};
+  const branchGate = new Promise<void>((resolve) => { releaseBranch = resolve; });
+  const backend = createDurableBackend({ connect: async () => client, cpd: { json: async () => ({ ok: true }) }, git: { branch: async () => { if (phase === "branch") await branchGate; return "main"; } }, scheduler });
+  let outcome: unknown = null;
+  const messages: SessionServerMessage[] = [];
+  const attaching = backend.attach(SESSION, (m) => messages.push(m)).then(() => { outcome = "attached"; }, (error: unknown) => { outcome = error; });
+  await tick();
+  feed(JSON.stringify({ type: "attached", req: "r1", mode: "view", epoch: "e1", from_seq: 0, head_seq: 1, client_id: "c1" }) + "\n");
+  await tick();
+  if (phase !== "snapshot") { feed(JSON.stringify(viewFrame([])) + "\n"); await tick(); }
+  if (phase === "branch") { feed(JSON.stringify({ type: "result", req: "r2", data: { models: [] } }) + "\n"); await tick(); }
+  feed(JSON.stringify({ type: "bye", reason: "shutdown", reconnect: false }) + "\n");
+  await tick();
+  const immediate = outcome;
+  const timers = scheduler.pending();
+  releaseBranch();
+  scheduler.advance(5001);
+  await tick();
+  await attaching;
+  expect(messages.some((m) => m.type === "session.attached")).toBe(false);
+  expect({ immediate, eventual: outcome, timers }).toMatchObject({ immediate: phase === "branch" ? null : { code: "host_disconnected" }, eventual: { code: "host_disconnected" }, timers: 0 });
+});
