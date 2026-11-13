@@ -117,9 +117,40 @@ The `Heavy` test compares with `swr_pr_detail`, and it is the "moved since `hydr
 
 ### 3.3 Paging inside the document
 
-The search returns at most 100 pull requests (`first: 100`, oldest first; the limit is `SEARCH_QUERY` of `core/src/pr/gh.rs:831` today). The design sends a second page **in the same document**, with the cursor the previous pass stored, and only when that pass answered `pageInfo.hasNextPage` true (`authoredMore` above). Pages beyond the second are not read: §4.2 covers every tracked pull request that a search does not list, so the limit hides none of them.
+**QA #1121 (2026-11-13), superseding the page-two-only design and open
+cursor-column choice below.** Each document reads the first100 nodes of both
+searches, plus at most one continuation page per search when its previous
+successful pass returned `hasNextPage`/`endCursor`. Continuations advance through
+all available pages; at the end they reset and begin another sweep. Both searches
+advance independently. First-page freshness, one GraphQL call per pass and the
+existing heavy/absent alias caps remain. Up to400 search nodes can be selected
+when both continuations are active; the number of calls is bounded, not their
+GraphQL cost or response latency. No production cost improvement is claimed.
 
-**Blocked on a column (open item, §14).** The cursor is opaque text, and no `swr_*` table has a free text column for it: `swr_queries.data_hash` is the hash of confirmed data and `swr_queries.last_error` is the text of a failure. Until a column is decided, the pass sends the first page only, and §4.2 alone covers the rest. This is the one clause of the spec's paging rule that this page does not yet build.
+Opaque cursor strings are GraphQL-escaped and kept in per-store engine memory
+alongside the existing `LISTED` memory, with the authenticated viewer identity.
+No migration is necessary. A process restart starts from page one; a changed
+viewer resets both continuations. A failed/malformed read resets the sweep and
+never advances it or commits a partial page. A next-page flag without a cursor,
+a repeated cursor, or a missing continuation is an observable endpoint failure.
+Queries are fixed; changing their filters in a new binary also resets memory.
+Known-row aliases still confirm their actual membership; absence from a partial
+search page alone never clears membership.
+
+Research: [GitHub cursor pagination](https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api),
+accessed2026-11-13. Immediate all-page draining would increase requests per pass;
+a database cursor would introduce migration complexity without being needed for
+eventual discovery of a stable finite search. This is a reviewed implementation
+decision, not a claimed universal consensus. GitHub search itself exposes at most
+1000 results per search: this change does not implement query partitioning beyond
+that provider ceiling. Concurrent inserts/removals can move page boundaries;
+repeated sweeps and existing ID-based merges recover changes without treating
+unseen pages as complete snapshots. Tests cover205 authored/101 requested PRs,
+independent progression, malformed/repeated cursors, failures and account changes.
+
+**Historical:** the previous design always proposed a second page only and
+blocked cursor storage on a new text column. That arbitrary limit could never
+discover an unknown third-page PR; known-row aliases cannot discover unknown IDs.
 
 ### 3.4 Failure of the document
 
@@ -395,7 +426,7 @@ These are added to [swr.md §17](swr.md). Each is stated so a later Job can test
 - **G1. One document per pass, the candidates decided before the call.** The alias set is computed from the rows of the previous pass, so one call can carry it. Consequence: a pull request that left the open list is confirmed one pass later. (The spec's "absent from the searches" is read as "absent from the previous pass's searches" for this reason.)
 - **G2. The heavy cap of 25 and the `first` counts** (§3.1, §3.2) are guesses, unverified against GitHub's node limit.
 - **G3. Light fields added** to the spec's list: `labels`, `autoMergeRequest`, `latestOpinionatedReviews`, `reviewThreads(first:100)` for owned pull requests (§3.1, the reasons given there).
-- **G4. The cursor** for `authoredMore` needs a text column that no `swr_*` table has (§3.3). Open: the pass sends the first page only until it is decided (§14).
+- **G4 (superseded by QA #1121).** Cursor storage no longer needs a database column; §3.3 records bounded continuation pages and per-store engine memory.
 - **G5. The deploy approve's target key** is `github:deploy:<owner/repo>#<run_id>` (§9).
 - **G6. The Slack `post` op** is owned by the slack Workflow's `execute`; the github Workflow owns its target key and its `posting` patch (§9). The spec lists `post_comment` as the GitHub op; no command enqueues it yet, and it is listed so the set matches the spec (§9).
 - **G7. The rate floor pauses**: `remaining < 100` pauses until `resetAt`, which corrects swr.md §7 (§7.2).
@@ -413,7 +444,7 @@ Not decided by this page. Each is recorded so no Job guesses it.
 - **`run/pr-poll-now`** (contract §1.4, the immediate-poll request, pro-d392, pro-d394): its replacement is `cache::invalidate` on the `github:pr` keys plus a wake, which is the swr.md §16 rule. Not decided here; the Job that cuts over `pr-poll` decides it.
 - **`pull_requests.updated_at`** (pro-d68) is superseded by `swr_pr_detail.updated_at` for the heavy trigger. Dropping it is a breaking migration; not decided here.
 - **Storing `rateLimit.cost`** (§5): logged for now.
-- **The paging cursor** (§3.3, G4): a text column for the second search page. Decide whether the github Workflow's breaking migration adds `swr_queries.cursor`, or the page is skipped.
+- **Paging cursor (resolved by QA #1121):** §3.3 supersedes the proposed column with expendable engine memory and advancing continuation pages. Provider search partitioning above1000 remains outside that change.
 - **The superseding notes of this Job** (rule 4 and G7). swr.md §7 and contract §3.7 `pr-poll` say the old rule. They are annotated, not rewritten: the newer decision stands and the older text is marked superseded (AGENTS, "Recency wins").
 - **`pr view` when no detail is hydrated yet**: the design prints `detail` `null`. Whether the Lead should wait for it is not decided.
 - **`prune/mod.rs:179`** calls `gh` directly (§7.3). It is not an SWR reader; moving it is in this Plan's scope by rule 7, but its owner Job is not named here.

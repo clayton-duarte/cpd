@@ -134,6 +134,21 @@ const attached = async (opts: Parameters<typeof setup>[0] = {}) => {
 };
 
 describe("pi backend", () => {
+  it("catches up a committed line written between readTail and watch registration", async () => {
+    const s = await setup();
+    const original = s.cpd.json.bind(s.cpd);
+    s.cpd.json = (args) => {
+      if (args[1] === "show") s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n`);
+      return original(args);
+    };
+    const handle = await s.attach();
+    await flush();
+    expect(find(s.out, "session.window").window.items.map((item) => item.id)).toEqual(["u:m0"]);
+    expect(s.watch.started).toBe(1);
+    expect(s.out.filter((m) => m.type === "session.append").flatMap((m) => m.items.map((item) => item.id))).toEqual(["u:m1"]);
+    await handle.dispose();
+  });
+
   it("attach resolves the session file from the cpd session row", async () => {
     const s = await attached();
     expect(s.fs.stats[0]).toBe(FILE);

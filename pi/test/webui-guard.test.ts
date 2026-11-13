@@ -35,28 +35,28 @@ test("webui_human_input_restores_tripped_guard", { timeout: 20_000 }, async (t) 
       assert.deepEqual(tripEntries(f), [true]);
 
       f.emit(
-        ev(301, "session-message", { session: ID, data: { from: null, text: "senderless", origin: "webui" } }),
         ev(302, "session-message", { session: ID, data: { from: OTHER, text: "agent", origin: "webui" } }),
         ev(303, "session-message", { session: OTHER, data: { from: null, text: "other target", origin: "webui" } }),
       );
       await f.drain();
       const delivered = f.pi.delivered();
-      assert.deepEqual(delivered.map((s) => (s.message.details as any).id), [301, 302]);
+      assert.deepEqual(delivered.map((s) => (s.message.details as any).id), [302]);
       for (const s of delivered) {
         assert.equal((s.message.details as any).delivered_to, ID);
         assert.deepEqual(s.options, GATED, "receipt is held, not a turn or a reset");
       }
-      assert.deepEqual(tripEntries(f), [true], "senderless and agent Events cannot clear the trip");
+      assert.deepEqual(tripEntries(f), [true], "non-User and other-target Events cannot clear the trip");
       assert.equal(stateCalls(f).at(-1), LABEL);
 
-      await f.pi.fire("before_agent_start", { messageType: "user", prompt: "continue" });
-      await f.pi.fire("agent_start");
-      await f.quiet();
-      assert.equal(stateCalls(f).at(-1), "working");
-      assert.deepEqual(tripEntries(f), [true, false], "the actual local User prompt clears the trip");
-      f.emit(ev(305, "job-failed"));
+      f.emit(ev(305, "session-message", { session: ID, data: { from: null, text: "senderless", origin: "webui" } }));
       await f.drain();
-      const probe = f.pi.delivered().find((s) => (s.message.details as any).id === 305);
+      const user = f.pi.sent.find((s) => (s.message.details as any).id === 305);
+      assert.deepEqual(user?.options, { triggerTurn: true, deliverAs: "followUp" }, "a User message starts a turn");
+      assert.notEqual(stateCalls(f).at(-1), LABEL);
+      assert.deepEqual(tripEntries(f), [true, false], "a User message clears the trip");
+      f.emit(ev(307, "job-failed"));
+      await f.drain();
+      const probe = f.pi.delivered().find((s) => (s.message.details as any).id === 307);
       assert.deepEqual(probe?.options, { triggerTurn: true, deliverAs: "followUp" });
     } finally {
       await f.close();

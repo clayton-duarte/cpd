@@ -188,14 +188,15 @@ test("a successful switch runs switched after the model and level are set", asyn
   assert.deepEqual(adapterErrors(f), []);
 });
 
-test("a failed session show records nothing", async (t) => {
+test("a failed session show records switch-failed only", async (t) => {
   const f = await started(t);
   f.respond("session-show", { ok: false, error: { code: "session_not_found", message: "no" } }, { exit: 4 });
   f.emit(retiered(200));
   await f.drain();
   await f.quiet();
   assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet], [[], []]);
-  assert.deepEqual([switchCalls(f, "switch-failed"), switchCalls(f, "switched")], [[], []], "the process state is unknown: nothing is recorded");
+  assert.equal(switchCalls(f, "switch-failed").length, 1, "the failed read is reported once");
+  assert.deepEqual(switchCalls(f, "switched"), []);
 
   // A later switch that works is the only one recorded.
   f.respond("session-show", shownO2());
@@ -203,7 +204,7 @@ test("a failed session show records nothing", async (t) => {
   await waitFor("switched", () => switchCalls(f, "switched").length > 0, WAIT);
   await f.quiet();
   assert.deepEqual(switchCalls(f, "switched"), [["session", "switched", "--session", ID]]);
-  assert.deepEqual(switchCalls(f, "switch-failed"), []);
+  assert.equal(switchCalls(f, "switch-failed").length, 1);
 });
 
 test("the protocol is exactly one past the base", () => {
@@ -214,4 +215,30 @@ test("the protocol was raised past 8 and session-retiered is a known kind delive
   assert.ok(PROTOCOL > 8, "adding a kind the adapter acts on raises protocol (contract §5.2): the next free number on the PR's base");
   assert.ok((KINDS as readonly string[]).includes("session-retiered"), "session-retiered is not in KINDS");
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["session-retiered"], undefined, "no message, no turn");
+});
+
+test("retier: a failed session show keeps retier due and reports switch-failed", async (t) => {
+  for (const failure of [
+    () => f0.respond("session-show", { ok: false, error: { code: "session_not_found", message: "no" } }, { exit: 4 }),
+    () => f0.respond("session-show", "", { exit: 0 }),
+  ]) {
+    var f0 = await started(t);
+    failure();
+    f0.emit(retiered(200));
+    await f0.drain();
+    await f0.quiet();
+    assert.deepEqual([f0.pi.modelsSet, f0.pi.thinkingSet], [[], []]);
+    const failed = switchCalls(f0, "switch-failed");
+    assert.equal(failed.length, 1, "the failed show is reported once");
+    assert.ok(flag(failed[0]!, "--code"), "with a --code");
+    assert.ok(flag(failed[0]!, "--message"), "with a --message");
+    assert.equal(flag(failed[0]!, "--session"), ID);
+
+    // retier stayed due: the next idle retries the switch with no new Event
+    f0.respond("session-show", shownO2());
+    await f0.pi.fire("agent_settled");
+    await f0.quiet();
+    assert.equal(switchCalls(f0, "switched").length, 1, "the retried switch ran");
+    assert.deepEqual(f0.pi.modelsSet, [{ provider: "p", id: "opus" }]);
+  }
 });

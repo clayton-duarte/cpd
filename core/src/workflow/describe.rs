@@ -28,6 +28,8 @@ enum Decision {
     Update {
         status: String,
         open: Option<(String, i64)>,
+        /// The pull request body: the text with the `Fixes` line of a bug-linked Workflow.
+        body: String,
     },
 }
 
@@ -54,7 +56,7 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
         .read(|conn| decide(conn, &plan, &key, Some(&text)))?
     {
         Decision::Already(status) => (status, true),
-        Decision::Update { open, .. } => {
+        Decision::Update { open, body, .. } => {
             if let Some((repo, number)) = open {
                 // The body of the pull request goes through the outbox (swr-github.md §9); the stored description is cpd's own.
                 let id = enqueue(
@@ -62,7 +64,7 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
                     env.ports.clock.utc(),
                     &target_of(&repo, number),
                     "describe",
-                    json!({"body": text}),
+                    json!({"body": body}),
                     None,
                 )?;
                 queued = Some(id);
@@ -149,8 +151,18 @@ fn decide(
             Ok((r.get(0)?, r.get(1)?))
         })
         .optional()?;
+    let (name, issue): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT w.name, b.issue FROM workflows w LEFT JOIN bug_records b ON b.id = w.bug_id WHERE w.plan = ?1 AND w.key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let body = match name {
+        Some(name) => crate::plan::pr_body(text, issue.as_deref(), &name),
+        None => text.to_owned(),
+    };
     Ok(Decision::Update {
         status: workflow.status.clone(),
         open,
+        body,
     })
 }
