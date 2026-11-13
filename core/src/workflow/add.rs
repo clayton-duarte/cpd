@@ -439,7 +439,7 @@ fn base_coverage_required() -> CpdError {
     )
 }
 
-/// Whether Workflow `key` of `plan` is a coverage Workflow of `repo` that is merged or green (every Job merged, no failed checks).
+/// Whether Workflow `key` of `plan` is a coverage Workflow of `repo` that is merged or green (every Job merged, its PR checks passed).
 fn coverage_green(
     conn: &Connection,
     plan: &PlanId,
@@ -447,7 +447,7 @@ fn coverage_green(
     repo: &str,
 ) -> Result<bool, CpdError> {
     Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM workflows w LEFT JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2 AND w.repo = ?3 AND w.shape = 'coverage' AND (w.status = 'merged' OR (EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key) AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status != 'merged') AND (p.id IS NULL OR p.checks != 'failed'))))",
+        "SELECT EXISTS (SELECT 1 FROM workflows w LEFT JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2 AND w.repo = ?3 AND w.shape = 'coverage' AND (w.status = 'merged' OR (EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key) AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status != 'merged') AND (p.id IS NULL OR p.checks = 'passed'))))",
         rusqlite::params![plan.as_str(), key, repo],
         |r| r.get::<_, bool>(0),
     )?)

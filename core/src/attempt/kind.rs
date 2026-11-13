@@ -16,9 +16,29 @@ use crate::job::guard;
 use crate::plan::jobs::{self, Job};
 use crate::policy::Policy;
 
-/// Whether the Job's kind has the checks of this module.
-pub(super) fn has_checks(job: &Job) -> bool {
-    matches!(job.kind.as_str(), "test" | "impl")
+/// Whether the Job is a `work` Job of a coverage Workflow: it names no test, and must leave the suite building and passing.
+fn coverage_work(env: &mut Env, plan: &PlanId, job: &Job) -> Result<bool, CpdError> {
+    let (true, Some(workflow)) = (job.kind == "work", &job.workflow) else {
+        return Ok(false);
+    };
+    env.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND shape = 'coverage')",
+            [plan.as_str(), workflow.as_str()],
+            |r| r.get::<_, bool>(0),
+        )?)
+    })
+}
+
+/// Whether the Job has the checks of this module: a `test` or `impl` Job, or a `work` Job of a coverage Workflow when the policy has `[test-commands]`.
+pub(super) fn has_checks(
+    env: &mut Env,
+    plan: &PlanId,
+    job: &Job,
+    policy: &Policy,
+) -> Result<bool, CpdError> {
+    Ok(matches!(job.kind.as_str(), "test" | "impl")
+        || (policy.test_commands.is_some() && coverage_work(env, plan, job)?))
 }
 
 /// The Job as stored now, with its siblings: `test_approved` is read when a check runs, so an approval reaches an Attempt that is running.
@@ -141,7 +161,7 @@ pub(super) fn check(
                 .is_some(),
             None => false,
         };
-    if tests.is_empty() && !refactor_impl {
+    if tests.is_empty() && !refactor_impl && job.kind != "work" {
         // An `impl` Job's tests are its `test` Jobs': with none, `run` would be told no test and might run them all (hs-d338).
         return Err(CpdError::new(
             ErrorCode::TestJobRequired,
@@ -291,7 +311,7 @@ fn run_tests(
             &run,
             tests,
         )),
-        ("impl", HookOutcome::Failed { exit, .. }) => Err(refuse(
+        ("impl" | "work", HookOutcome::Failed { exit, .. }) => Err(refuse(
             ErrorCode::TestsFailed,
             format!("The named tests still fail (exit {exit}): fix the code, not the tests, commit, and submit again; the tail is in details.tail."),
             &run,

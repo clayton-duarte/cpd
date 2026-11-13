@@ -254,4 +254,18 @@ mod tests {
             "approval attempt on refactor should instruct amending coverage workflow"
         );
     }
+
+    /// A coverage base whose Jobs are all merged but whose PR checks have not passed is not green.
+    #[test]
+    fn coverage_base_with_unpassed_checks_refused() {
+        let fx = fixture("grounding");
+
+        fx.add_workflow("cov", &["--shape", "coverage"]).ok();
+        fx.env.sql("UPDATE jobs SET status = 'queued', tier = 'S2', goal = 'goal', context = 'context', touches = '[\"src/**\"]', acceptance = '[\"works\"]', out_of_scope = '[]', fingerprint = printf('%064d', 0) WHERE workflow = 'cov'; UPDATE jobs SET status = 'running' WHERE workflow = 'cov'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE workflow = 'cov';
+            INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+              VALUES ('acme/pay', 900, 'https://github.com/acme/pay/pull/900', 'Cov', 0, 'open', 'none', 'pending', 'opened', NULL, 'opened');
+            UPDATE workflows SET status = 'dispatch', lead_worktree = '/tmp/lead', started_at = 't' WHERE key = 'cov'; UPDATE workflows SET status = 'open', pr_number = 900, pr_url = 'https://github.com/acme/pay/pull/900', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests WHERE number = 900) WHERE key = 'cov';");
+        let run = fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"]);
+        common::refused(&run, "base_coverage_required", 3);
+    }
 }

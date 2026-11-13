@@ -329,7 +329,7 @@ fn run_checks(
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
     // is the Attempt's base for every Attempt (a parallel Attempt's `base_sha` is its branch point too).
-    if kind::has_checks(job) {
+    if kind::has_checks(env, plan, job, &policy)? {
         kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
     }
     // The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's
