@@ -38,7 +38,14 @@ struct Boundaries {
     fence_checks: usize,
     fenced: bool,
     ancestry: BTreeMap<String, Vec<String>>,
+    /// When set, `stop` models the driver's A9 cleanup of a linear Attempt:
+    /// `git reset --hard base_sha` on the Lead Branch (driver/run.rs).
+    models_a9_reset: bool,
+    /// (stops so far, Lead Branch tip) at each selector validation.
+    validations: Vec<(usize, String)>,
 }
+
+const LEAD: &str = "cpd/pay/api";
 
 impl Boundary for Boundaries {
     fn owner(
@@ -48,6 +55,8 @@ impl Boundary for Boundaries {
         _request: &Request,
         selector: &str,
     ) -> Result<String, CpdError> {
+        let tip = self.refs.get(LEAD).cloned().unwrap_or_default();
+        self.validations.push((self.stops, tip));
         self.owners
             .get(selector)
             .cloned()
@@ -66,6 +75,9 @@ impl Boundary for Boundaries {
             tx.execute("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'aborted', ended_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND job = ?2 AND status = 'running'", rusqlite::params![plan.as_str(), request.source])?;
             Ok(())
         })?;
+        if self.models_a9_reset {
+            self.refs.insert(LEAD.into(), "base".into());
+        }
         Ok(())
     }
     fn quiescent(&mut self, _env: &mut Env, _plan: &PlanId, _source: &str) -> Result<(), CpdError> {
@@ -150,6 +162,8 @@ impl Fixture {
                 fence_checks: 0,
                 fenced: false,
                 ancestry: BTreeMap::new(),
+                models_a9_reset: false,
+                validations: Vec::new(),
             },
             request: Request {
                 source: "old-tests".into(),
@@ -512,4 +526,38 @@ fn reseal_refuses_unexplained_drift() {
         before,
         "refusal changes nothing"
     );
+}
+
+fn reset_fixture() -> Fixture {
+    let mut f = Fixture::repetition();
+    f.io.models_a9_reset = true;
+    f.io.refs.insert(LEAD.into(), f.commit.clone());
+    f.seal();
+    f
+}
+
+#[test]
+fn replace_test_stop_keeps_worker_commit() {
+    // b63: ending the old Attempt makes the driver reset the Lead Branch to
+    // base_sha, dropping the Worker's red-test commit. It must stay the tip.
+    let mut f = reset_fixture();
+    f.run().unwrap();
+    assert_eq!(
+        f.io.refs.get(LEAD),
+        Some(&f.commit),
+        "the Lead Branch must still hold the Worker's red-test commit"
+    );
+}
+
+#[test]
+fn replace_test_validates_selectors_on_worker_commit() {
+    // b63: selectors are validated against the Worker's red-test state, i.e.
+    // with the Lead Branch on that commit, after the stop and its restore.
+    let mut f = reset_fixture();
+    f.run().unwrap();
+    assert!(!f.io.validations.is_empty());
+    for (stops, tip) in &f.io.validations {
+        assert_eq!(*stops, 1, "validated before the stop was restored");
+        assert_eq!(tip, &f.commit, "validated off the Worker's commit");
+    }
 }
