@@ -88,7 +88,8 @@ State lives in `$CPD_HOME`, default `~/.cpd`: the database `cpd.db` (with its `-
 
 The continuous repository QA Protocol, its operating limits and creation
 tools are documented in [QA Protocol](docs/qa-protocol.md), with the
-[decisions and research](docs/qa-decisions.md) behind it.
+[decisions and research](docs/qa-decisions.md) behind it. To adopt the same method
+in another repo or agent session, use the self-contained [repo-qa kit](tools/repo-qa/README.md).
 
 ```sh
 pnpm run verify

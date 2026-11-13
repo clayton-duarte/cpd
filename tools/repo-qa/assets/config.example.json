@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "scope": "example-repo-qa",
+  "timezone": "America/Toronto",
+  "limits": { "issues": 20, "prs": 10 },
+  "repositories": [
+    { "name": "OWNER/REPO", "base": "main" }
+  ]
+}
