@@ -320,6 +320,32 @@ fn run_checks(
         .with("touches", json!(touches))
         .with("generated", json!(policy.generated.paths)));
     }
+    // Every declared touch needs a diff (b69), unless the Lead waived it; `open`, `update` and explore Jobs are exempt.
+    if !check.skipped() {
+        let changed = git::tamper::changed_paths(root, compare, sha)?;
+        let mut unchanged: Vec<String> = Vec::new();
+        for entry in &touches {
+            if !approved.contains(entry)
+                && !unchanged.contains(entry)
+                && !changed
+                    .iter()
+                    .any(|p| git::tamper::touches_matches(entry, p))
+            {
+                unchanged.push(entry.clone());
+            }
+        }
+        if !unchanged.is_empty() {
+            return Err(CpdError::new(
+                ErrorCode::TouchesUnchanged,
+                format!(
+                    "The diff leaves declared touches unchanged: {}. Change them, or ask the Lead, who waives a path with `cpd job approve-untouched`.",
+                    unchanged.join(", ")
+                ),
+            )
+            .with("paths", json!(unchanged))
+            .with("touches", json!(touches)));
+        }
+    }
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
@@ -423,14 +449,49 @@ pub(super) fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathB
 }
 
 /// The Lead waives the declared `touches` path `path` of Job `job` as unchanged, with a required `reason`
-/// (`cpd job approve-untouched`). STUB: records nothing.
-#[cfg(test)]
+/// (`cpd job approve-untouched`). The waiver joins the Job's `touches_approved` (a declared path there is harmless to
+/// the outside check) and the `job-edited` Event carries the reason, visible to the User.
+#[allow(dead_code)]
 pub(crate) fn waive_untouched(
-    _env: &mut Env,
-    _plan: &PlanId,
-    _job: &str,
-    _path: &str,
-    _reason: &str,
+    env: &mut Env,
+    plan: &PlanId,
+    job: &str,
+    path: &str,
+    reason: &str,
 ) -> Result<(), CpdError> {
-    Ok(())
+    if reason.trim().is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "A waiver of an unchanged touch needs a --reason.",
+        ));
+    }
+    env.store.write("job approve-untouched", |tx| {
+        let key = crate::ids::JobKey::parse(job)?;
+        let all = crate::plan::jobs::load(tx, plan)?;
+        let found = all
+            .iter()
+            .find(|j| j.key == job)
+            .ok_or_else(|| CpdError::new(ErrorCode::JobNotFound, format!("No Job {job}.")))?;
+        let mut approved = crate::job::guard::approved_touches(found);
+        if approved.iter().any(|p| p == path) {
+            return Ok(());
+        }
+        approved.push(path.to_owned());
+        let stored = serde_json::to_string(&approved).expect("a list of text serialises");
+        tx.execute(
+            "UPDATE jobs SET touches_approved = ?3 WHERE plan = ?1 AND key = ?2",
+            rusqlite::params![plan.as_str(), job, stored],
+        )?;
+        let text = format!(
+            "Job {job} of Plan {plan} may submit with the declared touch {path} unchanged: {}.",
+            reason.trim()
+        );
+        crate::events::append(
+            tx,
+            crate::events::NewEvent::job_edited(text, ["touches_approved"])
+                .plan(plan.clone())
+                .job(key),
+        )?;
+        Ok(())
+    })
 }
