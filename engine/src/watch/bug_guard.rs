@@ -23,10 +23,8 @@ use super::engine::Engine;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{PlanId, SessionId};
+use cpd_core::inbox::model::BUG_MITIGATION_WINDOW_SECS;
 use cpd_core::store::{Store, WriteTxn};
-
-/// The mitigation bound of contract §2.2: 900 s (15 minutes), a code constant.
-const BOUND: i64 = 900;
 
 /// One open, unmitigated `bug_records` row, as E25 reads it.
 struct Bug {
@@ -162,7 +160,7 @@ fn actions(store: &mut Store, now: OffsetDateTime, bugs: &[Bug]) -> Result<Vec<A
                 title: bug.title.clone(),
             });
         }
-        let past = age(now, &bug.reported_at)? >= BOUND;
+        let past = age(now, &bug.reported_at)? >= BUG_MITIGATION_WINDOW_SECS;
         let recurring = bugs.iter().enumerate().any(|(j, other)| {
             j != i
                 && normalized[j] == normalized[i]
@@ -215,8 +213,13 @@ fn apply(tx: &WriteTxn<'_>, actions: &[Action]) -> Result<usize, CpdError> {
                 symptom,
             } => {
                 let text = breach_text(id, title, reason);
-                let mut event =
-                    NewEvent::protocol_breach_bug(text.clone(), id, reason, symptom, BOUND);
+                let mut event = NewEvent::protocol_breach_bug(
+                    text.clone(),
+                    id,
+                    reason,
+                    symptom,
+                    BUG_MITIGATION_WINDOW_SECS,
+                );
                 if let Some(plan) = plan {
                     event = event.plan(plan.clone());
                 }

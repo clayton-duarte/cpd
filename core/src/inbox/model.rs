@@ -7,6 +7,8 @@ use std::fs::File;
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use ts_rs::TS;
 
 use crate::error::{CpdError, ErrorCode};
@@ -499,15 +501,37 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
     )
 }
 
+pub const BUG_MITIGATION_WINDOW_SECS: i64 = 900;
+
+/// The whole seconds between `now` and `reported_at`.
+fn bug_age(now: &str, reported_at: &str) -> Result<i64, CpdError> {
+    let now_dt = OffsetDateTime::parse(now, &Rfc3339).map_err(|e| {
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("inbox now {now:?} does not parse: {e}"),
+        )
+        .with("now", now)
+    })?;
+    let at_dt = OffsetDateTime::parse(reported_at, &Rfc3339).map_err(|e| {
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("bug reported_at {reported_at:?} does not parse: {e}"),
+        )
+        .with("reported_at", reported_at)
+    })?;
+    Ok((now_dt - at_dt).whole_seconds())
+}
+
 /// The `bug` Inbox conditions (contract §2.2 "Inbox item", "Bug record"; air-d104, air-d105,
-/// air-n120): one red item per open `bug_records` row with no mitigation, the owner's wake item and
-/// the User's breach indicator. It links the owner Session (the Plan's Lead when the record names a
+/// air-n120, pro-d578): one yellow item per open `bug_records` row with no mitigation that has breached
+/// the protocol window (900 s) or where the owner explicitly asked the User.
+/// It links the owner Session (the Plan's Lead when the record names a
 /// Plan, else the live Manager of Context `cpd`, pro-d204), the record's Plan and its Context (`cpd`
 /// for a cross-Plan bug). The rule lives here because [`reconcile`] is the single write path for
 /// Inbox items; an item closes when the bug is mitigated or its `status` turns `closed`.
-pub fn bug_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+pub fn bug_conditions(conn: &Connection, now: &str) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT b.id, b.plan, b.title, p.context, p.lead_session
+        "SELECT b.id, b.plan, b.title, p.context, p.lead_session, b.reported_at
            FROM bug_records b LEFT JOIN plans p ON p.id = b.plan
           WHERE b.status = 'open' AND b.mitigation IS NULL
           ORDER BY b.id",
@@ -520,11 +544,15 @@ pub fn bug_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 r.get::<_, String>(2)?,
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
+                r.get::<_, String>(5)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
-    for (id, plan, title, plan_context, lead) in rows {
+    for (id, plan, title, plan_context, lead, reported_at) in rows {
+        if bug_age(now, &reported_at)? < BUG_MITIGATION_WINDOW_SECS {
+            continue;
+        }
         let plan = plan
             .map(|p| PlanId::parse(&p))
             .transpose()
@@ -561,7 +589,7 @@ pub fn bug_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
         };
         out.push(Condition {
             kind: Kind::Bug,
-            urgency: Urgency::Red,
+            urgency: Urgency::Yellow,
             subject: format!("bug:{id}"),
             label: format!("{row1}\n{title}"),
             url: None,
@@ -606,7 +634,7 @@ pub fn reconcile(
     conditions: &[Condition],
     now: &str,
 ) -> Result<Changes, CpdError> {
-    let mut wanted = store.read(bug_conditions)?;
+    let mut wanted = store.read(|conn| bug_conditions(conn, now))?;
     wanted.extend_from_slice(conditions);
     let conditions = wanted.as_slice();
     let open = store.read(open_items)?;
