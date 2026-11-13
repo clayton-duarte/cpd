@@ -1975,11 +1975,13 @@
     "flags": {
       "--check": false,
       "--ensure": false,
+      "--ensure-when-free": false,
       "--help": false,
       "--mark-restart": false,
       "--migrate-scratch": false,
       "--restart-tmux": false,
-      "--wait": false
+      "--wait": false,
+      "--waiting": false
     },
     "positionals": {
       "max": 0,

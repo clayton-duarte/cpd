@@ -4233,10 +4233,10 @@ out {"t":"error","id":"r2","error":{"code":"plan_not_found","message":"…"}}
 ## 12. `watch`
 
 ```
-cpd watch [--ensure | --check]
+cpd watch [--ensure | --check | --ensure-when-free]
 ```
 
-(and the internal `cpd watch --restart-tmux`, `cpd watch --ensure --wait` and `cpd watch --mark-restart`, below)
+(and the internal `cpd watch --restart-tmux`, `cpd watch --ensure-when-free`, `cpd watch --ensure --wait` and `cpd watch --mark-restart`, below)
 
 The engine, one per machine (§3.7, §6.6, D5).
 
@@ -4301,6 +4301,8 @@ Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it p
 Idempotent: a second one rewrites the same marker with a new `at`. The next engine consumes the marker at its start: a restart back within 10 s (`PLANNED_RESTART_QUIET_SECS`) whose marker names the previous engine's pid is logged only (`watch-started`'s `text` and `run/watch.log`) and sends no `session-message` to the Managers; past 10 s, or with no valid marker, they hear it as before (contract §3.7 "A planned restart", hs-d471). The tests are listed there.
 
 **Engine status in the Inbox** (pro-d590, hs-d328). The Inbox model exposes two fields tracking engine liveness (contract §2.2, pro-d590): `engineDownSince` (ISO 8601 timestamp, null while running) is the time the engine was detected down, set from the mtime of `locks/watch.lock` when the lock is free and the engine is not running; it is null when the engine holds the lock (running) or when unavailable. `engineRestartReason` (string or null) carries `install` when `run/cpd-install.json` has `status="restarting"`, indicating the install triggered a waiter to restart the engine; it is null otherwise. Both fields are read at every tick and exposed to the WebUI via the cockpit protocol, allowing the UI to show engine status (down since when, and whether an install is managing the restart) without polling or waiting.
+
+**`--ensure-when-free` (internal; pro-d590).** What `cpd install` hands off to when the old engine still holds `locks/watch.lock` after the wait. It starts a detached waiter (its own session, output in `run/restart-waiter.log`) and returns at once; the waiter waits, for at most an hour, for the lock to be free, runs `cpd watch --ensure` once and writes `run/cpd-install.json` as `ok`. Meanwhile the file says `restarting`, which raises no host alert. Exclusive with `--ensure`, `--check`, `--restart-tmux` and `--mark-restart`.
 
 **`--ensure --wait` (internal; hs-d328).** What the tmux server's hooks run when the engine's pane died or its window is gone (contract §6.1, §6.6); not an interface of the User or an agent. As `--ensure`, with these differences:
 
