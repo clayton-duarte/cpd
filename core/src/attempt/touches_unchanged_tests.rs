@@ -3,9 +3,9 @@
 //! A directory entry needs one changed path under it. Explore and open Jobs are exempt. The Lead waives a path with a
 //! required reason. The fixture is shared with `touches_tests`: in-process fake git, temp `$CPD_HOME`.
 
-use super::submit::waive_untouched;
 use super::touches_tests::{Spec, refused, rig};
 use crate::error::ErrorCode;
+use crate::job::approve::waive_untouched;
 use serde_json::json;
 
 const TWO: &str = "[\"docs/research/x.md\", \"src/app.rs\"]";
@@ -104,4 +104,32 @@ fn waiver_requires_a_reason() {
         .expect_err("an empty reason is refused");
     assert_eq!(e.code(), ErrorCode::Usage, "{e:?}");
     refused(r.submit(), ErrorCode::TouchesUnchanged);
+}
+
+/// `cpd job approve-untouched a --path … --reason … --plan <id>`, parsed as the CLI parses it, run on the rig's env.
+#[test]
+fn approve_untouched_command_reaches_the_waiver() {
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Argv {
+        #[command(flatten)]
+        args: crate::job::ApproveTouchesArgs,
+    }
+    // SAFETY: nextest gives each test a process of its own.
+    unsafe { std::env::remove_var("CPD_ATTEMPT") };
+    let mut r = rig(Spec::default());
+    refused(r.submit(), ErrorCode::TouchesUnchanged);
+    let argv = Argv::try_parse_from([
+        "x",
+        "a",
+        "--path",
+        "docs/research/x.md",
+        "--reason",
+        "already correct",
+        "--plan",
+        r.plan.as_str(),
+    ])
+    .unwrap();
+    crate::job::approve::approve_untouched_in(&mut r.env, argv.args).unwrap();
+    r.submit().expect("the waived path is accepted");
 }

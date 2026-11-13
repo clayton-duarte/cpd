@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::{ApproveArgs, Env, find, guard, plan_phase};
+use super::{ApproveArgs, ApproveTouchesArgs, Env, find, guard, plan_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::tamper::path_matches;
@@ -134,4 +134,79 @@ fn decide(
     } else {
         Decision::Approve(job, approved)
     })
+}
+
+/// The Lead waives the declared `touches` path `path` of Job `job` as unchanged, with a required `reason`
+/// (`cpd job approve-untouched`). The waiver joins the Job's `touches_approved` (a declared path there is harmless to
+/// the outside check) and the `job-edited` Event carries the reason, visible to the User.
+pub(crate) fn waive_untouched(
+    env: &mut Env,
+    plan: &PlanId,
+    job: &str,
+    path: &str,
+    reason: &str,
+) -> Result<(), CpdError> {
+    if reason.trim().is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "A waiver of an unchanged touch needs a --reason.",
+        ));
+    }
+    env.store.write("job approve-untouched", |tx| {
+        let key = crate::ids::JobKey::parse(job)?;
+        let all = crate::plan::jobs::load(tx, plan)?;
+        let found = all
+            .iter()
+            .find(|j| j.key == job)
+            .ok_or_else(|| CpdError::new(ErrorCode::JobNotFound, format!("No Job {job}.")))?;
+        let mut approved = crate::job::guard::approved_touches(found);
+        if approved.iter().any(|p| p == path) {
+            return Ok(());
+        }
+        approved.push(path.to_owned());
+        let stored = serde_json::to_string(&approved).expect("a list of text serialises");
+        tx.execute(
+            "UPDATE jobs SET touches_approved = ?3 WHERE plan = ?1 AND key = ?2",
+            rusqlite::params![plan.as_str(), job, stored],
+        )?;
+        let text = format!(
+            "Job {job} of Plan {plan} may submit with the declared touch {path} unchanged: {}.",
+            reason.trim()
+        );
+        crate::events::append(
+            tx,
+            crate::events::NewEvent::job_edited(text, ["touches_approved"])
+                .plan(plan.clone())
+                .job(key),
+        )?;
+        Ok(())
+    })
+}
+
+/// `cpd job approve-untouched <job> --path <p>… --reason <text>` (commands.md §5.9b): the Lead only; waives each path.
+pub(super) fn approve_untouched(args: ApproveTouchesArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    approve_untouched_in(&mut env, args)
+}
+
+/// [`approve_untouched`] on an open `env`: what a test hands in.
+pub(crate) fn approve_untouched_in(
+    env: &mut Env,
+    args: ApproveTouchesArgs,
+) -> Result<Output, CpdError> {
+    if std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()) {
+        return Err(CpdError::new(
+            ErrorCode::NotALead,
+            "Only the Lead waives an unchanged touch: ask it with cpd ask, and it runs cpd job approve-untouched.",
+        ));
+    }
+    let plan = args.plan.require()?.clone();
+    for path in &args.paths {
+        waive_untouched(env, &plan, args.key.as_str(), path, args.reason.as_str())?;
+    }
+    Ok(Output::success(json!({
+        "job": {"key": args.key.as_str()},
+        "approved": args.paths,
+        "fields": ["touches_approved"],
+    })))
 }
