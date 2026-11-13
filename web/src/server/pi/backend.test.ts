@@ -64,8 +64,10 @@ class FakeFile implements FileBoundary {
 class FakeWatch implements WatchBoundary {
   disposed = 0;
   started = 0;
-  watch(): Disposable {
+  fire: () => void = () => undefined;
+  watch(_path?: string, onChange?: () => void): Disposable {
     this.started += 1;
+    if (onChange) this.fire = onChange;
     return { dispose: () => void (this.disposed += 1) };
   }
 }
@@ -327,6 +329,21 @@ describe("pi backend", () => {
     expect(errs[0]?.sessionId).toBe("s1");
     expect(errs[0]?.error.code).toBe("session_file_missing");
     expect(s.scheduler.pending()).toBe(0);
+    await s.handle.dispose();
+  });
+});
+
+describe("busy follows the current session state", () => {
+  it("a session stopped at attach shows busy once cpd reports it working and the transcript grows", async () => {
+    const s = await attached({ ref: { state: "stopped" } });
+    expect(find(s.out, "session.status").busy).toBe(false);
+    s.cpd.show = { ...s.cpd.show, state: "working" };
+    s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n`);
+    const before = s.out.length;
+    s.watch.fire();
+    await flush();
+    const statuses = s.out.slice(before).filter((m) => m.type === "session.status") as Array<{ busy: boolean }>;
+    expect(statuses.map((m) => m.busy)).toEqual([true]);
     await s.handle.dispose();
   });
 });

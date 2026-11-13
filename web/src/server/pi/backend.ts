@@ -96,6 +96,7 @@ interface ShowStats {
   readonly thinking?: string;
   readonly tier?: string;
   readonly file?: string;
+  readonly state?: string;
   readonly error?: string;
 }
 
@@ -161,12 +162,20 @@ export function createPiBackend(deps: {
           thinking: s(o.thinking),
           tier: s(o.tier),
           file: s(o.file),
+          state: s(o.state),
         };
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
       }
     };
     let show = await readShow();
+    // Engine state now, not the attach-time snapshot in `ref`: refreshed from `cpd session show`.
+    let engineState: string | undefined = show.state ?? ref.state;
+    const refreshState = async (): Promise<void> => {
+      const shown = await readShow();
+      if (shown.state !== undefined) engineState = shown.state;
+    };
+    let appends: Promise<void> = Promise.resolve();
 
     let branch: Stat<string>;
     if (ref.cwd === undefined) branch = unknown("the session row has no cwd");
@@ -244,7 +253,7 @@ export function createPiBackend(deps: {
       return fresh;
     };
     syncTurns();
-    let busy = isBusy(tail.normalizer.facts, ref.state);
+    let busy = isBusy(tail.normalizer.facts, engineState);
     let watcher: Disposable | undefined;
     const out = (m: SessionServerMessage): void => {
       if (!disposed) emit(m);
@@ -283,7 +292,21 @@ export function createPiBackend(deps: {
                 error: toWireError(err),
               }),
             );
-          } else applyAppend(e.result);
+          } else {
+            const result = e.result;
+            appends = appends
+              .then(refreshState)
+              .then(() => {
+                if (!disposed) applyAppend(result);
+              })
+              .catch((err: unknown) =>
+                out({
+                  type: "session.error",
+                  sessionId,
+                  error: toWireError(err),
+                }),
+              );
+          }
         },
         onError: (error) =>
           out({ type: "session.error", sessionId, error: toWireError(error) }),
@@ -312,7 +335,7 @@ export function createPiBackend(deps: {
         });
       if (r.factsChanged)
         out({ type: "session.footer", sessionId, footer: footer() });
-      const now = isBusy(tail.normalizer.facts, ref.state);
+      const now = isBusy(tail.normalizer.facts, engineState);
       if (now !== busy) {
         busy = now;
         status();
@@ -339,7 +362,7 @@ export function createPiBackend(deps: {
       liveIds.clear();
       turnsSeen = 0;
       syncTurns();
-      busy = isBusy(tail.normalizer.facts, ref.state);
+      busy = isBusy(tail.normalizer.facts, engineState);
       emitTail();
       startWatch(tail.normalizer, tail.endOffset, tail.identity);
     }
