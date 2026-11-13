@@ -256,7 +256,9 @@ export function createConnection(options: ConnectionOptions): Connection {
     },
     selectSession(sessionId) {
       const before = store.getState().selectedSessionId;
-      if (before === sessionId && (sessionId === null || store.getState().session?.error?.code !== "session_not_found")) return;
+      const session = store.getState().session;
+      const retry = sessionId !== null && session?.attached !== true && session?.error != null;
+      if (before === sessionId && !retry) return;
       dropBuffer();
       dropEchoTimers();
       if (before === sessionId) store.dispatch({ type: "selectSession", sessionId: null }); // reset so the same id re-attaches
