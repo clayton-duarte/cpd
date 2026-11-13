@@ -1,6 +1,7 @@
 //! Red tests for the b70 guard: a test Job's submit that removes a test case, or lowers its assertion count,
 //! is refused `tests_removed`; the Lead may excuse a test with a reasoned, recorded approval.
 
+use super::touches_tests::{Rig, Spec, rig};
 use crate::error::ErrorCode;
 use crate::git::tamper::{approve_test_removal, check_tests_kept, test_cases};
 
@@ -60,4 +61,138 @@ fn reason_is_recorded_visible_to_user() {
     let mut approved = Vec::new();
     let text = approve_test_removal(&mut approved, "b", "obsolete after merge").expect("approved");
     assert!(text.contains("obsolete after merge") && text.contains('b'));
+}
+
+// ---- single-line tests: assertions on the declaration line count ----
+
+#[test]
+fn single_line_js_assertions_are_counted() {
+    let base = "test(\"a\", () => { expect(1).toBe(1); });\n";
+    assert_eq!(test_cases(base)[0].assertions, 1);
+    let head = "test(\"a\", () => { });\n";
+    assert!(refused(base, head, &[]));
+}
+
+#[test]
+fn single_line_rust_fn_assertions_are_counted() {
+    let base = "#[test]\nfn a() { assert!(true); assert_eq!(1, 1); }\n";
+    assert_eq!(test_cases(base)[0].assertions, 2);
+    let head = "#[test]\nfn a() { assert!(true); }\n";
+    assert!(refused(base, head, &[]));
+    let attr_inline = "#[test] fn a() { assert!(true); }\n";
+    assert_eq!(test_cases(attr_inline)[0].assertions, 1);
+}
+
+#[test]
+fn a_single_line_case_does_not_swallow_the_next_lines() {
+    let src = "test(\"a\", () => { expect(1).toBe(1); });\nexpect(2).toBe(2);\n";
+    assert_eq!(test_cases(src)[0].assertions, 1);
+}
+
+// ---- identity: scoped, and distinct cases stay distinct ----
+
+#[test]
+fn same_named_tests_in_different_scopes_are_distinct_and_accepted_unchanged() {
+    let rust = "mod x {\n    #[test]\n    fn a() {\n        assert!(true);\n    }\n}\nmod y {\n    #[test]\n    fn a() {\n        assert!(true);\n    }\n}\n";
+    let cases = test_cases(rust);
+    assert_eq!(cases.len(), 2);
+    assert_ne!(cases[0].name, cases[1].name);
+    assert!(check_tests_kept(rust, rust, &[]).is_ok());
+    let js = "describe(\"x\", () => {\n  test(\"a\", () => {\n    expect(1).toBe(1);\n  });\n});\ndescribe(\"y\", () => {\n  test(\"a\", () => {\n    expect(1).toBe(1);\n  });\n});\n";
+    let cases = test_cases(js);
+    assert_eq!(cases.len(), 2);
+    assert_ne!(cases[0].name, cases[1].name);
+    assert!(check_tests_kept(js, js, &[]).is_ok());
+}
+
+#[test]
+fn deleting_one_of_two_same_named_scoped_tests_is_refused() {
+    let base = "mod x {\n    #[test]\n    fn a() {\n        assert!(true);\n    }\n}\nmod y {\n    #[test]\n    fn a() {\n        assert!(true);\n    }\n}\n";
+    let head = "mod x {\n    #[test]\n    fn a() {\n        assert!(true);\n    }\n}\n";
+    assert!(refused(base, head, &[]));
+}
+
+#[test]
+fn deleting_one_of_two_same_named_tests_in_one_scope_is_refused() {
+    let base = "test(\"a\", () => {\n  expect(1).toBe(1);\n});\ntest(\"a\", () => {\n  expect(2).toBe(2);\n});\n";
+    let head = "test(\"a\", () => {\n  expect(1).toBe(1);\n});\n";
+    assert_eq!(test_cases(base).len(), 2);
+    assert!(refused(base, head, &[]));
+    assert!(check_tests_kept(base, base, &[]).is_ok());
+}
+
+#[test]
+fn moving_a_test_to_another_scope_is_refused() {
+    let base = "mod x {\n    #[test]\n    fn a() {\n        assert!(true);\n    }\n}\n";
+    let head = "mod y {\n    #[test]\n    fn a() {\n        assert!(true);\n    }\n}\n";
+    assert!(refused(base, head, &[]));
+}
+
+// ---- the production submit path refuses a removed test and takes it after the Lead's approval ----
+
+const WEAKER: &str = "#[test]\nfn a() {\n    assert!(true);\n}\n";
+
+fn test_rig(changed: &'static [(&'static str, &'static str)]) -> Rig {
+    rig(Spec {
+        // The guard runs for every Job whose submit checks a worktree; `work` has no `[test-commands]` check to stub.
+        kind: "work",
+        touches: "[\"tests/t.rs\"]",
+        changed,
+        ..Spec::default()
+    })
+}
+
+fn approve(rig: &mut Rig, names: &[&str]) {
+    let stored = serde_json::to_string(names).unwrap();
+    rig.env
+        .store
+        .write("fixture", |tx| {
+            tx.execute(
+                "UPDATE jobs SET test_removal_approved = ?1 WHERE plan = 'pay' AND key = 'a'",
+                rusqlite::params![stored],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn submit_refuses_a_test_job_that_deletes_an_existing_test() {
+    let mut rig = test_rig(&[("tests/t.rs", WEAKER)]);
+    let err = rig.submit().expect_err("the removal is refused");
+    assert_eq!(err.code(), ErrorCode::TestsRemoved, "{err:?}");
+    assert_eq!(err.exit().code(), 3);
+    assert_eq!(err.details()["tests"], serde_json::json!(["b"]));
+    assert_eq!(err.details()["path"], "tests/t.rs");
+    assert_eq!(rig.attempt("status").as_deref(), Some("running"));
+}
+
+#[test]
+fn submit_refuses_a_test_job_that_deletes_a_test_file() {
+    // The head tree holds an empty test file: every case of the base is gone.
+    let mut rig = test_rig(&[("tests/t.rs", "")]);
+    let err = rig.submit().expect_err("refused");
+    assert_eq!(err.code(), ErrorCode::TestsRemoved, "{err:?}");
+    assert_eq!(err.details()["tests"], serde_json::json!(["a", "b"]));
+}
+
+#[test]
+fn submit_accepts_the_removal_after_the_leads_approval() {
+    let mut rig = test_rig(&[("tests/t.rs", WEAKER)]);
+    assert_eq!(
+        rig.submit().expect_err("refused").code(),
+        ErrorCode::TestsRemoved
+    );
+    // The Lead approves while the Attempt runs (`job approve-test-removal`): the check reads it fresh.
+    approve(&mut rig, &["b"]);
+    assert!(rig.submit().is_ok(), "an approved removal passes");
+    assert_eq!(rig.attempt("status").as_deref(), Some("merging"));
+}
+
+#[test]
+fn submit_accepts_a_test_job_that_keeps_and_adds_tests() {
+    const MORE: &str = "#[test]\nfn a() {\n    assert!(true);\n}\n\n#[test]\nfn b() {\n    assert!(true);\n}\n\n#[test]\nfn c() {\n    assert!(true);\n}\n";
+    let mut rig = test_rig(&[("tests/t.rs", MORE)]);
+    assert!(rig.submit().is_ok());
+    assert_eq!(rig.attempt("status").as_deref(), Some("merging"));
 }
