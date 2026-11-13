@@ -184,7 +184,7 @@ The first stage: Grounding and Grilling, in phase `grounding`; it ends with `pla
 The second stage: Clarifying, Scoping, Splitting and Orchestrating, in phase `plan`; it ends with `plan lock`. Clarifying receives requirements and assumptions settled from the brief and confirms only implementation and operational details with the User.
 
 **Dispatch stage** (stage, pro-d145, pro-d146):
-The third stage: Documenting, Red testing, Implementing, Verifying and Deploying, in phases `dispatch` and `deploy`. The Plan is `done` when every Workflow's pull request is merged. Its name is not the old phase "Dispatch" (retired) nor the Workflow status `dispatch`. A Workflow whose policy sets `workflow.local_docs = false` (missionlane-style, keeping decisions in the Context instead of local markdown) has no Documenting step and no docs Job: its tdd template starts with Red testing (b72, commands.md §9.4, contract §8.3).
+The third stage: Documenting, Red testing, Implementing, Verifying and Deploying, in phases `dispatch` and `deploy`. The Plan is `done` when every Workflow's pull request is merged. Its name is not the old phase "Dispatch" (retired) nor the Workflow status `dispatch`. A Workflow whose policy sets `workflow.local_docs = false` (policy-configured repositories that keep decisions in the Context instead of local markdown) has no Documenting step and no docs Job: its tdd template starts with Red testing (b72, commands.md §9.4, contract §8.3).
 
 **Grounding** (step, pro-d146):
 Reading the Context's records and the User's material (`context show`, `context note`).
