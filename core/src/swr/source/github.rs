@@ -316,13 +316,7 @@ impl GithubSource {
         );
         let read = match read {
             Ok(read) => read,
-            Err(e) => {
-                // Invalid/stale cursors must not strand discovery; a failed pass restarts the sweep.
-                if let Some(pages) = SEARCH_PAGES.lock().expect("search pages").as_mut() {
-                    pages.remove(&cx.store.path().display().to_string());
-                }
-                return self.failed(cx, now, e);
-            }
+            Err(e) => return self.failed(cx, now, e),
         };
         let reset = OffsetDateTime::parse(
             &read.reset_at,
@@ -338,7 +332,6 @@ impl GithubSource {
         if read.remaining < RATE_FLOOR {
             endpoint::pause_until(cx.store, "github", reset)?;
         }
-        endpoint::record_ok(cx.store, "github", now)?;
         let mut next = SearchPages {
             viewer: read.viewer.clone(),
             authored_after: read.authored_after.clone(),
@@ -356,19 +349,29 @@ impl GithubSource {
             next.authored_after = None;
             next.reviews_after = None;
         }
-        let effects = self.commit(cx, &plan, read, now, poll_started_at)?;
-        SEARCH_PAGES
-            .lock()
-            .expect("search pages")
-            .get_or_insert_with(HashMap::new)
-            .insert(store, next);
-        Ok(effects)
+        // A successful read is not enough: deploys and every commit step must succeed too.
+        match self.commit(cx, &plan, read, now, poll_started_at) {
+            Ok(effects) => {
+                endpoint::record_ok(cx.store, "github", now)?;
+                SEARCH_PAGES
+                    .lock()
+                    .expect("search pages")
+                    .get_or_insert_with(HashMap::new)
+                    .insert(store, next);
+                Ok(effects)
+            }
+            Err(e) => self.failed(cx, now, e),
+        }
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
     /// until its future stored reset plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
     /// pauses its own poll; it is not an error.
     fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
+        // A failed read or commit restarts discovery rather than retaining an invalid/incomplete sweep.
+        if let Some(pages) = SEARCH_PAGES.lock().expect("search pages").as_mut() {
+            pages.remove(&cx.store.path().display().to_string());
+        }
         let flag = |name: &str| {
             e.details()
                 .get(name)

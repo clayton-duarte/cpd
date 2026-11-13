@@ -303,6 +303,20 @@ describe("optimistic merge", () => {
     }
   });
 
+  it("an ok action.result with output.queued is not failed by the 10 s confirm timer", () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStore(loaded());
+      store.dispatch(merge);
+      store.dispatch(server({ type: "action.result", actionId: "a1", ok: true, output: { queued: true } }));
+      vi.advanceTimersByTime(10_000);
+      expect(store.getState().optimistic["a1"]).toBeDefined();
+      expect(ids(store.getState())).toEqual([2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("merge_failure_rolls_back_row", () => {
     const removed = run(loaded(), merge);
     expect(ids(removed)).toEqual([2, 3]);

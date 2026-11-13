@@ -199,3 +199,36 @@ describe("cockpit service stream", () => {
     service.stop();
   });
 });
+
+it.each(["status", "context"])("a rejected %s pane cannot replace a queued valid snapshot", async (badPane) => {
+  const stream = new FakeStream();
+  const { service, scheduler, updates } = await setup(stream);
+  stream.snapshot(panesOf("accepted", "idle"), 1);
+  scheduler.advance(5);
+  const rejected = panesOf("rejected", "working");
+  stream.snapshot(badPane === "status" ? { ...rejected, status: { ok: false } }
+    : { ...rejected, context: { ok: true, contexts: "malformed", events_cursor: 20 } }, 2);
+  scheduler.advance(11);
+  await flush();
+  const currentTitle = service.snapshot().tree!.contexts[0]!.title;
+  const errors = updates.filter((u) => u.kind === "error");
+  expect(errors).toHaveLength(1);
+  expect(currentTitle).toBe("accepted");
+  stream.snapshot(panesOf("recovered", "idle"), 3);
+  scheduler.advance(16);
+  expect(service.snapshot().tree!.contexts[0]!.title).toBe("recovered");
+  service.stop();
+});
+
+
+it("a pending snapshot emit keeps a newer synchronous session-state patch", async () => {
+  const stream = new FakeStream();
+  const { service, scheduler } = await setup(stream);
+  stream.snapshot(panesOf("accepted", "working"), 1);
+  scheduler.advance(5);
+  stream.event(ev(50, "session-state", { context: "c1", session: "s1", data: { from: "working", to: "idle" } }));
+  expect(service.snapshot().tree!.contexts[0]!.sessions[0]!.ref.state).toBe("idle");
+  scheduler.advance(11);
+  expect(service.snapshot().tree!.contexts[0]!.sessions[0]!.ref.state).toBe("idle");
+  service.stop();
+});

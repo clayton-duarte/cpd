@@ -26,7 +26,7 @@ class FakeConn implements LiveConnection {
   }
 }
 
-function setup(opts: { absent?: number; committed?: (ts: number) => boolean } = {}) {
+function setup(opts: { absent?: number; committed?: (ts: number) => boolean; toolCommitted?: (id: string) => boolean } = {}) {
   const scheduler = new FakeScheduler();
   const paths: string[] = [];
   const conns: FakeConn[] = [];
@@ -46,7 +46,7 @@ function setup(opts: { absent?: number; committed?: (ts: number) => boolean } = 
     },
   });
   const out: SessionServerMessage[] = [];
-  live.attach("s1", (m) => out.push(m), opts.committed ?? (() => false));
+  live.attach("s1", (m) => out.push(m), opts.committed ?? (() => false), opts.toolCommitted);
   return { scheduler, paths, conns, live, out };
 }
 const conn = (s: ReturnType<typeof setup>): FakeConn => s.conns[0] as FakeConn;
@@ -288,4 +288,21 @@ describe("live source", () => {
       },
     ]);
   });
+});
+
+
+it.each(["tool_start", "tool_update", "tool_end", "inflight"])("ignores %s for a committed tool result while other calls still stream", (type) => {
+  const completed = new Set<string>();
+  const s = begun({ toolCommitted: (id) => completed.has(id) });
+  conn(s).feed({ t: "tool_start", toolCallId: "done", toolName: "edit", args: {} });
+  completed.add("done");
+  s.out.length = 0;
+  conn(s).feed(type === "inflight"
+    ? { t: type, message: null, tools: [{ toolCallId: "done", toolName: "edit", args: {}, partialResult: { content: [] } }] }
+    : { t: type, toolCallId: "done", toolName: "edit", args: {}, partialResult: { content: [] }, result: { content: [] } });
+  expect(s.out).toEqual([]);
+  conn(s).feed({ t: "tool_start", toolCallId: "next", toolName: "read", args: {} });
+  expect(s.out).toHaveLength(1);
+  expect(s.out[0]).toMatchObject({ type: "session.append", items: [{ callId: "next", status: "running" }] });
+  s.live.detach();
 });

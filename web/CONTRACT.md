@@ -2027,6 +2027,8 @@ Note: `ToolItem.result` is set while `status` is running (a partial output from 
 4. **Tool items.** A committed tool item has the id of the live one, so the append replaces it (`mergeById`, `transcript.ts:29-39`). A committed tool item is `running` until its toolResult line, so a live status set before that line is replaced by `running`, then by the result.
 5. **Either order.** Live first, then committed: the live item is removed and the committed one takes its place. Committed first, then live: the live frames are ignored (rule 2). Neither order gives a duplicate.
 
+The backend supplies live tool suppression from the current tail normalizer’s `completedTools` set (every committed `toolResult`, including orphan results). A committed call without a result remains live. The callback reads the current normalizer on every frame, so tail reload/replacement resets authority; `tool_start`, `tool_update`, `tool_end` and `inflight.tools` never overwrite those committed results (#1196).
+
 ### 12.5 Connection, errors and stop
 
 - **Path.** `${deps.cpdHome}/run/pi/${sessionId}.sock`, with `sessionId` = `ref.id` (`backend.ts:80`). `CPD_SESSION` is the Session id (§6.6), and `pi/lib/host.ts:92` falls back to it for the Session row id. The pi side names its socket `${CPD_HOME}/run/pi/${CPD_SESSION}.sock` (`pi/lib/live-stream.ts:35`).
@@ -2071,7 +2073,7 @@ Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7
 ### 13.4 Decision 3: coalescing
 
 - `COALESCE_MS` = 16 (one frame). It replaces 250 of 6.3 and has two uses: the spawn fallback's burst of 6.3 rule 3, and the emission of snapshot panes.
-- A `snapshot` frame stores its rows at once. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
+- A `snapshot` frame validates and maps all pane candidates before storing its rows. A rejected frame leaves the last accepted raw/mapped/status state and pending coalesced update intact (#1227). The coalesced emit uses the accepted mapped value; a synchronous session-state patch refreshes that value too. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
 
 ### 13.5 Decision 4: the `session-state` patch
 
@@ -2898,7 +2900,8 @@ This section states the guarantees of the `AskCard` submission (decision pro-d58
 
 - A question with no answer blocks the submit. The Questionnaire validates every item when the form is submitted; an unanswered item that is not skipped fails validation, takes the focus and the form is not submitted. The card's submit then sends nothing.
 - `Skip` marks a question as skipped. A skipped question is sent with no answer and its index in `result.unanswered` (`QuestionnaireResult.unanswered`, 3.8). The pi tool result reports these as unanswered (`pi/ask-user-question/tool/response-envelope.ts`).
-- `Cancel` and `Escape` are not submissions: they send `outcome: "cancelled"` with no answers.
+- `Cancel` is not a submission: it sends `outcome: "cancelled"` with no answers.
+- **`Escape` in the dialog is resolved by the first rule that applies** (by analogy with 32.1): **(a)** **The session is working** (`session.status` `busy: true`) **and `capabilities.abort.supported` is true**: Escape sends `session.abort {sessionId}` (4.1), aborting the agent turn. The dialog closes and the turn is aborted. **(b)** **The session is working and abort is unsupported** (`capabilities.abort` is `{supported:false, reason}`, for example a pi-runner session, A4): Escape shows a short notice carrying `reason`. **(c)** **The session is idle**: Escape sends `outcome: "cancelled"` with no answers. The intended behaviour is: Esc in the WebUI aborts the running turn also while a dialog is shown (bug b59).
 - Source: the shadcn Questionnaire root submit and item `validate` (minified, `index.js`, by function). The card sets `required: false` on every item, so the primitive's own required check does not run. The block is the primitive's validation of an unanswered item that is not skipped.
 - Test: `AskCard.test.tsx:166` (the helper clicks `Skip` on the unanswered step before it submits, and the result has `unanswered: [2]`). No test asserts that a submit with an unanswered step is refused; that behaviour is from source, not from a test.
 

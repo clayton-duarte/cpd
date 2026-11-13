@@ -104,6 +104,23 @@ function typeAndEnter(container: HTMLElement, text: string) {
 }
 
 describe("App", () => {
+  it("shows a session attach failure and offers an explicit retry", () => {
+    const { transport, container } = start();
+    const button = container.querySelector<HTMLButtonElement>('button[data-select="plan"]');
+    act(() => button!.click());
+    expect(transport.sent).toContainEqual({ type: "session.attach", sessionId: "s1" });
+    act(() => transport.emitMessage({ type: "session.error", sessionId: "s1", error: { code: "host_unreachable", message: "host offline" } }));
+    expect(container.textContent).toContain("host offline");
+    const retry = container.querySelector<HTMLButtonElement>('button[data-action="retry"]');
+    expect(retry).not.toBeNull();
+    transport.sent.length = 0;
+    act(() => retry!.click());
+    expect(transport.sent).toEqual([{ type: "session.attach", sessionId: "s1" }]);
+    expect(container.querySelector("[data-attach-status]")).toBeNull();
+    act(() => transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref, footer } }));
+    expect(container.textContent).not.toContain("host offline");
+  });
+
   it("app subscribes to the cockpit and renders the three panes", () => {
     const { transport, container } = start();
     expect(transport.sent).toContainEqual({ type: "cockpit.subscribe" });
