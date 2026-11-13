@@ -2737,6 +2737,15 @@ Normative target. The rules of one `cpd install --root <checkout>` on every mach
 
 ### 31.2 Prod browser static assets
 
+**Request paths (QA #1123).** The production server resolves its static root
+to an absolute path. Malformed URL/percent encodings and decoded NULs return
+HTTP 400 before filesystem access. Lexically escaping paths return HTTP 403;
+containment uses path components, so a sibling sharing the root's string prefix
+is outside the root. Valid encoded asset names, GET/HEAD and the index fallback
+for client routes keep their existing behavior. This is lexical containment,
+not a new symlink-isolation policy. See [issue #1123](https://github.com/clayton-duarte/cpd/issues/1123)
+for reproduction and the OWASP path-traversal reference.
+
 - Install builds `<root>/web/dist` from the checkout on every machine: `pnpm --dir <root> --filter cpd-web-client run build` (`vite build`). The production server on `0.0.0.0:3333` serves it (`docs/architecture/webui-network-ports.md`).
 - Today: install builds only `web/dist-electron` (step 7a, `build:electron`). No install step runs `vite build`.
 

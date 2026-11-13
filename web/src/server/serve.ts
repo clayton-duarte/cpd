@@ -60,7 +60,7 @@ export function findStaticDir(): string {
 export async function createProdServer(options?: ServeOptions): Promise<http.Server> {
   const port = options?.port ?? PROD_PORT;
   const host = options?.host ?? PROD_HOST;
-  const staticDir = options?.staticDir ?? findStaticDir();
+  const staticDir = path.resolve(options?.staticDir ?? findStaticDir());
 
   const boundaries = options?.boundaries ?? ((): PluginBoundaries => {
     const real = realBoundaries(process.env);
@@ -81,12 +81,25 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
       return;
     }
 
-    const urlPath = decodeURIComponent(new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`).pathname);
+    let urlPath: string;
+    try {
+      urlPath = decodeURIComponent(new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`).pathname);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('Bad Request');
+      return;
+    }
+    if (urlPath.includes('\0')) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('Bad Request');
+      return;
+    }
     const relative = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
     const filePath = path.normalize(path.join(staticDir, relative));
 
-    // Guard against path traversal
-    if (!filePath.startsWith(staticDir)) {
+    // Containment is by path component: a sibling can share the root's prefix.
+    const fromRoot = path.relative(staticDir, filePath);
+    if (fromRoot === '..' || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
       res.end('Forbidden');
       return;
