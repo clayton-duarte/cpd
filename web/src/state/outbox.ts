@@ -60,8 +60,8 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   const sorted = (): OutboxEntry[] =>
     [...entries.values()].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
 
-  /** Sends one entry; false when the send itself threw (the connection dropped), so the drain stops. */
-  async function sendOne(entry: OutboxEntry): Promise<boolean> {
+  /** Sends one entry and settles it on its answer. A send that threw (the connection dropped) puts it back to queued. */
+  async function sendOne(entry: OutboxEntry): Promise<void> {
     entry.state = "sending";
     delete entry.error;
     notify();
@@ -70,16 +70,16 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     try {
       result = await deps.send({ ...entry });
     } catch {
+      await stored;
       if (entries.has(entry.id)) {
         entry.state = "queued";
         notify();
         await deps.storage.put({ ...entry });
       }
-      await stored;
-      return false;
+      return;
     }
     await stored;
-    if (!entries.has(entry.id)) return true; // discarded while sending
+    if (!entries.has(entry.id)) return; // discarded while sending
     if (result.ok) {
       entries.delete(entry.id);
       notify();
@@ -90,22 +90,26 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       notify();
       await deps.storage.put({ ...entry });
     }
-    return true;
   }
 
+  // Sends every queued entry in order without waiting for the answers (a send must not block the next),
+  // then waits for them all. An entry whose send threw is not retried within the same drain.
   async function drain(): Promise<void> {
     active = true;
+    const settled: Promise<void>[] = [];
+    const attempted = new Set<string>();
     try {
       if (!loaded) await ready;
-      for (;;) {
-        if (connection !== "open") return;
-        const next = sorted().find((e) => e.state === "queued");
-        if (next === undefined) return;
-        if (!(await sendOne(next))) return;
+      while (connection === "open") {
+        const next = sorted().find((e) => e.state === "queued" && !attempted.has(e.id));
+        if (next === undefined) break;
+        attempted.add(next.id);
+        settled.push(sendOne(next));
       }
     } finally {
       active = false; // cleared synchronously, so an enqueue right after the last scan starts a new drain
     }
+    await Promise.all(settled);
   }
   const flush = (): Promise<void> => {
     if (active) return running;

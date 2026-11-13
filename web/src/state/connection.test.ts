@@ -374,3 +374,26 @@ describe("connection optimistic action", () => {
     expect(d.transport.sent).toEqual([]);
   });
 });
+
+describe("connection outbox", () => {
+  it("a submit while the connection is not open is queued and sent once after reopen", async () => {
+    const { transport, connection } = setup();
+    connection.start();
+    transport.emitStatus("open");
+    connection.selectSession("s1");
+    transport.emitStatus("closed");
+    transport.sent.length = 0;
+    const id = connection.submit({ text: "hi", images: [], whenBusy: "queue" } as never);
+    expect(transport.sent).toEqual([]);
+    expect(connection.outbox.list()).toMatchObject([{ id, kind: "submit", state: "queued" }]);
+    transport.emitStatus("open");
+    await Promise.resolve();
+    const submits = transport.sent.filter((m) => (m as { type: string }).type === "session.submit");
+    expect(submits).toEqual([{ type: "session.submit", sessionId: "s1", clientSubmissionId: id, text: "hi", images: [], whenBusy: "queue" }]);
+    transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: id, queued: false });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(connection.outbox.list()).toEqual([]);
+  });
+});

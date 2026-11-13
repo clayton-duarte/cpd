@@ -2,6 +2,7 @@ import type { CockpitAction, SettingsChanges } from "../protocol/cockpit.ts";
 import { WebError, toWireError, type ConfigureChange, type DialogResponse, type WhenBusy, type WireImage } from "../protocol/domain.ts";
 import type { Disposable, Scheduler, Transport } from "../protocol/runtime.ts";
 import type { ClientMessage, ServerMessage } from "../protocol/wire.ts";
+import { createOutbox, type Outbox, type OutboxEntry, type OutboxStorage, type SendResult } from "./outbox.ts";
 import type { Store } from "./store.ts";
 
 export interface ConnectionOptions {
@@ -10,6 +11,8 @@ export interface ConnectionOptions {
   store: Store;
   newId?: () => string;
   backoff?: { baseMs: number; maxMs: number };
+  /** Where unsent submissions, responses and actions survive a reload. Default: in memory. */
+  outboxStorage?: OutboxStorage;
 }
 export interface SubmitInput {
   text: string;
@@ -34,6 +37,21 @@ export interface Connection {
   saveSettings(changes: SettingsChanges): void;
   close(): void;
 }
+/** The Connection the app creates: it also exposes the outbox and the last-seen time. */
+export interface OutboxConnection extends Connection {
+  /** Submissions, dialog responses and cockpit actions not yet answered; sent when the connection is open. */
+  readonly outbox: Outbox;
+  /** ISO time of the last server frame received, or null before the first. */
+  lastSeenAt(): string | null;
+}
+const memoryStorage = (): OutboxStorage => {
+  const rows = new Map<string, OutboxEntry>();
+  return {
+    load: () => [...rows.values()],
+    put: async (e) => void rows.set(e.id, e),
+    remove: async (id) => void rows.delete(id),
+  };
+};
 export const FRAME_MS = 16;
 export const PENDING_ECHO_MS = 30000;
 /** How long after a 'cockpit not ready' hub error the client re-sends `cockpit.subscribe` (20.1). */
@@ -95,7 +113,7 @@ function parseServerMessage(raw: unknown): ServerMessage {
   return m as unknown as ServerMessage;
 }
 
-export function createConnection(options: ConnectionOptions): Connection {
+export function createConnection(options: ConnectionOptions): OutboxConnection {
   const { transport, scheduler, store } = options;
   const backoff = options.backoff ?? DEFAULT_BACKOFF;
   let counter = 0;
@@ -107,6 +125,51 @@ export function createConnection(options: ConnectionOptions): Connection {
   let frame: Disposable | null = null;
   let resubscribeTimer: Disposable | null = null;
   const echoTimers = new Map<string, Disposable>();
+  let lastSeenAt: string | null = null;
+  // An outbox entry's send resolves when its answer arrives (action.result, submitAck, dialogResolved)
+  // and rejects when the connection drops first, which puts the entry back to queued.
+  const awaiting = new Map<string, (result: SendResult) => void>();
+  const rejectors = new Map<string, (e: Error) => void>();
+  const settle = (id: string, result: SendResult): void => {
+    const done = awaiting.get(id);
+    awaiting.delete(id);
+    rejectors.delete(id);
+    done?.(result);
+  };
+  const outbox = createOutbox({
+    storage: options.outboxStorage ?? memoryStorage(),
+    now: () => new Date().toISOString(),
+    send: (entry) =>
+      new Promise<SendResult>((resolve, reject) => {
+        awaiting.set(entry.id, resolve);
+        rejectors.set(entry.id, reject);
+        try {
+          transport.send(entry.payload);
+        } catch (e) {
+          sendErrors.set(entry.id, e);
+          awaiting.delete(entry.id);
+          rejectors.delete(entry.id);
+          reject(e);
+        }
+      }),
+  });
+  // A transport that throws while the connection says it is open is an error for the caller, not an offline
+  // queue: the entry is dropped and the error rethrown (a closed connection queues instead).
+  const sendErrors = new Map<string, unknown>();
+  const enqueueNow = (entry: Parameters<Outbox["enqueue"]>[0]): void => {
+    void outbox.enqueue(entry);
+    if (!sendErrors.has(entry.id)) return;
+    const error = sendErrors.get(entry.id);
+    sendErrors.delete(entry.id);
+    void outbox.discard(entry.id);
+    throw error;
+  };
+  const connectionLost = (): void => {
+    const lost = [...rejectors.values()];
+    awaiting.clear();
+    rejectors.clear();
+    for (const reject of lost) reject(new Error("connection lost"));
+  };
 
   const clearResubscribe = (): void => {
     resubscribeTimer?.dispose();
@@ -191,6 +254,7 @@ export function createConnection(options: ConnectionOptions): Connection {
 
   transport.onMessage((raw) => {
     if (closed) return;
+    lastSeenAt = new Date().toISOString();
     let message: ServerMessage;
     try {
       message = parseServerMessage(raw);
@@ -208,6 +272,15 @@ export function createConnection(options: ConnectionOptions): Connection {
     }
     flush();
     store.dispatch({ type: "server", message });
+    if (message.type === "action.result") {
+      settle(message.actionId, message.ok ? { ok: true } : { ok: false, error: message.error.message });
+    }
+    if (message.type === "session.submitAck") settle(message.clientSubmissionId, { ok: true });
+    if (message.type === "session.dialogResolved") settle(message.dialogId, { ok: true });
+    if (message.type === "session.error" && message.clientSubmissionId !== undefined) {
+      store.dispatch({ type: "dismissPending", clientSubmissionId: message.clientSubmissionId });
+      settle(message.clientSubmissionId, { ok: false, error: message.error.message });
+    }
     if (message.type === "cockpit.snapshot") clearResubscribe();
     if (message.type === "cockpit.error" && message.error.code === "internal" && message.error.message === "cockpit not ready") scheduleResubscribe();
     if (message.type === "cockpit.snapshot" || (message.type === "cockpit.patch" && message.pane === "tree")) {
@@ -236,8 +309,11 @@ export function createConnection(options: ConnectionOptions): Connection {
       const { cockpit, selectedSessionId } = store.getState();
       if (cockpit.selectedPlanId !== null) send({ type: "cockpit.selectPlan", planId: cockpit.selectedPlanId });
       if (selectedSessionId !== null) send({ type: "session.attach", sessionId: selectedSessionId });
+      void outbox.onConnection("open");
       return;
     }
+    connectionLost();
+    void outbox.onConnection("reconnecting");
     timer?.dispose();
     clearResubscribe();
     store.dispatch({ type: "connection", status: "reconnecting", retryAttempt: attempt });
@@ -252,6 +328,7 @@ export function createConnection(options: ConnectionOptions): Connection {
   return {
     start() {
       store.dispatch({ type: "connection", status: "connecting" });
+      void outbox.onConnection("connecting");
       transport.connect();
     },
     selectSession(sessionId) {
@@ -284,8 +361,10 @@ export function createConnection(options: ConnectionOptions): Connection {
         submission: { clientSubmissionId, text: input.text, imageCount: input.images.length, images: input.images, whenBusy: input.whenBusy, at: new Date().toISOString() },
       });
       try {
-        send({
-          type: "session.submit", sessionId, clientSubmissionId, text: input.text, images: input.images, whenBusy: input.whenBusy,
+        enqueueNow({
+          id: clientSubmissionId,
+          kind: "submit",
+          payload: { type: "session.submit", sessionId, clientSubmissionId, text: input.text, images: input.images, whenBusy: input.whenBusy },
         });
       } catch (e) {
         store.dispatch({ type: "dismissPending", clientSubmissionId });
@@ -310,13 +389,13 @@ export function createConnection(options: ConnectionOptions): Connection {
       send({ type: "session.listModels", sessionId: selected() });
     },
     respond(dialogId, response) {
-      send({ type: "dialog.respond", sessionId: selected(), dialogId, response });
+      enqueueNow({ id: dialogId, kind: "respond", payload: { type: "dialog.respond", sessionId: selected(), dialogId, response } });
     },
     action(action) {
       const actionId = newId();
       store.dispatch({ type: "actionStart", actionId });
       if (action.kind === "pr.merge") store.dispatch({ type: "actionOptimistic", actionId, action });
-      send({ type: "cockpit.action", actionId, action });
+      enqueueNow({ id: actionId, kind: "action", payload: { type: "cockpit.action", actionId, action } });
       return actionId;
     },
     readLogs() {
@@ -337,7 +416,11 @@ export function createConnection(options: ConnectionOptions): Connection {
       dropBuffer();
       dropEchoTimers();
       store.dispatch({ type: "connection", status: "closed" });
+      connectionLost();
+      void outbox.onConnection("closed");
       transport.close();
     },
+    outbox,
+    lastSeenAt: () => lastSeenAt,
   };
 }
