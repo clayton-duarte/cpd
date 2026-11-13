@@ -121,3 +121,64 @@ Host checkout rollback is separate and exists today: `cpd host repair` saves the
 - `core/src/home.rs` `CpdHome::resolve`, `is_isolated`.
 - `core/src/host_repair.rs` `repair`, `save_patch`; `core/src/install/mod.rs` `dry_run_migrations`.
 - Contract §4.5 and §4.5a (`docs/contract.md`); `docs/commands.md` §9.11.
+
+## Schema reconciliation
+
+**Proposed, not built.** Decisions pro-d562, pro-d568 and pro-d576 are the basis (their text is not in this repository, so it is unverified here, as A1 to A4 are). Verified on this commit's base by reading source: `core/src/store/repair.rs` appends `schema_migration_repairs` rows and rebuilds nothing, and `cpd host repair` detects checksum divergence only. Until the implementation Job lands, every statement in this section is design.
+
+When `cpd host repair` finds drift, it does more than checksum repair. Drift is either a diverged migration (the A1 to A4 path above) or a **drifted table**: a table whose definition differs from main's expected schema. The repair rebuilds each drifted table in main's form and records the diverged migrations, in one transaction.
+
+### What counts as drift
+
+- **Table definition.** A table's columns, column types, constraints (`CHECK`, `FOREIGN KEY`, `UNIQUE`) or table options differ from main's. Example from the Job's Context: `jobs` carrying an unmerged `CHECK` constraint on `waiting_on`.
+- **Column order.** Column order is not in the canonical hash, because `canonical_entries` sorts columns (`core/src/store/schema.rs`, `table_parts`). It is still drift, because the generated history triggers list columns in `cid` order (`schema.rs` `history_triggers`, the `object` and `changed` lists). Example from the Job's Context: `incident` with diverged column order. Source reading, not run: the generated-trigger check (`generated_mismatch`) reports this.
+- **Not drift.** The `schema_migration_repairs` table and its triggers (excluded by name from the canonical hash, `schema.rs` `canonical_entries`), and the row contents of `schema_migrations` (not hashed).
+- **Pending migrations.** A migration the binary embeds but the store has not applied is not a diverged migration: it is not in `schema_migrations`, so the checksum path never sees it. How the schema comparison treats its objects is **not decided** (see Open points).
+
+The comparison reads main's expected schema from the reference database that `verdict.rs` builds from the binary's migrations (`reference_database`). For a store with additive migrations this binary lacks, the comparison is table by table (`subset_mismatch`), as the migrate path does today.
+
+### SQLite 12-step table rebuild
+
+Each drifted table is rebuilt with SQLite's documented procedure for schema changes that `ALTER TABLE` cannot make (SQLite's "making other kinds of table schema changes" steps; the list below is from that procedure as recalled, unverified against the live SQLite page in this session):
+
+1. Turn foreign keys off (`PRAGMA foreign_keys = OFF`), if they are on.
+2. Start a transaction (`BEGIN IMMEDIATE`).
+3. Record every index, trigger and view on table `X`.
+4. `CREATE TABLE X_new` with the new definition.
+5. `INSERT INTO X_new (<columns>) SELECT <columns> FROM X`.
+6. `DROP TABLE X`.
+7. `ALTER TABLE X_new RENAME TO X`.
+8. Recreate the indexes and triggers of `X` (the generated history triggers come from `reconcile`, `schema.rs`).
+9. Drop and recreate each view that reads `X`.
+10. `PRAGMA foreign_key_check`; any row returned fails the rebuild.
+11. Commit.
+12. Turn foreign keys back on, if step 1 turned them off.
+
+Three points specific to cpd:
+
+- **`PRAGMA foreign_keys` is a no-op inside a transaction.** Step 1 must run before `BEGIN IMMEDIATE` (step 2). The Job's Context lists the pragma among the steps "inside" the transaction; the runner (`Store::migrate`, `core/src/store/mod.rs`) sets it before `BEGIN`, and this section does the same.
+- **Pragma set.** The runner also sets `legacy_alter_table = ON` for the rebuild (`mod.rs`, `migrate`), and restores both pragmas after. The rebuild does the same.
+- **Views.** Step 9 is not optional for `jobs`: the view `job_tenants` (migration `20261101T0901-job-tenancy.sql`) reads `jobs`.
+
+### Order of the procedure
+
+The steps, in order, as `cpd host repair` runs them:
+
+1. **Detect.** Diverged migrations (`detect_divergences`) and drifted tables (the schema comparison above). Nothing drifted: no store keys in the output, as today.
+2. **Copy dry run.** `cpd.db`, `-wal` and `-shm` are copied to `run/scratch-repair-<pid>/`. The 12-step rebuild of every drifted table and the `schema_migration_repairs` insert run on the copy. The copy must then pass the checks the migrate path runs before commit (`migrate_in_txn`): `foreign_key_check` is empty, and the schema comparison matches main's expected schema. The copy is removed on success and on failure. The live store is not touched.
+3. **Confirmation.** The command lists each diverged migration (name, recorded and accepted checksum) and each drifted table, then the backup path it will write. `-y` or `--yes` confirms. Otherwise it asks `[y/N]`, and only an explicit yes continues. Answering N refuses before any write.
+4. **Backup.** `cpd.db`, `-wal` and `-shm` are copied to `$CPD_HOME/run/backups/<ts>/` (`<ts>` UTC `YYYYMMDDTHHMMSSZ`), before the live transaction opens. The backup is distinct from `run/cpd-install-backups/`.
+5. **Apply to the live store.** One `BEGIN IMMEDIATE` transaction runs the same rebuilds and the same `schema_migration_repairs` insert as the copy, then the same checks, then commits. A failure before commit rolls the transaction back, and the live store is unchanged. The live run uses the same code path as the copy, so the copy's result is the live result, not a second implementation.
+
+The copy run is the only gate before the live write. A live apply that skipped the checks of step 2 would be a defect, not a shortcut.
+
+### Rollback
+
+The rebuilds are in the transaction, so a failure before commit needs no restore. After commit, rollback is the backup in step 4, restored as in the Rollback procedure above. The rebuilt tables are not undone by any other path: the ledger is append-only.
+
+### Open points
+
+- **Not decided: pending migrations in the schema comparison.** Whether a pending migration's objects are compared as absent (drift), or expected once the migration applies. The Job's Context requires that the comparison "accounts for" them; the rule is not written.
+- **Not decided: the `reason` text** for the rebuilt tables' ledger rows. Today it is `cpd host repair`.
+- **Observed, unverified by running: no store lock.** `repair.rs` takes no store lock, unlike `migrate` (`settled_setup_lock`). A rebuild in a repair that runs beside a writer may conflict. The rebuild needs the lock or a busy-timeout rule before implementation.
+- **Observed, unverified by running: the next txn id is read before `BEGIN`** (`repair.rs`, `apply_repair_in_txn`). A concurrent writer can take the same id. The rebuild's transaction must read it inside `BEGIN IMMEDIATE`.
