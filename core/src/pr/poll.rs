@@ -491,10 +491,12 @@ fn poll_pass(
     for (repo, number, base, default, head, stored) in rows {
         let value = match (base.as_deref(), default.as_deref(), head.as_deref()) {
             // A compare that fails (a head GitHub no longer has answers 404) leaves the flag unknown and never fails the pass.
+            // A transient or failed compare keeps the stored value rather than writing NULL over a known value (Q5, b34).
             (Some(base), Some(default), Some(head)) if base == default => {
-                gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head)
-                    .ok()
-                    .map(i64::from)
+                match gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head) {
+                    Ok(val) => Some(i64::from(val)),
+                    Err(_) => stored,
+                }
             }
             _ => None,
         };
