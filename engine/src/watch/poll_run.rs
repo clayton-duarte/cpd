@@ -1,7 +1,7 @@
 //! The non-blocking pull request poll (E5): one thread runs the poll; the tick never waits for it.
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -14,6 +14,8 @@ use super::report::Failure;
 
 /// The longest shutdown waits for a running poll.
 const SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
+/// How long shutdown first waits on the poll itself, in real time, before it naps on the clock.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 /// The step of that wait.
 const SHUTDOWN_STEP: Duration = Duration::from_millis(50);
 
@@ -107,11 +109,21 @@ impl PollRun {
     /// abandoned (its thread ends with the process), so the engine releases `watch.lock` promptly.
     pub(super) fn shutdown(&mut self, clock: Arc<dyn Clock>) -> Option<Finished> {
         let deadline = clock.now() + SHUTDOWN_BOUND;
+        // Waits on the poll itself first: a poll that ends in time costs the clock no nap.
+        let mut wait = SHUTDOWN_GRACE;
         loop {
-            if let Some(finished) = self.try_take() {
-                return Some(finished);
+            match self.result.as_ref()?.recv_timeout(wait) {
+                Ok(finished) => {
+                    self.result = None;
+                    return Some(finished);
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.result = None;
+                    return None;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
             }
-            self.result.as_ref()?;
+            wait = Duration::ZERO;
             let now = clock.now();
             if now >= deadline {
                 self.result = None;
