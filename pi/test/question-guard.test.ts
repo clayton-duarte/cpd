@@ -289,7 +289,7 @@ test("question guard: a run that starts before the classifier answers is not nud
   assert.deepEqual(f.pi.userMessages, []);
 });
 
-test("question guard: a tripped loop guard holds the nudge", async (t) => {
+test("question guard: a clean turn end clears a tripped loop guard, so the nudge is sent", async (t) => {
   const f = await started();
   t.after(() => f.close());
   await control(f);
@@ -299,7 +299,7 @@ test("question guard: a tripped loop guard holds the nudge", async (t) => {
   }
   await f.stateSet(LOOP_LABEL);
   await turn(f, { before: { messageType: "custom", prompt: "x", message: { customType: "cpd", content: "x", details: {} } } });
-  await nothingSent(f);
+  await nudged(f, 1);
 });
 
 test("question guard: the classifier gets kev-4b, the asking_user bool question and a signal", async (t) => {

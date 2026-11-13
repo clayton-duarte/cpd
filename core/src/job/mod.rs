@@ -16,6 +16,8 @@
 mod approve_touches_tests;
 
 #[cfg(test)]
+mod docs_forbidden_tests;
+#[cfg(test)]
 mod incident_tests;
 
 pub(crate) mod add;

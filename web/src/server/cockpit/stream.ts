@@ -188,6 +188,8 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
     reported = false;
     c.onLine((l) => { if (!stopped && child === c) onFrame(l); });
     c.onExit((info) => { if (!stopped && child === c) onExit(info); });
+    // Every spawned child is watched, including replacements that never say hello.
+    watchdog.connected();
   };
   const onExit = (info: { code: number | null; stderr: string }): void => {
     child = null;
@@ -207,8 +209,6 @@ export function createCockpitStream(deps: StreamDeps): CockpitStream {
     start() {
       if (child !== null || stopped) return;
       launch();
-      // Watch the first child from the spawn: a child that never says `hello` is exactly a stall (D3).
-      watchdog.connected();
     },
     stop() {
       if (stopped) return;

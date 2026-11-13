@@ -99,6 +99,7 @@ const LATER: &[(&str, &str)] = &[
         "pull_requests",
         "ALTER TABLE pull_requests DROP COLUMN author_login; ALTER TABLE pull_requests DROP COLUMN reviews_json; ALTER TABLE pull_requests DROP COLUMN labels_json",
     ),
+    ("workflows", "ALTER TABLE workflows DROP COLUMN bug_id"),
     (
         "bug_records",
         "DROP TABLE bug_records; DELETE FROM history_tables WHERE name = 'bug_records'",

@@ -116,6 +116,7 @@ pub struct Pr {
 #[serde(deny_unknown_fields)]
 pub struct Workflow {
     pub jira_required: bool,
+    pub local_docs: bool,
     pub text: String,
 }
 
@@ -175,6 +176,7 @@ pub struct PrSet {
 #[serde(deny_unknown_fields)]
 pub struct WorkflowSet {
     pub jira_required: Option<bool>,
+    pub local_docs: Option<bool>,
     pub text: Option<String>,
 }
 
@@ -454,6 +456,7 @@ pub const POST_CHANNEL: &str = "pr.post.channel";
 pub const POST_TEMPLATE: &str = "pr.post.template";
 pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
 pub const JIRA_REQUIRED: &str = "workflow.jira_required";
+pub const LOCAL_DOCS: &str = "workflow.local_docs";
 pub const HUMAN_GATED_CONTEXTS: &str = "pr.human_gated_contexts";
 pub const EXCUSED_LABELS: &str = "pr.excused_labels";
 pub const REQUIRED_CHECKS: &str = "pr.required_checks";
@@ -617,9 +620,13 @@ impl Set for WorkflowSet {
     type Value = Workflow;
 
     fn fill(&self, base: &Workflow) -> (Workflow, Vec<&'static str>) {
-        let left_out = left_out([(JIRA_REQUIRED, self.jira_required.is_none())]);
+        let left_out = left_out([
+            (JIRA_REQUIRED, self.jira_required.is_none()),
+            (LOCAL_DOCS, self.local_docs.is_none()),
+        ]);
         let value = Workflow {
             jira_required: self.jira_required.unwrap_or(base.jira_required),
+            local_docs: self.local_docs.unwrap_or(base.local_docs),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
@@ -628,6 +635,7 @@ impl Set for WorkflowSet {
     fn complete(&self) -> Option<Workflow> {
         Some(Workflow {
             jira_required: self.jira_required?,
+            local_docs: self.local_docs?,
             text: self.text.clone()?,
         })
     }
