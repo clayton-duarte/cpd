@@ -67,6 +67,9 @@ pub struct MitigateArgs {
     /// The diagnosed cause, when it is first known here
     #[arg(long, value_name = "text")]
     pub cause: Option<Text>,
+    /// The GitHub issue of the bug, https://github.com/<owner>/<repo>/issues/<N> (required; a stub until implemented)
+    #[arg(long, value_name = "url")]
+    pub issue: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]

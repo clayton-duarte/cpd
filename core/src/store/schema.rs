@@ -1077,6 +1077,8 @@ mod agent_key_schema_tests;
 #[cfg(test)]
 mod blue_tests;
 #[cfg(test)]
+mod bug_issue_tests;
+#[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
 mod codereview_followup_tests;
