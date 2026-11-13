@@ -45,6 +45,11 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
   return (
     <div
       data-chat-dropzone
+      onKeyDown={(e) => {
+        // The Composer handles (and prevents) its own Escape; this covers a dialog or focus outside the textarea.
+        if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing) return;
+        if (isBusy && view.capabilities?.abort?.supported) connection.abort();
+      }}
       onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
       onDrop={(e) => {
         if (!hasFiles(e)) return;
