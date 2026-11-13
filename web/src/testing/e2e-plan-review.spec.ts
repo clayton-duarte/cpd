@@ -192,16 +192,16 @@ test("a pending Plan review fills the pane edge to edge, has no inner border, an
       ancestorBorders: between,
     };
   });
-  expect(Math.abs(geometry.section.left - geometry.pane.left)).toBeLessThanOrEqual(1);
-  expect(Math.abs(geometry.section.right - geometry.pane.right)).toBeLessThanOrEqual(1);
-  expect(Math.abs(geometry.section.bottom - geometry.pane.bottom)).toBeLessThanOrEqual(1);
-  expect(Math.abs(geometry.section.top - geometry.header.bottom)).toBeLessThanOrEqual(1);
+  expect.soft(Math.abs(geometry.section.left - geometry.pane.left)).toBeLessThanOrEqual(1);
+  expect.soft(Math.abs(geometry.section.right - geometry.pane.right)).toBeLessThanOrEqual(1);
+  expect.soft(Math.abs(geometry.section.bottom - geometry.pane.bottom)).toBeLessThanOrEqual(1);
+  expect.soft(Math.abs(geometry.section.top - geometry.header.bottom)).toBeLessThanOrEqual(1);
 
   // 2. One border: the section has none (no margin, no rounding either) and no ancestor up to the pane does.
-  expect(geometry.sectionBorder).toEqual(["0px", "0px", "0px", "0px"]);
-  expect(geometry.sectionMargin).toEqual(["0px", "0px", "0px", "0px"]);
-  expect(geometry.sectionRadius).toBe("0px");
-  expect(geometry.ancestorBorders.every((w) => w === 0)).toBe(true);
+  expect.soft(geometry.sectionBorder).toEqual(["0px", "0px", "0px", "0px"]);
+  expect.soft(geometry.sectionMargin).toEqual(["0px", "0px", "0px", "0px"]);
+  expect.soft(geometry.sectionRadius).toBe("0px");
+  expect.soft(geometry.ancestorBorders.every((w) => w === 0)).toBe(true);
 
   // 3. The body scroller overflows, and scrolling it to the bottom reveals the last Job row.
   const scroller = await review.locator('[data-part="body"]').evaluateHandle((body) => {
@@ -212,7 +212,7 @@ test("a pending Plan review fills the pane edge to edge, has no inner border, an
   });
   expect(await scroller.evaluate((el) => el !== null)).toBe(true);
   const metrics = await scroller.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }));
-  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  expect.soft(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
 
   // 4. Approve and reject stay inside the viewport and visible, before and after scrolling.
   const reachable = async () => {
