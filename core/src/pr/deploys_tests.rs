@@ -570,3 +570,60 @@ fn the_rows_come_back_sorted_by_created_at_then_run_id() {
         .collect();
     assert_eq!(ids, [40, 20, 30, 10], "by created_at, then run_id");
 }
+
+/// b57: `gh api --include -H 'If-None-Match: ...'` answers HTTP 304 and `gh` exits 1. A 304 to a conditional request means
+/// unchanged, not failure.
+struct NotModified;
+
+impl Handler for NotModified {
+    fn handle(&self, call: &Call) -> Reply {
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        if args.contains(&"If-None-Match: W/\"abc\"") {
+            return Reply::exit(
+                1,
+                "HTTP/2.0 304 Not Modified\r\nEtag: W/\"abc\"\r\n\r\n",
+                "gh: HTTP 304\n",
+            );
+        }
+        Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" ")))
+    }
+}
+
+#[test]
+fn a_304_with_exit_1_is_unchanged_not_a_failure() {
+    let (_d, home) = tmp();
+    declare(&home, "acme/pay", Some(&["main.yml"]));
+    put_cache(
+        &home,
+        json!([entry(
+            "acme/pay",
+            "main.yml",
+            7,
+            "production",
+            "2026-10-27T13:05:00Z"
+        )]),
+    );
+    store(&home)
+        .write("fixture etag", |tx| {
+            tx.execute(
+                "INSERT INTO swr_deploy_lists (repo, workflow, viewer_login, etag) VALUES ('acme/pay', 'main.yml', 'me', 'W/\"abc\"')",
+                [],
+            )?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+    let runner = FakeRunner::new(ManualClock::new()).route("gh", std::sync::Arc::new(NotModified));
+    let result = read(&runner, &home, "me");
+    assert!(result.is_ok(), "a 304 is unchanged: {result:?}");
+    assert_eq!(
+        cached(&home)["runs"],
+        json!([entry(
+            "acme/pay",
+            "main.yml",
+            7,
+            "production",
+            "2026-10-27T13:05:00Z"
+        )]),
+        "the cached rows are kept"
+    );
+}

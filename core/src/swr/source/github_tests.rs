@@ -864,3 +864,82 @@ fn empty_heavy_omits_the_heavy_fragment() {
     assert!(!q.contains("fragment Heavy"), "{q}");
     assert!(!q.contains("...Heavy"), "{q}");
 }
+
+/// `gh` for a pass that also reads deploys: GraphQL goes to the [`World`], every other call to `deploys`.
+struct WithDeploys {
+    world: Arc<World>,
+    deploys: Mutex<Reply>,
+}
+
+impl Handler for WithDeploys {
+    fn handle(&self, call: &Call) -> Reply {
+        if call
+            .args
+            .starts_with(&["api".to_owned(), "graphql".to_owned()])
+        {
+            return self.world.handle(call);
+        }
+        self.deploys.lock().unwrap().clone()
+    }
+}
+
+/// A rig whose repo declares one workflow and whose non-GraphQL `gh` answers `deploys`.
+fn deploys_rig(deploys: Reply) -> (Rig, Arc<WithDeploys>) {
+    let rig = Rig::new();
+    let path = rig.home.root().join("policy/acme/pay.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, "[deploys]\nworkflows = [\"main.yml\"]\n").unwrap();
+    let handler = Arc::new(WithDeploys {
+        world: rig.world.clone(),
+        deploys: Mutex::new(deploys),
+    });
+    let _ = (*rig.fakes.runner).clone().route("gh", handler.clone());
+    (rig, handler)
+}
+
+fn last_ok(rig: &mut Rig) -> Option<String> {
+    rig.text("SELECT last_ok_at FROM swr_endpoints WHERE endpoint = 'github'")
+}
+
+#[test]
+fn a_failed_deploys_read_does_not_record_the_endpoint_ok() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let ok_at = last_ok(&mut rig);
+    assert_eq!(ok_at, Some(timestamp(rig.t0)), "the first pass is ok");
+    *handler.deploys.lock().unwrap() = Reply::exit(1, "", "gh: HTTP 500: Server Error\n");
+    assert!(rig.pass(10).is_err(), "the deploys read failed");
+    assert_eq!(last_ok(&mut rig), ok_at, "last_ok_at is unchanged");
+    let row = endpoint::get(&mut rig.store, "github")
+        .unwrap()
+        .expect("endpoint row");
+    assert_eq!(row.error_count, 1, "the failure is recorded");
+}
+
+#[test]
+fn a_304_deploys_read_still_commits_changed_rows_and_records_ok() {
+    let not_modified = Reply::exit(
+        1,
+        "HTTP/2.0 304 Not Modified\r\nEtag: W/\"abc\"\r\n\r\n",
+        "gh: HTTP 304\n",
+    );
+    let (mut rig, _handler) = deploys_rig(not_modified);
+    rig.seed(&pr(1), true);
+    rig.sql(
+        "INSERT INTO swr_deploy_lists (repo, workflow, viewer_login, etag) VALUES ('acme/pay', 'main.yml', 'ada', 'W/\"abc\"')",
+    );
+    let mut moved = pr(1);
+    moved.oid = "b2";
+    moved.updated = "U2";
+    rig.state().authored = vec![moved];
+    let result = rig.pass(0);
+    assert!(result.is_ok(), "a 304 is unchanged: {result:?}");
+    assert_eq!(
+        rig.text("SELECT head_oid FROM pull_requests WHERE number = 1"),
+        Some("b2".into()),
+        "the changed row is committed"
+    );
+    assert_eq!(last_ok(&mut rig), Some(timestamp(rig.t0)), "ok is recorded");
+}
