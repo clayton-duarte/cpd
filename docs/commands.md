@@ -2201,7 +2201,7 @@ Idempotent: yes; paths already approved write nothing and a call with none new r
 cpd job approve-untouched <job> --path <p> [--path <p> …] --reason <text> [--plan <id>]
 ```
 
-The Lead's approval for a Job whose declared `touches` have no diff (b69; contract §2.2 "Job kinds", §7.5). The touches guard refuses a submit (§6.1) when a declared touch file is unchanged; a Worker who needs to submit despite an unchanged touch asks the Lead (`cpd ask`), who decides and, to allow it, runs this. **The Lead only**, through `CPD_ATTEMPT` (hs-d497): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). That is all the check there is: the command is **unauthenticated, like `cpd answer`** (a Worker that unsets the variable gets through) and the approval is visible afterwards in the `job-edited` Event (`fields: ["untouched_approved"]`, with the `--reason`).
+The Lead's approval for a Job whose declared `touches` have no diff (b69; contract §2.2 "Job kinds", §7.5). The touches guard refuses a submit (§6.1) when a declared touch file is unchanged; a Worker who needs to submit despite an unchanged touch asks the Lead (`cpd ask`), who decides and, to allow it, runs this. **The Lead only**, through `CPD_ATTEMPT` (hs-d497): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). That is all the check there is: the command is **unauthenticated, like `cpd answer`** (a Worker that unsets the variable gets through) and the approval is visible afterwards in the `job-edited` Event (`fields: ["touches_waived"]`, with the `--reason`).
 
 | Flag | Meaning |
 |---|---|
@@ -2215,10 +2215,10 @@ The Lead's approval for a Job whose declared `touches` have no diff (b69; contra
 | the Job exists | `job_not_found` | 4 |
 | its status is `queued`, `running` or `failed` (a draft is not checked, an ended one never will be) | `illegal_transition` | 3 |
 
-Effects: **rows**, one transaction: `jobs.untouched_approved` becomes the union of its old value and the paths. **Event** `job-edited` `{fields: ["untouched_approved"]}`, its `text` naming the paths and the reason. It takes effect at the Job's next check, a running Attempt's included (contract §7.7). `untouched_approved` is not a Locked field and is in no fingerprint (§2.3). And, when the Plan's working Lead runs it, it names the PR as the Lead's Workflow (§1.3).
+Effects: **rows**, one transaction: `jobs.touches_waived` becomes the union of its old value and the paths. **Event** `job-edited` `{fields: ["touches_waived"]}`, its `text` naming the paths and the reason. It takes effect at the Job's next check, a running Attempt's included (contract §7.7). `touches_waived` is not a Locked field and is in no fingerprint (§2.3). And, when the Plan's working Lead runs it, it names the PR as the Lead's Workflow (§1.3).
 
 ```json
-{"ok": true, "job": {"key": "docs-a1", "status": "running", "kind": "work"}, "approved": ["docs/research/"], "fields": ["untouched_approved"]}
+{"ok": true, "job": {"key": "docs-a1", "status": "running", "kind": "work"}, "approved": ["docs/research/"], "fields": ["touches_waived"]}
 ```
 
 Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
