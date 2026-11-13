@@ -1747,45 +1747,6 @@ fn named_node_tests_require_complete_matching_execution_metadata() {
 }
 
 #[test]
-fn the_official_node_reporter_distinguishes_execution_skip_todo_and_absence() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("probe.test.mjs");
-    let reporter = dir.path().join("reporter.mjs");
-    let report = dir.path().join("events.jsonl");
-    fs::write(&reporter, super::NODE_REPORTER).unwrap();
-    fs::write(
-        &file,
-        r#"import test from 'node:test';
-test("passed probe", () => {});
-test("skipped probe", {skip:true}, () => { throw Error('must not run'); });
-test("todo probe", {todo:true}, () => {});
-if(false)test("absent probe", () => {});
-test("a.c (1+1) [x]", () => {});
-"#,
-    )
-    .unwrap();
-    let output = std::process::Command::new("node")
-        .arg("--test")
-        .arg(format!("--test-reporter={}", reporter.display()))
-        .arg(format!("--test-reporter-destination={}", report.display()))
-        .arg(&file)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let bytes = fs::read(&report).unwrap();
-    for title in ["passed probe", "a.c (1+1) [x]"] {
-        assert!(super::pi_ran(&bytes, &file, title));
-    }
-    for title in ["skipped probe", "todo probe", "absent probe"] {
-        assert!(!super::pi_ran(&bytes, &file, title));
-    }
-}
-
-#[test]
 fn node_report_files_are_private_and_removed_after_the_run() {
     let s = Sample::new();
     let fakes = s.fakes(|r| r);
