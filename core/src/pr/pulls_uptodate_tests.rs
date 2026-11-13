@@ -49,14 +49,14 @@ fn ready(store: &mut Store, number: i64) -> bool {
 }
 
 #[test]
-fn a_behind_pr_is_not_ready_to_merge() {
+fn a_behind_pr_is_ready_to_merge() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    // A default-branch pull request whose head does not contain the current default-branch head: not ready.
+    // Behind main is never a condition (b79): a clean default-branch pull request behind main is ready.
     insert(&mut store, 801, "main", "main", Some(0));
     assert!(
-        !ready(&mut store, 801),
-        "a pull request whose head is behind main is not ready to merge"
+        ready(&mut store, 801),
+        "a clean pull request whose head is behind main is ready to merge"
     );
     // The flag is honoured, not merely stored: a head that contains main is ready.
     insert(&mut store, 802, "main", "main", Some(1));
@@ -81,5 +81,25 @@ fn a_stacked_pr_is_not_checked_against_main() {
     assert!(
         !ready(&mut store, 802),
         "a stacked pull request is not subject to the containment condition"
+    );
+}
+
+#[test]
+fn a_conflicting_pr_is_not_ready_to_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    insert(&mut store, 801, "main", "main", Some(0));
+    store
+        .write("test", |tx| {
+            tx.execute(
+                "UPDATE pull_requests SET merge_state = 'dirty' WHERE number = 801",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        !ready(&mut store, 801),
+        "a conflicting pull request is not ready"
     );
 }
