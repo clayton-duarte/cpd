@@ -133,3 +133,38 @@ fn approve_untouched_command_reaches_the_waiver() {
     crate::job::approve::approve_untouched_in(&mut r.env, argv.args).unwrap();
     r.submit().expect("the waived path is accepted");
 }
+
+/// A Job that only merges the base is not credited with the paths the merge brought: its declared touch stays unchanged.
+#[test]
+fn a_base_merge_does_not_satisfy_a_declared_touch() {
+    let mut r = rig(Spec {
+        touches: "[\"src/from_base.rs\"]",
+        changed: &[],
+        base_ahead: &[("src/from_base.rs", "// from the base\n")],
+        brings_base: true,
+        ..Spec::default()
+    });
+    let e = refused(r.submit(), ErrorCode::TouchesUnchanged);
+    assert_eq!(e.details()["paths"], json!(["src/from_base.rs"]));
+}
+
+/// A waiver is its own field: it never authorises a write outside the touches, even a waived directory.
+#[test]
+fn a_waiver_does_not_authorise_an_out_of_scope_write() {
+    let mut r = rig(Spec {
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            ("src/app.rs", "// stray\n"),
+        ],
+        ..Spec::default()
+    });
+    let plan = r.plan.clone();
+    waive_untouched(&mut r.env, &plan, "a", "src/", "narrowed later").unwrap();
+    assert_eq!(
+        r.job("touches_approved"),
+        None,
+        "the waiver is not an approval"
+    );
+    let e = refused(r.submit(), ErrorCode::TouchesViolation);
+    assert_eq!(e.details()["paths"], json!(["src/app.rs"]));
+}

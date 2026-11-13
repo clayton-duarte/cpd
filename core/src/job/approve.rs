@@ -137,8 +137,8 @@ fn decide(
 }
 
 /// The Lead waives the declared `touches` path `path` of Job `job` as unchanged, with a required `reason`
-/// (`cpd job approve-untouched`). The waiver joins the Job's `touches_approved` (a declared path there is harmless to
-/// the outside check) and the `job-edited` Event carries the reason, visible to the User.
+/// (`cpd job approve-untouched`). The waiver is stored in the Job's own `touches_waived`, which only the unchanged check reads
+/// (never the outside check), and the `job-edited` Event carries the reason, visible to the User.
 pub(crate) fn waive_untouched(
     env: &mut Env,
     plan: &PlanId,
@@ -154,19 +154,25 @@ pub(crate) fn waive_untouched(
     }
     env.store.write("job approve-untouched", |tx| {
         let key = crate::ids::JobKey::parse(job)?;
-        let all = crate::plan::jobs::load(tx, plan)?;
-        let found = all
-            .iter()
-            .find(|j| j.key == job)
-            .ok_or_else(|| CpdError::new(ErrorCode::JobNotFound, format!("No Job {job}.")))?;
-        let mut approved = crate::job::guard::approved_touches(found);
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2)",
+            rusqlite::params![plan.as_str(), job],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(CpdError::new(
+                ErrorCode::JobNotFound,
+                format!("No Job {job}."),
+            ));
+        }
+        let mut approved = waived_untouched(tx, plan, job)?;
         if approved.iter().any(|p| p == path) {
             return Ok(());
         }
         approved.push(path.to_owned());
         let stored = serde_json::to_string(&approved).expect("a list of text serialises");
         tx.execute(
-            "UPDATE jobs SET touches_approved = ?3 WHERE plan = ?1 AND key = ?2",
+            "UPDATE jobs SET touches_waived = ?3 WHERE plan = ?1 AND key = ?2",
             rusqlite::params![plan.as_str(), job, stored],
         )?;
         let text = format!(
@@ -175,7 +181,7 @@ pub(crate) fn waive_untouched(
         );
         crate::events::append(
             tx,
-            crate::events::NewEvent::job_edited(text, ["touches_approved"])
+            crate::events::NewEvent::job_edited(text, ["touches_waived"])
                 .plan(plan.clone())
                 .job(key),
         )?;
@@ -207,6 +213,22 @@ pub(crate) fn approve_untouched_in(
     Ok(Output::success(json!({
         "job": {"key": args.key.as_str()},
         "approved": args.paths,
-        "fields": ["touches_approved"],
+        "fields": ["touches_waived"],
     })))
+}
+
+/// The declared `touches` paths the Lead waived for Job `job` as unchanged (`jobs.touches_waived`); empty when none.
+pub(crate) fn waived_untouched(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    job: &str,
+) -> Result<Vec<String>, CpdError> {
+    let stored: Option<String> = conn.query_row(
+        "SELECT touches_waived FROM jobs WHERE plan = ?1 AND key = ?2",
+        rusqlite::params![plan.as_str(), job],
+        |r| r.get(0),
+    )?;
+    Ok(stored
+        .map(|s| serde_json::from_str(&s).expect("touches_waived is a JSON array of text"))
+        .unwrap_or_default())
 }

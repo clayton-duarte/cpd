@@ -310,7 +310,7 @@ impl Rig {
     }
 
     /// One column of Job `a`'s row.
-    fn job(&mut self, column: &str) -> Option<String> {
+    pub(super) fn job(&mut self, column: &str) -> Option<String> {
         self.one(&format!(
             "SELECT {column} FROM jobs WHERE plan = 'pay' AND key = 'a'"
         ))
