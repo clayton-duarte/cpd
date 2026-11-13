@@ -78,13 +78,13 @@ impl WorkflowRow {
 /// The body of a Workflow's pull request: its stored description and, for a Workflow linked to a bug (`workflows.bug_id`), a last line
 /// `Fixes #<N>` (the issue is on the Workflow's repo `repo`, `<owner>/<name>`) or `Fixes <owner>/<repo>#<N>` (another repo), so the merge
 /// closes the issue. `bug_issue` is the bug's issue URL.
-#[allow(
-    dead_code,
-    reason = "a stub: the implementation wires it into the PR open"
-)]
 pub fn pr_body(description: &str, bug_issue: Option<&str>, repo: &str) -> String {
-    let _ = (bug_issue, repo);
-    description.to_owned()
+    match bug_issue.and_then(|issue| crate::protocol::fixes_line(issue, repo)) {
+        Some(line) if !description.lines().any(|l| l.trim() == line) => {
+            format!("{}\n\n{line}", description.trim_end())
+        }
+        _ => description.to_owned(),
+    }
 }
 
 #[cfg(test)]

@@ -884,15 +884,8 @@ pub fn stored_description_of(
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
     // A Workflow that fixes a bug ends its body with `Fixes <issue>`, so the merge closes the issue.
-    let stored = match (
-        stored,
-        issue
-            .zip(name)
-            .and_then(|(i, n)| crate::protocol::fixes_line(&i, &n)),
-    ) {
-        (Some(body), Some(line)) if !body.lines().any(|l| l.trim() == line) => {
-            Some(format!("{}\n\n{line}\n", body.trim_end()))
-        }
+    let stored = match (stored, name) {
+        (Some(body), Some(name)) => Some(crate::plan::prs::pr_body(&body, issue.as_deref(), &name)),
         (stored, _) => stored,
     };
     if stored.is_none() && !adopted {
