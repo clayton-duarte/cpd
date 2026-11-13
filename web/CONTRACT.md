@@ -2929,3 +2929,6 @@ Decision pro-d584: for a review verdict of `changes` or `reject`, the feedback i
 - **Durable transcript `changes` and `feedbackFile`** (33.5): the code at `backend.ts:513-515` must write the feedback file and pass `--feedback-file` for pro-d584 to hold. Not changed by this section.
 - **`reject` with feedback** (33.6): whether the wire `reject` carries `feedback`, and how the WebUI collects it. Not decided.
 - **Host-held feedback file location** (33.5): whether the relative `feedback-<review>.md` resolves in `cpd`. Unverified.
+
+
+Cockpit startup cancellation: stopping before the initial load completes cancels the owned retry timer and prevents further startup reads, snapshot publication, follow processes and safety work. The pending start settles normally; unresolved ready() rejects with reason stopped. An already-issued ReadModel call has no abort interface and may finish, but its late result/error is ignored. Starting a stopped service is a no-op; create a new service for a new lifecycle.
