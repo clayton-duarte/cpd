@@ -296,6 +296,25 @@ fn run_checks(
         base,
         sha,
     )?;
+    if !policy.workflow.local_docs {
+        let mut added = Vec::new();
+        for path in git::tamper::changed_paths(root, compare, sha)? {
+            if !(path.starts_with("docs/") && path.ends_with(".md")) {
+                continue;
+            }
+            let spec = format!("{compare}:{path}");
+            if git::run::run(root, &["rev-parse", "--verify", "--quiet", &spec])?.code == 1 {
+                added.push(path);
+            }
+        }
+        if !added.is_empty() {
+            return Err(crate::error::docs_forbidden(&format!(
+                "The diff adds {}",
+                added.join(", ")
+            ))
+            .with("paths", json!(added)));
+        }
+    }
     // The Job's Spec `touches` (§7.5, hs-n641): the same diff may not change a path outside them, unless a base merge
     // brought it, the repo's `[generated] paths` match it, or the Lead approved it (`job approve-touches`, read now so
     // an approval reaches a running Attempt).

@@ -109,6 +109,23 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                 .with("kind", kind.as_str()));
         }
     }
+    if kind == "docs" {
+        let docs_workflows = env.store.read(|conn| {
+            super::plan_phase(conn, &plan)?;
+            load_workflows(conn, &plan)
+        })?;
+        let workflow = args.workflow.select(&plan, &docs_workflows)?.key.clone();
+        let local_docs = env.store.read(|conn| {
+            Ok(
+                crate::pr::policy_of_workflow(conn, &env.home, &plan, &workflow)?
+                    .workflow
+                    .local_docs,
+            )
+        })?;
+        if !local_docs {
+            return Err(crate::error::docs_forbidden("A docs Job is refused"));
+        }
+    }
     require_tier_and_spec(&args)?;
     let mut spec = args
         .spec

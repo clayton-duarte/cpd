@@ -506,6 +506,16 @@ impl Serialize for ErrorObject<'_> {
     }
 }
 
+/// `docs_forbidden` (exit 3): the owner's policy sets `workflow.local_docs = false`, so no docs Job, docs shape or new `docs/**/*.md` file.
+pub fn docs_forbidden(what: &str) -> CpdError {
+    CpdError::new(
+        ErrorCode::DocsForbidden,
+        format!(
+            "{what}: the policy sets workflow.local_docs = false, so this repo keeps no local markdown docs. Record decisions in the Context (cpd context decide), as missionlane-style repos do."
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
