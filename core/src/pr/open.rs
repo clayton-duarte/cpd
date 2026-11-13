@@ -885,7 +885,7 @@ pub fn stored_description_of(
     )?;
     // A Workflow that fixes a bug ends its body with `Fixes <issue>`, so the merge closes the issue.
     let stored = match (stored, name) {
-        (Some(body), Some(name)) => Some(crate::plan::prs::pr_body(&body, issue.as_deref(), &name)),
+        (Some(body), Some(name)) => Some(crate::plan::pr_body(&body, issue.as_deref(), &name)),
         (stored, _) => stored,
     };
     if stored.is_none() && !adopted {
