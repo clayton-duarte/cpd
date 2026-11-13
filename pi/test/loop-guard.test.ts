@@ -644,10 +644,13 @@ test("loop guard: runs that each end cleanly within the window still trip the gu
   t.after(() => f.close());
   await start(f);
 
-  for (let i = 0; i < 21; i++) {
+  for (let i = 0; i < 20; i++) {
     await selfTurn(f);
     await f.pi.fire("agent_end");
   }
-  await waitFor("the blocked state", () => stateCalls(f).includes(LABEL));
+  await selfTurn(f); // the 21st run trips; its clean end would clear the trip
+  assert.ok((await settled(f)).includes(LABEL), "blocked");
   assert.deepEqual(await probe(f), GATED, "the 21st run tripped it");
+  await f.pi.fire("agent_end");
+  assert.notEqual((await settled(f)).at(-1), LABEL, "its clean end clears the trip");
 });

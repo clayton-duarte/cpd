@@ -154,6 +154,8 @@ export function registerLoopGuard(host: Host): void {
     const r = host.run;
     if (!r || !guarded(r)) return;
     resetTurn(r);
-    clearTrip(host, r); // a turn that ended leaves the blocked state (the trip gated deliveries only within it)
+    const window = r.turnStarts;
+    clearTrip(host, r);
+    r.turnStarts = window; // the window stays: runs that each end cleanly still count. A turn that ended leaves the blocked state (the trip gated deliveries only within it)
   });
 }
