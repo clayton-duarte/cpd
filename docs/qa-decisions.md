@@ -16,7 +16,7 @@ QA loop remains inactive until merge and an explicit start instruction.
 | QA-04 | Every defensible finding becomes a GH issue; check duplicates first. | The initial goal includes backlog accumulation. No manufactured findings or preference-only complaints. |
 | QA-05 | Issues hold reasons/research; PRs focus on implementation. | Keep durable reasoning discoverable without bloating implementation review. |
 | QA-06 | Loop: find two issues, prioritize all open issues, implement one fix, open a PR, repeat. Discovery may end after 30 minutes with fewer findings. | Bound exploration without inventing defects. |
-| QA-07 | At most 10 new issues and 5 new PRs per America/Toronto day, combined across CPD and dotfiles; closed and draft items count. Updates do not. | User-specified autonomy limits; account for DST, not fixed EST. Each cap is independent. |
+| QA-07 | At most 10 new issues and 5 new PRs per America/Toronto day, combined across CPD and dotfiles; closed and draft items count. Updates do not. | Original User limits; superseded by QA-22 on 2026-11-13. DST handling and independent accounting remain. |
 | QA-08 | Prefer code to prose for deterministic rules; check at loop start and immediately before creation; fail closed on unverifiable counts; one active loop. | Executable limits with an explicit single-operator assumption. |
 | QA-09 | CPD is the priority; trace bugs into dotfiles and fix there when the evidence warrants it. | Avoid unrelated dotfiles maintenance. |
 | QA-10 | User reviews and merges every PR; agent may research and propose any change size. | Architecture/dependency/migration work is allowed, with evidence; no autonomous merge. |
@@ -29,8 +29,9 @@ QA loop remains inactive until merge and an explicit start instruction.
 | QA-17 | Local tool installs and disposable instances allowed. Remote access is read-only and needs a separate access plan, deferred to the next session. | This PR neither configures SSH nor modifies live hosts. |
 | QA-18 | Use Git/GitHub directly first; consider CPD after proving the Protocol. | No premature dependency on the system being investigated. |
 | QA-19 | Initial PR contains the Protocol, decisions and tested limit scripts only. Begin actual QA only after merge and explicit start. | No product fixes, automatic schedule or active investigation loop in this change. |
-
 | QA-20 | Name this document the QA Protocol; CPD calls collections of procedures and methods Protocols. | User clarification, 2026-11-13; glossary and ADR-0018 record the vocabulary and standalone execution. |
+| QA-21 | The User may explicitly reset today's allowance by starting a named dated batch while preserving all prior resources and aggregate totals. | User instruction, 2026-11-13 ([authorization record](https://github.com/clayton-duarte/cpd/issues/1115#issuecomment-6854012406)). Record authorization in GitHub; no autonomous resets or marker removal. |
+| QA-22 | Permanent limits are now 20 new issues and 10 new PRs, shared across CPD/dotfiles, per Toronto day or explicitly reset batch. | User instruction, 2026-11-13; supersedes QA-07's numeric limits. The currently requested reset uses the new limits. |
 
 ## Adopted patterns and evidence
 
@@ -127,3 +128,16 @@ An iteration comment on the selected issue records work and next steps; GitHub
 is the durable run record. No parallel Markdown backlog, local quota ledger or
 schedule is introduced. Revisit Protocol design through a new documented
 decision when actual execution exposes a limitation.
+
+### Explicitly authorized batches and revised limits
+
+The User requested a new batch after the earlier allowance was exhausted, then
+permanently raised limits to 20 issues and 10 PRs (2026-11-13). The implementation
+reuses existing GitHub attribution rather than deleting history or maintaining
+a local creation ledger: a dated batch marker scopes the active allowance,
+while every resource keeps its original marker and contributes to day totals.
+The batch identifier must match today's Toronto date; invalid/stale identifiers
+fail before API access. Starting a batch is an explicit User policy exception,
+not an automatic response to exhaustion. This is a User operating decision,
+not a claim about industry consensus. Existing REST/pagination and atomic body
+marker evidence above supports the mechanism; tests pin scoping and boundaries.
