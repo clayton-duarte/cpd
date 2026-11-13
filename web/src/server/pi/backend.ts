@@ -1,5 +1,6 @@
 import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import {
@@ -386,6 +387,7 @@ export function createPiBackend(deps: {
         out(m);
       },
       (ts) => committed.has(ts),
+      (callId) => tail.normalizer.completedTools.has(callId),
     );
 
     const POLL_MS = 250;
@@ -454,21 +456,17 @@ export function createPiBackend(deps: {
       async submit(input) {
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
         const files = input.files ?? [];
-        if (
-          input.text.trim() === "" &&
-          input.images.length === 0 &&
-          files.length === 0
-        )
-          throw new WebError("invalid_submission", "the message is empty");
-        const stamp = deps.now();
-        const imagePaths = input.images.map(
-          (im, i) =>
-            `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`,
-        );
-        const filePaths = files.map(
-          (f, i) =>
-            `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`,
-        );
+<<<<<<< HEAD
+        if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
+        const stamp = `${deps.now()}-${randomUUID()}`;
+        const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
+        const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
+=======
+        if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
+        const stamp = `${deps.now()}-${randomUUID()}`;
+        const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
+        const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
+>>>>>>> origin/main
         const markers: string[] = [];
         for (const p of imagePaths) markers.push(`[Attached image: ${p}]`);
         for (const p of filePaths) markers.push(`[Attached file: ${p}]`);

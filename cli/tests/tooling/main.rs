@@ -28,6 +28,7 @@ mod retired_terms;
 mod run_with;
 mod slot;
 mod smoke;
+mod test_bootstrap;
 mod testkit;
 mod testkit_hosts;
 mod tripwire_script;
