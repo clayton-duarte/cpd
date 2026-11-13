@@ -659,7 +659,14 @@ fn find_cycle(
 /// Workflow landed there; a stale local branch may lack it), else the local branch.
 fn authoritative_commit(repo: &Path, branch: &str) -> Result<String, CpdError> {
     if has_origin(repo)? {
-        let remote = run(repo, &["rev-parse", "--verify", &format!("refs/remotes/origin/{branch}^{{commit}}")])?;
+        let remote = run(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("refs/remotes/origin/{branch}^{{commit}}"),
+            ],
+        )?;
         if remote.code == 0 {
             return Ok(remote.stdout.trim().to_owned());
         }

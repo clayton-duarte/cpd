@@ -365,13 +365,14 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
         };
         if let Some(workflow) = &job.workflow
             && let Err(error) = store.read(|conn| {
-                crate::workflow::guard_refactor_tests(
+                crate::workflow::guard_refactor_tests_allowing(
                     conn,
                     &target.plan,
                     workflow,
                     repo,
                     diff_base,
                     diff_head,
+                    &base_refs,
                 )
             })
         {

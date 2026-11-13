@@ -443,7 +443,7 @@ fn coverage_gate(
     let repo = std::path::Path::new(&workflow.repo);
     let current = crate::workflow::measure_coverage(repo, plan, &workflow.key, sha, command)?;
     let touched = crate::git::tamper::changed_paths(repo, &base, sha)?;
-    let removed = crate::workflow::deleted_paths(repo, &base, sha)?;
+    let removed = crate::workflow::absent_paths(repo, sha, &touched)?;
     baseline.check(&current, &touched, &removed)
 }
 
@@ -457,7 +457,24 @@ fn gate(
     sha: &str,
     again: &str,
 ) -> Result<(), CpdError> {
-    gate_in(env, policy, plan, workflow, worktree, sha, false, again)
+    gate_checked(
+        env, policy, plan, workflow, worktree, sha, false, again, true,
+    )
+}
+
+/// [`gate`] for a caller that already measured coverage at `sha` (`pr push`): coverage is measured once per push.
+fn gate_measured(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    worktree: &std::path::Path,
+    sha: &str,
+    again: &str,
+) -> Result<(), CpdError> {
+    gate_checked(
+        env, policy, plan, workflow, worktree, sha, false, again, false,
+    )
 }
 
 /// The Gate on `sha` in `worktree`, which is already at the gated tree (contract §7.6): `pre-start`
@@ -475,10 +492,45 @@ fn gate_in(
     pre_start: bool,
     again: &str,
 ) -> Result<(), CpdError> {
+    gate_checked(
+        env, policy, plan, workflow, worktree, sha, pre_start, again, true,
+    )
+}
+
+// `measure`: whether the refactor coverage is measured here (false when the caller did it).
+#[allow(clippy::too_many_arguments)]
+fn gate_checked(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    worktree: &std::path::Path,
+    sha: &str,
+    pre_start: bool,
+    again: &str,
+    measure: bool,
+) -> Result<(), CpdError> {
+    // Before anything is published (a rebase's included): a refactor's own commits change no test, the base's amended ones excepted.
+    {
+        let mut guard_env = Env::open_with(&env.ports)?;
+        guard_env.store.read(|conn| {
+            crate::workflow::guard_refactor_tests_allowing(
+                conn,
+                plan,
+                workflow.key.as_str(),
+                std::path::Path::new(&workflow.repo),
+                &workflow.base,
+                sha,
+                &[workflow.base.as_str()],
+            )
+        })?;
+    }
     if policy.gate.workflow != Gate::Local {
         return Ok(());
     }
-    coverage_gate(env, policy, plan, workflow, sha)?;
+    if measure {
+        coverage_gate(env, policy, plan, workflow, sha)?;
+    }
     let hooks = gate_hooks(env, policy, plan, workflow);
     let then =
         format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");

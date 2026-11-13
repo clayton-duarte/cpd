@@ -208,28 +208,24 @@ pub(crate) fn base_coverage_tests(
     Ok(Some(tests))
 }
 
-/// The paths `base...head` deletes or renames away (a rename counts as a deletion of its source).
-pub(crate) fn deleted_paths(
+/// The `paths` that do not exist in the tree of `head`: deleted, or renamed away.
+pub(crate) fn absent_paths(
     root: &std::path::Path,
-    base: &str,
     head: &str,
+    paths: &[String],
 ) -> Result<Vec<String>, CpdError> {
-    let range = format!("{base}...{head}");
-    let out = crate::git::run::run(
-        root,
-        &["diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", &range],
-    )?;
+    let out = crate::git::run::run(root, &["ls-tree", "-r", "--name-only", "-z", head])?;
     if out.code != 0 {
         return Err(CpdError::new(
             crate::error::ErrorCode::GitFailed,
-            format!("Could not list the deleted paths of {range}."),
+            format!("Could not list the files of {head}."),
         ));
     }
-    Ok(out
-        .stdout
-        .split('\0')
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned)
+    let present: std::collections::HashSet<&str> = out.stdout.split('\0').collect();
+    Ok(paths
+        .iter()
+        .filter(|p| !present.contains(p.as_str()))
+        .cloned()
         .collect())
 }
 
@@ -241,6 +237,20 @@ pub(crate) fn guard_refactor_tests(
     root: &std::path::Path,
     base: &str,
     head: &str,
+) -> Result<(), CpdError> {
+    guard_refactor_tests_allowing(conn, plan, workflow, root, base, head, &[])
+}
+
+/// [`guard_refactor_tests`], except the test changes `head` inherits unchanged from a ref of `allowed` (the Workflow's base,
+/// whose amended coverage tests a base merge or a rebase brings in): those are not the refactor's own.
+pub(crate) fn guard_refactor_tests_allowing(
+    conn: &rusqlite::Connection,
+    plan: &crate::ids::PlanId,
+    workflow: &str,
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+    allowed: &[&str],
 ) -> Result<(), CpdError> {
     let shape: String = conn.query_row(
         "SELECT shape FROM workflows WHERE plan = ?1 AND key = ?2",
@@ -269,7 +279,7 @@ pub(crate) fn guard_refactor_tests(
         .flatten()
         .filter_map(|v| v.as_str())
         .collect();
-    let paths: Vec<_> = crate::git::tamper::changed_paths(root, base, head)?
+    let paths: Vec<_> = crate::git::tamper::written_paths(root, base, head, allowed)?
         .into_iter()
         .filter(|p| {
             p.ends_with("_test.rs")
