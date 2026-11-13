@@ -914,6 +914,14 @@ fn apply(
         }
     }
     for follow in follows {
+        // A Workflow merged in this pass keeps its stored base: it has no base left to follow.
+        if out
+            .merged
+            .iter()
+            .any(|(p, k)| *p == follow.plan && *k == follow.workflow)
+        {
+            continue;
+        }
         let is_ahead = ahead
             .iter()
             .any(|a| a.plan == follow.plan && a.workflow == follow.workflow && a.ahead);
@@ -1667,6 +1675,10 @@ mod poll_uptodate_tests;
 #[cfg(test)]
 #[path = "poll_ready_tests.rs"]
 mod poll_ready_tests;
+
+#[cfg(test)]
+#[path = "poll_cas_tests.rs"]
+mod poll_cas_tests;
 
 #[cfg(test)]
 mod due_reads_tests {
