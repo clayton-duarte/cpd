@@ -392,9 +392,6 @@ fn close(store: &mut Store, args: CloseArgs) -> Result<Output, CpdError> {
         if bug.status == "closed" {
             return Ok(Output::success(json!({"already": true, "bug": bug.json()})));
         }
-        if args.root_fix.is_some() && bug.issue.is_none() {
-            return Err(bug_issue_required(&args.id));
-        }
         // Malformed text is `usage` (over 200 characters or a NUL); a missing or empty flag is the refusal below.
         for value in [args.root_fix.as_deref(), args.regression_test.as_deref()]
             .into_iter()
@@ -427,6 +424,9 @@ fn close(store: &mut Store, args: CloseArgs) -> Result<Output, CpdError> {
             )
             .with("id", args.id.as_str())
             .with("missing", missing));
+        }
+        if args.root_fix.is_some() && bug.issue.is_none() {
+            return Err(bug_issue_required(&args.id));
         }
         tx.execute(
             "UPDATE bug_records
