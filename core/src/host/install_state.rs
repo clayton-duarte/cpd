@@ -3,7 +3,8 @@
 //!
 //! One JSON object on one line, `{"status":"ok","since":"<RFC 3339 UTC, Z>"}` or
 //! `{"status":"skipped","reason":"dirty|diverged|branch","since":"<RFC 3339 UTC, Z>"}` or
-//! `{"status":"failed","reason":"<failure reason>","since":"<RFC 3339 UTC, Z>"}`. `reason`
+//! `{"status":"failed","reason":"<failure reason>","since":"<RFC 3339 UTC, Z>"}` or
+//! `{"status":"restarting","since":"<RFC 3339 UTC, Z>"}` (no reason, no alert). `reason`
 //! is present exactly when the status is `skipped` or `failed`; unknown fields are refused. A missing file is
 //! `None`; a file that does not parse is one `install_state_invalid` (once until it clears).
 
@@ -35,13 +36,15 @@ impl Reason {
     }
 }
 
-/// The `status` field: `ok`, `skipped`, or `failed`.
+/// The `status` field: `ok`, `skipped`, `failed`, or `restarting` (cpd install's detached waiter is
+/// starting the engine; it alerts nothing).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Status {
     Ok,
     Skipped,
     Failed,
+    Restarting,
 }
 
 /// The one JSON object on the line, as written: every field checked at the edge.
@@ -87,7 +90,7 @@ impl InstallState {
             .with("reason", e.to_string())
         })?;
         let reason = match (raw.status, raw.reason) {
-            (Status::Ok, None) => None,
+            (Status::Ok | Status::Restarting, None) => None,
             (Status::Skipped, Some(reason)) => match reason.as_str() {
                 "dirty" | "diverged" | "branch" => Some(reason),
                 _ => {
@@ -109,6 +112,12 @@ impl InstallState {
             (Status::Ok, Some(_)) => {
                 return Err(invalid("The install state is `ok` but carries a `reason`.")
                     .with("reason", "reason present with status ok"));
+            }
+            (Status::Restarting, Some(_)) => {
+                return Err(
+                    invalid("The install state is `restarting` but carries a `reason`.")
+                        .with("reason", "reason present with status restarting"),
+                );
             }
             (Status::Skipped, None) => {
                 return Err(
@@ -166,5 +175,28 @@ impl InstallState {
     /// Manager's message names the incident by it).
     pub fn since(&self) -> &str {
         &self.since
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restarting_without_a_reason_parses_and_does_not_alert() {
+        let state =
+            InstallState::parse(r#"{"status":"restarting","since":"2026-01-15T12:00:00Z"}"#)
+                .unwrap();
+        assert_eq!(state.alert(), None);
+        assert_eq!(state.since(), "2026-01-15T12:00:00Z");
+    }
+
+    #[test]
+    fn restarting_with_a_reason_is_invalid() {
+        let e = InstallState::parse(
+            r#"{"status":"restarting","reason":"dirty","since":"2026-01-15T12:00:00Z"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), ErrorCode::InstallStateInvalid);
     }
 }
