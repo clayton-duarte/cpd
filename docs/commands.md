@@ -6239,7 +6239,7 @@ For cpd secret approve:
 <session name> asks to <action> in vault <vault>: item <item>, field <field>. Reason: <reason>
 ```
 
-with the options `Allow once` and `Deny`. **`Allow once`:** the adapter runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` (commands §24.7) atomically, writing `$CPD_HOME/run/secret/approve/<uuid>.json` with `{session, action, vault, item, field, at}`. The tool returns the text `Approved for one command in the next 10 minutes: run it now.` **`Deny`:** nothing is run and the tool returns `The User denied it. Do not try again.` **Aborted:** when the tool call is aborted (for example, by a Session timeout or workflow abort), the dialog is dismissed and the blocked fact is closed, releasing the Session. **No dialog available** (no UI): an error `no_ui` saying the cockpit chat is needed.
+with the options `Allow once` and `Deny`. **`Allow once`:** the adapter runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` (commands §24.7) atomically, writing `$CPD_HOME/run/secret/approve/<uuid>.json` with `{session, action, vault, item, field, at}`. The tool returns the text `Approved for one command in the next 10 minutes: run it now.` **`Deny`:** nothing is run and the tool returns `The User denied it. Do not try again.` **Aborted:** when the tool call is aborted (for example, by a Session timeout or a Plan abort), the dialog is dismissed and the blocked fact is closed, releasing the Session. **No dialog available** (no UI): an error `no_ui` saying the cockpit chat is needed.
 
 #### A Worker's way
 
