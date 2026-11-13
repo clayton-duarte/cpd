@@ -63,6 +63,8 @@ export interface PiNormalizer {
   readonly facts: JsonlFacts;
   /** `message.timestamp` of every assistant line pushed so far, in order. */
   readonly turns: readonly number[];
+  /** Tool results committed in this transcript, including orphan results. */
+  readonly completedTools: ReadonlySet<string>;
 }
 
 const FOLD_KINDS: readonly string[] = ["cpd-context", "cpd-plan-decision", "cpd-plan-summary", "cpd-skills", "cpd"];
@@ -178,6 +180,7 @@ export function createNormalizer(): PiNormalizer {
   const facts: JsonlFacts = {};
   const tools = new Map<string, ToolItem>();
   const turns: number[] = [];
+  const completedTools = new Set<string>();
   const pendingAsk = new Set<string>();
   const pendingReviews = new Map<string, string>(); // dialog id -> title
   const summaries = new Map<string, string>(); // dialog id -> summary
@@ -271,6 +274,7 @@ export function createNormalizer(): PiNormalizer {
           need(typeof m.toolCallId === "string", "toolResult needs a string toolCallId");
           facts.lastRole = "toolResult";
           const callId = m.toolCallId as string;
+          completedTools.add(callId);
           const result: ToolResult = {
             text: textOf(m.content),
             isError: m.isError === true,
@@ -370,7 +374,7 @@ export function createNormalizer(): PiNormalizer {
     return r;
   }
 
-  return { push, facts, turns };
+  return { push, facts, turns, completedTools };
 }
 
 /** Applies a push result to an ordered item list and the open dialog map (updates replace by id). */
