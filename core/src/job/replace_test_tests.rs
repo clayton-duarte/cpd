@@ -187,6 +187,42 @@ impl Fixture {
         f
     }
 
+    /// Seal every Job's stored fingerprint to its true Locked-Job fingerprint.
+    fn seal(&mut self) {
+        let plan = PlanId::parse("pay").unwrap();
+        self.env
+            .store
+            .write("fixture seal", |tx| {
+                for j in jobs::load(tx, &plan)? {
+                    tx.execute(
+                        "UPDATE jobs SET fingerprint = ?3 WHERE plan = ?1 AND key = ?2",
+                        rusqlite::params![plan.as_str(), j.key, jobs::locked_fingerprint(&j)],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn set_fingerprint(&mut self, key: &str, fp: &str) {
+        self.env
+            .store
+            .write("fixture drift", |tx| {
+                tx.execute(
+                    "UPDATE jobs SET fingerprint = ?2 WHERE key = ?1",
+                    rusqlite::params![key, fp],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn fingerprint_of(&mut self, key: &str) -> (Option<String>, String) {
+        let jobs = self.jobs();
+        let j = jobs.iter().find(|j| j.key == key).unwrap();
+        (j.fingerprint.clone(), jobs::locked_fingerprint(j))
+    }
+
     fn run(&mut self) -> Result<(), String> {
         replace_test::replace(
             &mut self.env,
@@ -424,4 +460,56 @@ fn locked_test_job_replacement_preserves_tdd_dependencies() {
     f.run()
         .expect("terminal natural completion with acknowledged teardown");
     f.assert_replaced();
+}
+
+#[test]
+fn replace_test_refreshes_dependent_fingerprint() {
+    let mut f = Fixture::repetition();
+    f.seal();
+    f.run().expect("replace-test succeeds");
+    let (stored, found) = f.fingerprint_of("impl");
+    assert_eq!(stored.as_deref(), Some(found.as_str()));
+    let plan = PlanId::parse("pay").unwrap();
+    let jobs = f.jobs();
+    assert!(
+        jobs::tampered(&plan, &jobs).is_empty(),
+        "no tamper reported"
+    );
+}
+
+#[test]
+fn reseal_repairs_replace_test_redirect_drift() {
+    let mut f = Fixture::repetition();
+    f.seal();
+    let sealed = f.fingerprint_of("impl").0.unwrap();
+    f.run().expect("replace-test succeeds");
+    // The drift of bug b62: the redirect left the sealed value behind.
+    f.set_fingerprint("impl", &sealed);
+    let plan = PlanId::parse("pay").unwrap();
+    replace_test::reseal(&mut f.env, &plan, "impl").expect("redirect-only drift is repaired");
+    let (stored, found) = f.fingerprint_of("impl");
+    assert_eq!(stored.as_deref(), Some(found.as_str()));
+}
+
+#[test]
+fn reseal_refuses_unexplained_drift() {
+    let mut f = Fixture::repetition();
+    f.seal();
+    f.run().expect("replace-test succeeds");
+    let plan = PlanId::parse("pay").unwrap();
+    // A goal edit is not a recorded redirect.
+    f.env
+        .store
+        .write("fixture tamper", |tx| {
+            tx.execute("UPDATE jobs SET goal = 'other' WHERE key = 'impl'", [])?;
+            Ok(())
+        })
+        .unwrap();
+    let before = f.fingerprint_of("impl").0;
+    assert!(replace_test::reseal(&mut f.env, &plan, "impl").is_err());
+    assert_eq!(
+        f.fingerprint_of("impl").0,
+        before,
+        "refusal changes nothing"
+    );
 }

@@ -41,6 +41,13 @@ pub(super) trait Boundary {
     ) -> Result<String, CpdError>;
 }
 
+/// Re-seal a Job's fingerprint when only recorded replace-test redirects of
+/// its needs explain the drift; refuse otherwise (`reseal_unexplained`).
+#[allow(dead_code)] // the command wiring is the implementing Job's
+pub(super) fn reseal(_env: &mut Env, _plan: &PlanId, _key: &str) -> Result<(), CpdError> {
+    todo!("job reseal")
+}
+
 fn refused(text: impl Into<String>) -> CpdError {
     CpdError::new(ErrorCode::CasLost, text)
 }
