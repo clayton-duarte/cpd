@@ -363,6 +363,36 @@ describe("busy follows the current session state", () => {
   });
 });
 
+describe("transcript reset", () => {
+  it("discards an append queued before a reset instead of applying it to the new window", async () => {
+    const s = await attached();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = s.cpd.json.bind(s.cpd);
+    let armed = true;
+    s.cpd.json = async (args) => {
+      if (args[1] === "show" && armed) {
+        armed = false;
+        await gate;
+      }
+      return original(args);
+    };
+    s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n`);
+    s.watch.fire();
+    await flush();
+    s.fs.bytes = enc.encode(`${userLine(9)}\n`);
+    s.watch.fire();
+    await flush();
+    const windows = s.out.filter((m) => m.type === "session.window");
+    expect(windows.length).toBeGreaterThan(1);
+    release();
+    await flush();
+    const appended = s.out.filter((m) => m.type === "session.append").flatMap((m) => m.items.map((i) => i.id));
+    expect(appended).not.toContain("u:m1");
+    await s.handle.dispose();
+  });
+});
+
 describe("isBusy", () => {
   const facts = { lastRole: "toolResult" } as JsonlFacts;
   it("isBusy is false when the session is stopped and the transcript ends on a toolResult", () => {

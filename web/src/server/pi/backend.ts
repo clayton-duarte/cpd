@@ -256,6 +256,8 @@ export function createPiBackend(deps: {
     syncTurns();
     let busy = isBusy(tail.normalizer.facts, engineState);
     let watcher: Disposable | undefined;
+    // Bumped on every transcript reset: an append queued under an older generation is stale and dropped.
+    let generation = 0;
     const out = (m: SessionServerMessage): void => {
       if (!disposed) emit(m);
     };
@@ -285,6 +287,7 @@ export function createPiBackend(deps: {
         identity,
         onEvent: (e) => {
           if (e.kind === "reset") {
+            generation += 1;
             watcher?.dispose();
             void reload().catch((err: unknown) =>
               out({
@@ -295,10 +298,11 @@ export function createPiBackend(deps: {
             );
           } else {
             const result = e.result;
+            const queuedIn = generation;
             appends = appends
               .then(refreshState)
               .then(() => {
-                if (!disposed) applyAppend(result);
+                if (!disposed && queuedIn === generation) applyAppend(result);
               })
               .catch((err: unknown) =>
                 out({
@@ -456,17 +460,10 @@ export function createPiBackend(deps: {
       async submit(input) {
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
         const files = input.files ?? [];
-<<<<<<< HEAD
         if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
         const stamp = `${deps.now()}-${randomUUID()}`;
         const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
         const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
-=======
-        if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
-        const stamp = `${deps.now()}-${randomUUID()}`;
-        const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
-        const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
->>>>>>> origin/main
         const markers: string[] = [];
         for (const p of imagePaths) markers.push(`[Attached image: ${p}]`);
         for (const p of filePaths) markers.push(`[Attached file: ${p}]`);
