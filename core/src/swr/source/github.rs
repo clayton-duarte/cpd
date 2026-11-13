@@ -63,6 +63,15 @@ fn no_effects(store: &mut crate::store::Store, _now: OffsetDateTime) -> Result<V
 type Listed = HashMap<String, BTreeSet<(String, i64)>>;
 static LISTED: Mutex<Option<Listed>> = Mutex::new(None);
 
+/// Discovery progress is expendable engine memory, scoped by store and authenticated viewer.
+#[derive(Clone, Default)]
+struct SearchPages {
+    viewer: String,
+    authored_after: Option<String>,
+    reviews_after: Option<String>,
+}
+static SEARCH_PAGES: Mutex<Option<HashMap<String, SearchPages>>> = Mutex::new(None);
+
 /// The real `github` source (swr-github.md §4).
 #[derive(Default)]
 pub struct GithubSource {
@@ -265,7 +274,16 @@ impl GithubSource {
             })
             .map(str::to_owned)
             .collect();
+        let pages = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&cx.store.path().display().to_string()))
+            .cloned()
+            .unwrap_or_default();
         Ok(PollPlan {
+            authored_after: pages.authored_after,
+            reviews_after: pages.reviews_after,
             heavy,
             absent,
             meta,
@@ -298,7 +316,13 @@ impl GithubSource {
         );
         let read = match read {
             Ok(read) => read,
-            Err(e) => return self.failed(cx, now, e),
+            Err(e) => {
+                // Invalid/stale cursors must not strand discovery; a failed pass restarts the sweep.
+                if let Some(pages) = SEARCH_PAGES.lock().expect("search pages").as_mut() {
+                    pages.remove(&cx.store.path().display().to_string());
+                }
+                return self.failed(cx, now, e);
+            }
         };
         let reset = OffsetDateTime::parse(
             &read.reset_at,
@@ -315,7 +339,30 @@ impl GithubSource {
             endpoint::pause_until(cx.store, "github", reset)?;
         }
         endpoint::record_ok(cx.store, "github", now)?;
-        self.commit(cx, &plan, read, now, poll_started_at)
+        let mut next = SearchPages {
+            viewer: read.viewer.clone(),
+            authored_after: read.authored_after.clone(),
+            reviews_after: read.reviews_after.clone(),
+        };
+        let store = cx.store.path().display().to_string();
+        // @me changed accounts: the old opaque cursor belongs to a different search.
+        let previous = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&store))
+            .cloned();
+        if previous.is_some_and(|p| p.viewer != next.viewer) {
+            next.authored_after = None;
+            next.reviews_after = None;
+        }
+        let effects = self.commit(cx, &plan, read, now, poll_started_at)?;
+        SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .get_or_insert_with(HashMap::new)
+            .insert(store, next);
+        Ok(effects)
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
