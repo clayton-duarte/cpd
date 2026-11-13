@@ -136,7 +136,7 @@ as caused by each fix.
 ## Fresh-session entry
 
 Read the kit's SKILL.md, this profile/config, applicable repo instructions,
-decisions and the latest canonical handoff. Recheck open PR feedback/CI and the
+decisions and the latest canonical handoff. Recheck every open attributed QA PR for mergeability, CI and review feedback and the
 same run's GitHub counts, verify current base and clean worktree ownership, then
 continue only the User-started run. Issues retain research and self-contained
 reproducers; PRs retain implementation/validation. User alone reviews and merges.
@@ -173,3 +173,21 @@ This authenticates allowance reads and does not start a new QA run or reset limi
 The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fresh
 reading was66% remaining; that historical number is not a gate for later work.
 Source PR3 merged with green CI at `b62b929017b7bdafded41763b10ec1eb0c1fae95`; this consumer pins that reviewed revision. User alone merges CPD.
+
+
+## Proactive PR upkeep
+
+The User explicitly requires QA to address conflicts without being prompted
+(2026-11-13). At iteration start and after observed base/head changes, inspect
+all open QA-owned PRs, including earlier runs. Resolve conflicts on the existing
+branch, preserve both intended changes, run scoped checks and push the result
+before new discovery. Pending mergeability is unconfirmed and needs another
+read. Recheck after pushing; a mergeable flag does not replace CI or review.
+The User still reviews and merges every PR.
+
+The portable implementation is proposed in
+[skills #6](https://github.com/clayton-duarte/skills/pull/6), tracked by
+[skills #5](https://github.com/clayton-duarte/skills/issues/5). Until a reviewed
+source pin includes `pr-status`, perform the same read-only inspection through
+GitHub's PR API. The vendor remains unchanged; this standing User policy applies
+independently of the consumer update.

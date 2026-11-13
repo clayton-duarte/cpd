@@ -234,3 +234,20 @@ exposed here. Process persistence is no longer a prerequisite for authentication
 a destroyed credential volume or revocation remains a real reauthentication case.
 Research/code/restart regressions: source PR3, linked from #1187 and consumer #1188.
 The weekly threshold and User-review/merge policy remain in force.
+
+
+## 2026-11-13 — proactive PR conflict maintenance
+
+The User reported a conflicted QA PR and explicitly said they should not have to
+ask QA to address it. Add mergeability to every iteration's CI/review upkeep and
+recheck when the base/head changes. Resolve conflicts on the same PR branch,
+preserve both intended changes, run focused checks and verify the pushed result.
+A nullable/pending result is not confirmed mergeability. The User retains final
+PR review/merge; no clean branch is bulk-rebased solely for being behind.
+
+The immediate #1191 conflict was resolved against main58192c9f atdd9f108f;
+300 affected tests, core Clippy, formatting and whitespace passed. The source
+method/command is tracked in skills#5 and proposed in skills#6. Research:
+https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request (accessed2026-11-13).
+This is a User operating decision and documented API behavior, not a claim of
+universal consensus. Consumers update immutable reviewed pins separately.
