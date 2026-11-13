@@ -96,11 +96,9 @@ describe("pi backend images", () => {
   it("submit writes each image under the attachments directory and appends its path to the text", async () => {
     const s = await setup({ text: "", now: 55 });
     await submit(s, "look", [img("image/png", "AQID"), img("image/jpeg", "BAUG")]);
-    expect(s.fs.writes.map((w) => [w.path, [...w.bytes]])).toEqual([
-      ["/att/s1-55-0.png", [1, 2, 3]],
-      ["/att/s1-55-1.jpg", [4, 5, 6]],
-    ]);
-    const text = "look\n\n[Attached image: /att/s1-55-0.png]\n[Attached image: /att/s1-55-1.jpg]";
+    const paths = s.fs.writes.map((w) => w.path);
+    expect(s.fs.writes.map((w) => [...w.bytes])).toEqual([[1, 2, 3], [4, 5, 6]]);
+    const text = `look\n\n[Attached image: ${paths[0]}]\n[Attached image: ${paths[1]}]`;
     expect(send(s.cpd.calls)).toEqual([["session", "send", "s1", "--origin", "webui", "--unblocks", "User message from the web chat", "--", text]]);
     const none = await setup({ text: "" });
     await submit(none, "plain", []);
@@ -108,24 +106,26 @@ describe("pi backend images", () => {
     expect(send(none.cpd.calls)[0]?.at(-1)).toBe("plain");
   });
 
-  it("submit names the files with the session id, the timestamp, the index and the mime extension", async () => {
+  it("submit names files with a unique stamp, the index and the mime extension", async () => {
     const s = await setup({ text: "", attachmentsDir: "/tmp/a", now: 9 });
     await submit(s, "x", [img("image/png", "AQID"), img("image/jpeg", "AQID"), img("image/gif", "AQID"), img("image/webp", "AQID")]);
-    expect(s.fs.writes.map((w) => w.path)).toEqual(["/tmp/a/s1-9-0.png", "/tmp/a/s1-9-1.jpg", "/tmp/a/s1-9-2.gif", "/tmp/a/s1-9-3.webp"]);
+    for (const [i, ext] of ["png", "jpg", "gif", "webp"].entries()) {
+      expect(s.fs.writes[i]!.path).toMatch(new RegExp(`^/tmp/a/s1-9-[0-9a-f-]{36}-${i}\\.${ext}$`));
+    }
   });
 
   it("an image with no text is accepted and its path is sent", async () => {
     const s = await setup({ text: "", now: 55 });
     await submit(s, "", [img("image/png", "AQID")]);
-    expect(s.fs.writes.map((w) => [w.path, [...w.bytes]])).toEqual([["/att/s1-55-0.png", [1, 2, 3]]]);
-    expect(send(s.cpd.calls)).toEqual([["session", "send", "s1", "--origin", "webui", "--unblocks", "User message from the web chat", "--", "[Attached image: /att/s1-55-0.png]"]]);
+    expect(s.fs.writes.map((w) => [...w.bytes])).toEqual([[1, 2, 3]]);
+    expect(send(s.cpd.calls)).toEqual([["session", "send", "s1", "--origin", "webui", "--unblocks", "User message from the web chat", "--", `[Attached image: ${s.fs.writes[0]!.path}]`]]);
   });
 
   it("an image with no text sends no leading blank line in the text", async () => {
     const s = await setup({ text: "", now: 55 });
     await submit(s, "", [img("image/png", "AQID"), img("image/jpeg", "BAUG")]);
     const text = send(s.cpd.calls)[0]?.at(-1);
-    expect(text).toBe("[Attached image: /att/s1-55-0.png]\n[Attached image: /att/s1-55-1.jpg]");
+    expect(text).toBe(`[Attached image: ${s.fs.writes[0]!.path}]\n[Attached image: ${s.fs.writes[1]!.path}]`);
     expect(text?.startsWith("\n")).toBe(false);
   });
 
@@ -135,4 +135,15 @@ describe("pi backend images", () => {
     expect(err.code).toBe("invalid_submission");
     expect(send(s.cpd.calls)).toEqual([]);
   });
+});
+
+
+it("concurrent image submissions in one millisecond do not share a path", async () => {
+  const s = await setup({ text: "", now: 55 });
+  await Promise.all([submit(s, "first", [img("image/png", "AQID")]), submit(s, "second", [img("image/png", "BAUG")])]);
+  expect(s.fs.writes.map((w) => [...w.bytes])).toEqual([[1, 2, 3], [4, 5, 6]]);
+  expect(new Set(s.fs.writes.map((w) => w.path)).size).toBe(2);
+  const sent = send(s.cpd.calls).map((args) => args.at(-1));
+  expect(sent[0]).toContain(s.fs.writes[0]!.path);
+  expect(sent[1]).toContain(s.fs.writes[1]!.path);
 });
