@@ -95,6 +95,18 @@ const setup = (opts: { ready?: Promise<void> } = {}) => {
 const sessionMsg = (type: string, extra: Record<string, unknown> = {}) => ({ type, sessionId: "pi-1", ...extra });
 
 describe("hub connection", () => {
+  it("a repeated actionId replays the stored result without running the action again", async () => {
+    const t = setup();
+    const msg = { type: "cockpit.action", actionId: "dup", action: { kind: "inbox.dismiss", itemId: 4 } };
+    await t.hub.handle(msg);
+    await t.hub.handle(msg);
+    expect(t.actions).toHaveLength(1);
+    expect(t.sent.filter((m) => m.type === "action.result")).toEqual([
+      { type: "action.result", actionId: "dup", ok: true, output: { stdout: "ok" } },
+      { type: "action.result", actionId: "dup", ok: true, output: { stdout: "ok" } },
+    ]);
+  });
+
   it("invalid client messages are rejected with a typed error", async () => {
     const t = setup();
     await t.hub.handle("not an object");
