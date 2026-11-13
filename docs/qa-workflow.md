@@ -209,7 +209,8 @@ Before implementation, expand the selected issue into an actionable investigatio
    [scoped-loop guidance](implementing.md#the-scoped-loop) and `scripts/test-changed`.
    For this dependency-free QA tooling: `node --check scripts/qa.mjs`,
    `node --check scripts/qa.test.mjs`, `node --test scripts/qa.test.mjs`, and
-   `git diff --check`. Syntax and whitespace checks are not a claim of semantic
+   `sh scripts/check-portable.sh`, and `git diff --check`.
+   Syntax and whitespace checks are not a claim of semantic
    linting; no JS lint/formatter is configured for these files. Add broader
    checks when risk or failures warrant them. CI runs the full configured gate.
    Record blocked checks and their reasons; never report unrun checks as passing.
