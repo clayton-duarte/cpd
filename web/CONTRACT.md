@@ -2554,6 +2554,7 @@ The durable host verifier now reads the per-PID directory on every submit (#1140
 
 ### 27.1 Who writes a token
 
+- **Existing same-PID file (#1139).** A boot replaces an existing file for its actual process PID with a fresh token at mode 0600. It never invents a different PID to avoid that file: verifiers require a live server identity. Tests representing separate servers supply distinct PIDs and fake their liveness; production servers retain their real process identity.
 - Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
 - The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The Electron main process's runs in `before-quit`. Neither removes a file of another pid.
 

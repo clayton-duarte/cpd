@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeWebuiToken } from "./webui-token.ts";
 
 describe("writeWebuiToken", () => {
@@ -9,7 +9,24 @@ describe("writeWebuiToken", () => {
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "webui-token-"));
   });
-  afterEach(() => rmSync(home, { recursive: true, force: true }));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("replaces a stale current-PID file without inventing a different server identity", () => {
+    const dir = join(home, "run", "webui-tokens");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${process.pid}.token`);
+    writeFileSync(file, "old token", { mode: 0o644 });
+    const issued = writeWebuiToken(home);
+    expect(issued.pid).toBe(process.pid);
+    expect(readFileSync(file, "utf8")).toBe(issued.token);
+    expect(issued.token).not.toBe("old token");
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    issued.remove();
+    expect(existsSync(file)).toBe(false);
+  });
 
   it("writes 32 random bytes as hex to run/webui-tokens/<pid>.token at mode 0600, new on every boot", () => {
     const first = writeWebuiToken(home);
@@ -44,8 +61,9 @@ describe("writeWebuiToken", () => {
   it("webui-token multi-server survival", () => {
     // b13: two servers run concurrently, each writing its own token file
     // when one server quits and removes its token, the other server's token remains
-    const s1 = writeWebuiToken(home);
-    const s2 = writeWebuiToken(home);
+    vi.spyOn(process, "kill").mockReturnValue(true);
+    const s1 = writeWebuiToken(home, 12345);
+    const s2 = writeWebuiToken(home, 12346);
     expect(s1.token).not.toBe(s2.token);
 
     // In single-file implementation, s2 replaced s1's file at run/webui-token.
