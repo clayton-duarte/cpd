@@ -19,6 +19,7 @@ export interface OutboxDeps {
   storage: OutboxStorage;
   send: (entry: OutboxEntry) => Promise<SendResult>;
   now: () => string;
+  canSend?: (entry: OutboxEntry) => boolean;
 }
 export interface Outbox {
   enqueue(
@@ -101,7 +102,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     try {
       if (!loaded) await ready;
       while (connection === "open") {
-        const next = sorted().find((e) => e.state === "queued" && !attempted.has(e.id));
+        const next = sorted().find((e) => e.state === "queued" && !attempted.has(e.id) && (deps.canSend?.(e) ?? true));
         if (next === undefined) break;
         attempted.add(next.id);
         settled.push(sendOne(next));

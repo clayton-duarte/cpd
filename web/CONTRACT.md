@@ -2964,7 +2964,7 @@ export interface OutboxEntry {
 }
 ```
 
-**Outbox replay on connect:** When the WebSocket transitions from `closed` or `reconnecting` to `open`, the browser fetches all `state:"queued"` entries in creation order and replays each: `session.submit`, `cockpit.action`, or `dialog.respond` with the stored payload. Entries are moved to `state:"sending"` before each send. On `session.submitAck` or `action.result` or `session.dialogResolved`, the corresponding entry is deleted from the store (success or 4xx error); on `session.error` with a 5xx-like error, the entry stays in `state:"queued"` for the next reconnect. **A `session.error` without a `clientSubmissionId`, `actionId`, or `dialogId` match** does not affect the outbox and is displayed as a cockpit error toast (11.7).
+**Outbox replay on connect:** When the WebSocket transitions from `closed` or `reconnecting` to `open`, the browser fetches all `state:"queued"` entries in creation order and replays each: `session.submit`, `cockpit.action`, or `dialog.respond` with the stored payload. Session submissions and dialog replies wait until their target is selected and `session.attached` confirms attachment; other sessions remain queued. Entries are moved to `state:"sending"` before each send. On `session.submitAck` or `action.result` or `session.dialogResolved`, the corresponding entry is deleted from the store (success or 4xx error); on `session.error` with a 5xx-like error, the entry stays in `state:"queued"` for the next reconnect. **A `session.error` without a `clientSubmissionId`, `actionId`, or `dialogId` match** does not affect the outbox and is displayed as a cockpit error toast (11.7).
 
 **Scope:** Outbox applies to composer submissions, dialog responses, and cockpit actions of inbox kind (`inbox.*`), PR kind (`pr.*`), session kind (`session.retier`), plan kind (`plan.reject`), context kind (`context.retire`), and engine kind (`engine.start`). Actions `error.report` and `logs.read` / `settings.read` / `settings.save` are not queued.
 
@@ -2982,7 +2982,7 @@ If no entry exists:
 2. Store the key and the result (ack, action result, or resolved outcome) in the dedup table.
 3. If the table exceeds 1000 entries, evict the oldest entry by `createdAt`.
 
-**Dedup key is the request id only.** A resubmission with the same id but different payload is deduplicated as the same request: the server returns the prior result, ignoring the changed payload. The client is responsible for payload idempotence (same clientSubmissionId must mean same submission).
+**Dedup keys are the operation and request id; session operations also include their session id.** A resubmission with the same id but different payload is deduplicated as the same request: the server returns the prior result, ignoring the changed payload. The client is responsible for payload idempotence (same clientSubmissionId must mean same submission).
 
 ### 34.3 Server cache headers and service-worker script
 
@@ -3096,4 +3096,4 @@ The following are decided elsewhere or deferred:
 - **HTTPS provisioning on LAN:** mkcert cert generation, device-specific CA installation, iOS profile and full-trust setup, DNS SAN and IP SAN configuration. Deferred to pro-d571.
 - **Electron IPC bridge:** Electron's preload and main-process setup is outside web/. Electron bridge location is documented in scout-seams.md §7.
 - **IndexedDB implementation and schema:** The outbox store's full implementation (create, schema, indexed columns for ordering) is deferred to pro-d591.
-- **Dedup persistence layer:** How the server persists the dedup table (in-memory, RocksDB, SQLite, etc.) is decided by the Rust engine (pro-d591) and not in web/.
+- **Dedup persistence layer:** The WebUI service owns one shared store persisted atomically in `$CPD_HOME/run/webui-dedup.json`. Successful session entries retain their acknowledgement for replay across connections and restarts. Failed actions are forgotten so a manual retry executes again. Browser request IDs use `crypto.randomUUID()` so a page reload cannot reuse an earlier outbox ID.
