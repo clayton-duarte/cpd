@@ -1199,3 +1199,36 @@ fn gh_poll_failed_deploys_commit_restarts_the_discovery_sweep() {
     rig.pass(180).unwrap();
     assert!(rig.graphql()[3].contains("authoredMore:"));
 }
+
+/// b80: a PR listed open, then gone from the search, is read once and ends merged (or closed), even behind a backlog of
+/// older tracked rows the search never lists (they would fill every confirmation slot).
+#[test]
+fn gh_poll_rereads_a_listed_pr_that_leaves_the_open_search() {
+    let mut rig = Rig::new();
+    for n in 20..32 {
+        let stale = pr(n);
+        rig.seed(&stale, true);
+        rig.state().world.insert((stale.repo.into(), n), stale);
+    }
+    let (open_merged, open_closed) = (pr(100), pr(101));
+    rig.seed(&open_merged, true);
+    rig.seed(&open_closed, true);
+    rig.state().authored = vec![open_merged.clone(), open_closed.clone()];
+    for p in [&open_merged, &open_closed] {
+        rig.state()
+            .world
+            .insert((p.repo.into(), p.number), p.clone());
+    }
+    rig.pass(0).unwrap();
+    assert_eq!(rig.pr_state(100).as_deref(), Some("open"));
+    let (mut merged, mut closed) = (open_merged, open_closed);
+    merged.state = "MERGED";
+    closed.state = "CLOSED";
+    rig.state().authored = vec![];
+    rig.state().world.insert(("acme/pay".into(), 100), merged);
+    rig.state().world.insert(("acme/pay".into(), 101), closed);
+    rig.pass(600).unwrap();
+    rig.pass(1200).unwrap();
+    assert_eq!(rig.pr_state(100).as_deref(), Some("merged"));
+    assert_eq!(rig.pr_state(101).as_deref(), Some("closed"));
+}
