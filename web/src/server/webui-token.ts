@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** contract §6.16 "The WebUI token, per server (b13)": this boot's secret, and the removal of its file. */
@@ -46,8 +46,6 @@ function sweepDeadTokens(tokensDir: string, currentPid: number): void {
   }
 }
 
-let mockPidSequence = 100000;
-
 /**
  * Creates a random secret of 32 bytes (hex) and writes it to `<cpdHome>/run/webui-tokens/<pid>.token`, mode 0600.
  * A server writes only its own file, once, at its start, sweeps files of dead pids, and removes only its own file on close.
@@ -58,14 +56,7 @@ export function writeWebuiToken(cpdHome: string, pid?: number): IssuedToken {
   const tokensDir = join(run, "webui-tokens");
   mkdirSync(tokensDir, { recursive: true });
 
-  let actualPid = pid ?? process.pid;
-  // If no pid was specified and a token already exists for this pid in this directory (e.g. running multiple calls in same test process), generate a unique pid
-  if (pid === undefined && existsSync(join(tokensDir, `${actualPid}.token`))) {
-    actualPid = ++mockPidSequence;
-    while (existsSync(join(tokensDir, `${actualPid}.token`))) {
-      actualPid = ++mockPidSequence;
-    }
-  }
+  const actualPid = pid ?? process.pid;
 
   sweepDeadTokens(tokensDir, actualPid);
 
