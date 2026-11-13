@@ -1023,3 +1023,66 @@ fn a_mark_restart_that_fails_is_printed_and_the_retirement_goes_on() {
     );
     assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
 }
+
+fn waiter_calls(rig: &Rig) -> Vec<Call> {
+    let installed = rig.installed_cpd();
+    rig.fakes
+        .runner
+        .calls()
+        .into_iter()
+        .filter(|c| Path::new(&c.program) == installed && c.args == super::follow_up::WAITER_ARGS)
+        .collect()
+}
+
+#[test]
+fn lock_timeout_hands_off_restart_waiter() {
+    // time-claim: the old engine holds 600 virtual seconds, well past DEFAULT_LOCK_WAIT.
+    let rig = Rig::with(Script {
+        kill: Kill::HoldsFor(Duration::from_secs(600)),
+        ..Script::default()
+    });
+    rig.running_old_engine();
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 1, "install_failed still: {}", run.stderr);
+    assert!(
+        run.stderr.contains("the old engine still holds "),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(
+        waiter_calls(&rig).len(),
+        1,
+        "one detached waiter is spawned"
+    );
+    assert!(
+        !rig.follow_ups().contains(&"watch --ensure".to_owned()),
+        "the install itself does not start the engine"
+    );
+    let state = fs::read_to_string(rig.install.cpd_home.run_dir().join("cpd-install.json"))
+        .expect("cpd-install.json is written");
+    let state: serde_json::Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(state["status"], "restarting", "{state}");
+}
+
+#[test]
+fn restart_waiter_runs_ensure_once_when_lock_frees() {
+    let rig = Rig::new();
+    rig.running_old_engine();
+    rig.old
+        .release_at(Duration::from_secs(90), rig.fakes.clock.elapsed());
+
+    super::follow_up::restart_waiter(&rig.ports, &rig.install, &rig.installed_cpd());
+
+    let ensures = rig
+        .follow_ups()
+        .into_iter()
+        .filter(|c| c == "watch --ensure")
+        .count();
+    assert_eq!(ensures, 1, "exactly one `cpd watch --ensure`");
+    assert!(
+        rig.fakes.clock.elapsed() >= Duration::from_secs(90),
+        "it waited for the lock on the clock"
+    );
+}
