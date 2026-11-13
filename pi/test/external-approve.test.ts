@@ -134,3 +134,20 @@ test("a dialog needs a UI", async (t) => {
     assert.equal(f.pi.dialogs.length, 0);
   }
 });
+
+test("an aborted cpd_external_approve call dismisses its dialog and closes the blocked fact", async (t) => {
+  const { f, host, tool } = setup(t, "lead");
+  const opened = () => (host.run!.facts as unknown as { opened: unknown[] }).opened;
+  const ac = new AbortController();
+  const running = need(tool).execute("call-1", POST, ac.signal, undefined, undefined as never);
+  const d = await waitForDialog("approval dialog", () => f.pi.openDialog("select"));
+  assert.ok(d, "the dialog is open");
+  assert.equal(opened().length, 1, "the blocked fact is open");
+  ac.abort();
+  const out = await Promise.race([running.then(() => "settled"), Promise.resolve().then(() => "pending")]);
+  assert.equal(d.settled, true, "the aborted call dismissed its dialog");
+  assert.equal(opened().length, 0, "the blocked fact is closed");
+  d.answer("Deny");
+  await running;
+  assert.equal(out, "settled");
+});
