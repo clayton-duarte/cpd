@@ -692,6 +692,22 @@ pub(super) fn run() -> Result<Output, CpdError> {
     serve(&Ports::real(), &home, &STOP, catch_signals)
 }
 
+/// Writes `run/watch-stopped`: when this engine stopped, RFC 3339 UTC (the inbox reads it as "down since").
+fn write_stop_stamp(engine: &mut Engine) {
+    use time::format_description::well_known::Rfc3339;
+    let path = cpd_core::inbox::model::engine_stop_stamp(&engine.home);
+    let at = engine.ports.clock.utc().to_offset(time::UtcOffset::UTC);
+    let written = at
+        .format(&Rfc3339)
+        .map_err(|e| e.to_string())
+        .and_then(|t| std::fs::write(&path, format!("{t}\n")).map_err(|e| e.to_string()));
+    if let Err(e) = written {
+        engine
+            .log
+            .line(&format!("cannot write the stop stamp: {e}"));
+    }
+}
+
 /// The engine's life: lock, `watch-started`, ticks until `until`, `watch-stopped`. `catch` runs once the store is
 /// open, where the signal handlers are put in.
 fn serve(
@@ -714,6 +730,8 @@ fn serve(
     )?;
     catch()?;
     let pid = std::process::id();
+    // A running engine is not down: the previous stop's stamp goes.
+    let _ = std::fs::remove_file(cpd_core::inbox::model::engine_stop_stamp(home));
     // What the previous engine left, read before this one's `watch-started` hides it.
     let marker = consume_marker_with(clock, home, &mut log);
     let down = Downtime::since_previous_with(clock, &mut store, &lock, lock_existed, marker)?;
@@ -821,6 +839,7 @@ fn serve(
     }
     engine.log.line("stopping on a signal");
     pr::finish(&mut engine);
+    write_stop_stamp(&mut engine);
     // `watch-stopped` is not lost to a busy store: it waits for as long as that lasts.
     engine.store.persist(persist(&engine.home, || false)?);
     if let Err(e) = watch_event(

@@ -106,9 +106,10 @@ pub(super) fn reap(engine: &mut Engine) {
     apply(engine, finished);
 }
 
-/// At stop: waits for a running poll and applies it.
+/// At stop: waits at most 5 s for a running poll and applies it; a poll still stuck is abandoned.
 pub(super) fn finish(engine: &mut Engine) {
-    let Some(finished) = engine.poll.as_mut().and_then(PollRun::wait) else {
+    let clock = engine.ports.clock.clone();
+    let Some(finished) = engine.poll.as_mut().and_then(|p| p.shutdown(clock)) else {
         return;
     };
     engine.poll = None;
@@ -118,7 +119,7 @@ pub(super) fn finish(engine: &mut Engine) {
 /// At a stand-down: waits for a running poll and drops its result, applying nothing.
 pub(super) fn discard(engine: &mut Engine) {
     if let Some(mut poll) = engine.poll.take() {
-        let _ = poll.wait();
+        let _ = poll.shutdown(engine.ports.clock.clone());
     }
 }
 
