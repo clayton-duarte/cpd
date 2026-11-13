@@ -233,3 +233,12 @@ pub fn settle(
         Ok::<(), CpdError>(())
     })
 }
+
+/// Settle every `revalidating` mutation completed at or before `poll_started_at`, whatever its
+/// target key (a poll that started after the completion has seen the write; no key refetch needed).
+pub fn settle_completed(
+    _store: &mut Store,
+    _poll_started_at: OffsetDateTime,
+) -> Result<usize, CpdError> {
+    Ok(0)
+}

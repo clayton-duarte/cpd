@@ -237,3 +237,52 @@ fn swr_freshness_respects_stale_time_and_infinity() {
         t0 + Duration::from_secs(10 * 365 * 24 * 3600)
     ));
 }
+
+fn mutation(store: &mut Store, target: &str, completed: OffsetDateTime) {
+    store
+        .write("test mutation", |tx| {
+            tx.execute(
+                "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, completed_at)
+                 VALUES ('github', ?1, 'describe', '{}', 'revalidating', ?2)",
+                rusqlite::params![target, timestamp(completed)],
+            )?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn revalidating_mutations_settle_at_poll_started_not_key_refetch() {
+    let (_dir, mut store) = store();
+    let clock = ManualClock::new();
+    let done = clock.utc();
+    // Targets never refetched: invalidated, never committed (a PR outside the poll scope).
+    let (a, b) = ("github:pr:acme/api#1", "github:pr:acme/api#2");
+    mutation(&mut store, a, done);
+    mutation(&mut store, b, done);
+    cache::invalidate(&mut store, a).unwrap();
+    let later = after(&clock, 60);
+    mutation(&mut store, "github:pr:acme/api#3", later);
+
+    // A poll that started before every completion settles nothing.
+    let n = cache::settle_completed(&mut store, done - Duration::from_secs(1)).unwrap();
+    assert_eq!(n, 0);
+    // A poll that started after the first two completions settles exactly those, any key.
+    let n = cache::settle_completed(&mut store, done + Duration::from_secs(1)).unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(
+        int(
+            &mut store,
+            "SELECT count(*) FROM swr_mutations WHERE status = 'done'"
+        ),
+        2
+    );
+    assert_eq!(
+        int(
+            &mut store,
+            "SELECT count(*) FROM swr_mutations WHERE status = 'revalidating'"
+        ),
+        1,
+        "a mutation completed after the poll started stays revalidating"
+    );
+}
