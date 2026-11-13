@@ -446,15 +446,48 @@ pub(crate) fn coverage_check(
         "SELECT base_sha, report FROM refactor_coverage_baselines WHERE plan = ?1 AND workflow = ?2",
         [plan.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))
     ).optional()?))?;
-    let (base, report) = stored.ok_or_else(|| {
+    let (mut base, report) = stored.ok_or_else(|| {
         CpdError::new(
             ErrorCode::CoverageBelowBaseline,
             "Coverage baseline was not captured at workflow creation.",
         )
     })?;
-    let baseline: crate::workflow::CoverageReport = serde_json::from_str(&report)
+    let mut baseline: crate::workflow::CoverageReport = serde_json::from_str(&report)
         .map_err(|e| CpdError::bad_row(format!("invalid coverage baseline: {e}")))?;
     let repo = std::path::Path::new(&workflow.repo);
+    // Refresh only after an amended base is incorporated in the refactor branch.
+    let base_ref = crate::git::run::run(repo, &["rev-parse", "--verify", &workflow.base])?;
+    if base_ref.code == 0 {
+        let candidate = base_ref.stdout.trim();
+        let descendant =
+            crate::git::run::run(repo, &["merge-base", "--is-ancestor", &base, candidate])?;
+        let incorporated =
+            crate::git::run::run(repo, &["merge-base", "--is-ancestor", candidate, sha])?;
+        if !matches!(descendant.code, 0 | 1) || !matches!(incorporated.code, 0 | 1) {
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                "Could not check coverage baseline ancestry.",
+            ));
+        }
+        if candidate != base && descendant.code == 0 && incorporated.code == 0 {
+            baseline =
+                crate::workflow::measure_coverage(repo, plan, &workflow.key, candidate, command)?;
+            let json =
+                serde_json::to_string(&baseline).map_err(|e| CpdError::bad_row(e.to_string()))?;
+            let previous = base.clone();
+            store.write("coverage check", |tx| {
+                let changed = tx.execute(
+                    "UPDATE refactor_coverage_baselines SET base_sha = ?3, report = ?4 WHERE plan = ?1 AND workflow = ?2 AND base_sha = ?5",
+                    rusqlite::params![plan.as_str(), workflow.key.as_str(), candidate, json, previous],
+                )?;
+                if changed != 1 {
+                    return Err(CpdError::new(ErrorCode::CasLost, "Coverage baseline changed during refresh; retry."));
+                }
+                Ok(())
+            })?;
+            base = candidate.to_owned();
+        }
+    }
     let current = crate::workflow::measure_coverage(repo, plan, &workflow.key, sha, command)?;
     let touched = crate::git::tamper::changed_paths(repo, &base, sha)?;
     let removed = crate::workflow::absent_paths(repo, sha, &touched)?;

@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 136
+-- cpd-migration: breaking after 138
 -- Allow the coverage and refactor workflow shapes.
 CREATE TABLE workflows_new (
   plan               TEXT NOT NULL REFERENCES plans(id),
@@ -25,6 +25,7 @@ CREATE TABLE workflows_new (
   description        TEXT CHECK (description IS NULL OR length(description) BETWEEN 1 AND 65536),
   jira               TEXT,
   repair             TEXT CHECK (repair IS NULL OR json_valid(repair)),
+  bug_id             TEXT REFERENCES bug_records(id),
   PRIMARY KEY (plan, key),
   UNIQUE (plan, lead_branch),
   CHECK ((status IN ('waiting', 'cancelled')) = (lead_worktree IS NULL)),
@@ -37,10 +38,10 @@ CREATE TABLE workflows_new (
 ) STRICT;
 INSERT INTO workflows_new (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                            pull_request, all_merged_at, start_failed_at, created_txn, created_at, started_at, merged_at,
-                           name, title, shape, head_ref, description, jira, repair)
+                           name, title, shape, head_ref, description, jira, repair, bug_id)
   SELECT plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
          pull_request, all_merged_at, start_failed_at, created_txn, created_at, started_at, merged_at,
-         name, title, shape, head_ref, description, jira, repair
+         name, title, shape, head_ref, description, jira, repair, bug_id
   FROM workflows;
 DROP TABLE workflows;
 ALTER TABLE workflows_new RENAME TO workflows;

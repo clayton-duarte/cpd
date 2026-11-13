@@ -56,54 +56,8 @@ fn push_held(args: Args) -> Result<Output, CpdError> {
             &[workflow.base.as_str()],
         )
     })?;
-    if workflow.shape == "refactor"
-        && let Some(command) = &policy.coverage_commands.measure
-    {
-        let repo = std::path::Path::new(&workflow.repo);
-        use rusqlite::OptionalExtension;
-        let stored: Option<(String, String)> = env.store.read(|conn| {
-            Ok(conn.query_row("SELECT base_sha, report FROM refactor_coverage_baselines WHERE plan = ?1 AND workflow = ?2", [id.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
-        })?;
-        let (mut baseline_sha, report) = stored.ok_or_else(|| {
-            CpdError::new(
-                ErrorCode::CoverageBelowBaseline,
-                "Coverage baseline was not captured at workflow creation.",
-            )
-        })?;
-        let mut baseline: crate::workflow::CoverageReport = serde_json::from_str(&report)
-            .map_err(|e| CpdError::bad_row(format!("invalid coverage baseline: {e}")))?;
-        // Refresh only after an amended base is incorporated in the refactor branch.
-        let base_ref = git::run::run(repo, &["rev-parse", "--verify", &workflow.base])?;
-        if base_ref.code == 0 {
-            let candidate = base_ref.stdout.trim();
-            let descendant = git::run::run(
-                repo,
-                &["merge-base", "--is-ancestor", &baseline_sha, candidate],
-            )?;
-            let incorporated =
-                git::run::run(repo, &["merge-base", "--is-ancestor", candidate, &sha])?;
-            if !matches!(descendant.code, 0 | 1) || !matches!(incorporated.code, 0 | 1) {
-                return Err(CpdError::new(
-                    ErrorCode::GitFailed,
-                    "Could not check coverage baseline ancestry.",
-                ));
-            }
-            if candidate != baseline_sha && descendant.code == 0 && incorporated.code == 0 {
-                baseline = crate::workflow::measure_coverage(repo, &id, &key, candidate, command)?;
-                let json = serde_json::to_string(&baseline)
-                    .map_err(|e| CpdError::bad_row(e.to_string()))?;
-                env.store.write(COMMAND, |tx| {
-                    let changed = tx.execute("UPDATE refactor_coverage_baselines SET base_sha = ?3, report = ?4 WHERE plan = ?1 AND workflow = ?2 AND base_sha = ?5", rusqlite::params![id.as_str(), key.as_str(), candidate, json, baseline_sha])?;
-                    if changed != 1 { return Err(CpdError::new(ErrorCode::CasLost, "Coverage baseline changed during refresh; retry.")); }
-                    Ok(())
-                })?;
-                baseline_sha = candidate.to_owned();
-            }
-        }
-        let _ = (baseline, baseline_sha);
-        // Measured here, once per push: the local Gate below does not measure it again.
-        super::coverage_gate(&env, &policy, &id, workflow, &sha)?;
-    }
+    // Measured here, once per push: the local Gate below does not measure it again.
+    super::coverage_gate(&env, &policy, &id, workflow, &sha)?;
     if policy.gate.workflow == Gate::Local {
         require_clean_lead(&lead, &id, workflow)?;
         git::sync_lead(&lead, &branch)?;

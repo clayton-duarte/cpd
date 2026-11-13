@@ -343,6 +343,36 @@ mod tests {
         );
     }
 
+    /// An amended base incorporated in the refactor branch replaces the baseline in the shared coverage check,
+    /// so the amended (higher) baseline is the one enforced.
+    #[test]
+    fn an_incorporated_amended_base_refreshes_and_enforces_the_baseline() {
+        let fx = fixture("grounding");
+        fx.green_coverage("cov");
+        fx.measure_with_mock(&[
+            r#"{"line": 80.0, "branch": 70.0}"#,
+            r#"{"line": 95.0, "branch": 85.0}"#,
+            r#"{"line": 90.0, "branch": 80.0}"#,
+        ]);
+        fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
+            .ok();
+        fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay-1'; UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch', lead_worktree = '/tmp/lead', started_at = 't' WHERE plan = 'pay-1';");
+        fx.git(&fx.repo, &["checkout", "-q", "pay-1/cov"]);
+        fx.commit_file(&fx.repo, "src/amend.rs", "amended", "amend the base");
+        let amended = fx.git(&fx.repo, &["rev-parse", "pay-1/cov"]);
+        fx.git(&fx.repo, &["checkout", "-q", "-b", "pay-1/refact"]);
+        fx.commit_file(&fx.repo, "src/lib.rs", "implementation", "refactor");
+
+        let run = fx.cpd(&["pr", "push", "--workflow", "refact", "--plan", "pay-1"]);
+        common::refused(&run, "coverage_below_baseline", 3);
+        let (sha, report) = fx.baseline("refact");
+        assert_eq!(sha, amended, "the baseline follows the incorporated base");
+        assert!(
+            report.contains("95"),
+            "the amended baseline is stored: {report}"
+        );
+    }
+
     /// Renaming an instrumented file while lowering its coverage is refused: the new path inherits the old path's baseline.
     #[test]
     fn renaming_an_instrumented_file_below_its_baseline_fails_gate() {
