@@ -41,8 +41,6 @@ pub(super) trait Boundary {
     ) -> Result<String, CpdError>;
 }
 
-/// Re-seal a Job's fingerprint when only recorded replace-test redirects of
-/// its needs explain the drift; refuse otherwise (`reseal_unexplained`).
 /// True when the Job's Attempt was stopped for a test replacement (a pending or
 /// complete intent exists): the driver's A9 cleanup must then keep the Lead
 /// Branch on the Worker's commit instead of resetting it to `base_sha` (b63).
@@ -58,8 +56,26 @@ pub(crate) fn stopped_for_replacement(
     )?)
 }
 
-pub(super) fn reseal(env: &mut Env, plan: &PlanId, key: &str) -> Result<(), CpdError> {
+/// Re-seal a Job's fingerprint when only recorded replace-test redirects of
+/// its needs explain the drift; refuse otherwise (`reseal_unexplained`).
+pub(super) fn reseal(
+    env: &mut Env,
+    plan: &PlanId,
+    key: &str,
+    requester: &str,
+) -> Result<(), CpdError> {
     env.store.write("job reseal", |tx| {
+        let lead: Option<String> = tx.query_row(
+            "SELECT lead_session FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )?;
+        if lead.as_deref() != Some(requester) {
+            return Err(CpdError::new(
+                ErrorCode::NotALead,
+                "Only the Plan's Lead can reseal a Job.",
+            ));
+        }
         let all = jobs::load(tx, plan)?;
         let job = all
             .iter()
@@ -72,25 +88,44 @@ pub(super) fn reseal(env: &mut Env, plan: &PlanId, key: &str) -> Result<(), CpdE
         if stored == found {
             return Ok(());
         }
-        // Undo every completed redirect (new key back to its source); the
-        // drift is explained only if that reproduces the sealed value.
-        let mut redirects: Vec<(String, String)> = Vec::new();
+        // The Job may have been sealed at any point along each need's redirect
+        // chain: try every combination of rewinds and accept one that
+        // reproduces the sealed value.
+        let mut sources: Vec<(String, String)> = Vec::new();
         {
             let mut s = tx.prepare("SELECT new_key, source FROM test_replacements WHERE plan = ?1 AND state = 'complete'")?;
             let rows = s.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?;
             for row in rows {
-                redirects.push(row?);
+                sources.push(row?);
             }
         }
-        let mut before = job.clone();
-        for _ in 0..=redirects.len() {
-            for need in &mut before.needs {
-                if let Some((_, source)) = redirects.iter().find(|(n, _)| n == need) {
-                    *need = source.clone();
+        let chains: Vec<Vec<String>> = job
+            .needs
+            .iter()
+            .map(|need| {
+                let mut chain = vec![need.clone()];
+                while let Some((_, source)) = sources.iter().find(|(n, _)| Some(n) == chain.last()) {
+                    if chain.contains(source) {
+                        break;
+                    }
+                    chain.push(source.clone());
                 }
-            }
+                chain
+            })
+            .collect();
+        let mut candidates: Vec<Vec<String>> = vec![Vec::new()];
+        for chain in &chains {
+            candidates = candidates
+                .iter()
+                .flat_map(|c| chain.iter().map(move |n| [c.clone(), vec![n.clone()]].concat()))
+                .collect();
         }
-        if before.needs == job.needs || jobs::locked_fingerprint(&before) != stored {
+        let explained = candidates.into_iter().any(|needs| {
+            let mut before = job.clone();
+            before.needs = needs;
+            before.needs != job.needs && jobs::locked_fingerprint(&before) == stored
+        });
+        if !explained {
             return Err(CpdError::new(
                 ErrorCode::LockedJobTampered,
                 format!("Job {key} fingerprint drift is not explained by a recorded replace-test redirect (reseal_unexplained)."),
@@ -109,8 +144,8 @@ pub(super) fn reseal(env: &mut Env, plan: &PlanId, key: &str) -> Result<(), CpdE
 pub(super) fn reseal_command(args: super::ResealArgs) -> Result<crate::output::Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    caller(&mut env, &plan)?;
-    reseal(&mut env, &plan, args.key.as_str())?;
+    let requester = caller(&mut env, &plan)?;
+    reseal(&mut env, &plan, args.key.as_str(), &requester)?;
     Ok(crate::output::Output::success(
         json!({"key": args.key, "fields": ["fingerprint"]}),
     ))

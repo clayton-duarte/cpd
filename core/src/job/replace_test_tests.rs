@@ -504,7 +504,8 @@ fn reseal_repairs_replace_test_redirect_drift() {
     // The drift of bug b62: the redirect left the sealed value behind.
     f.set_fingerprint("impl", &sealed);
     let plan = PlanId::parse("pay").unwrap();
-    replace_test::reseal(&mut f.env, &plan, "impl").expect("redirect-only drift is repaired");
+    replace_test::reseal(&mut f.env, &plan, "impl", "lead-pay")
+        .expect("redirect-only drift is repaired");
     let (stored, found) = f.fingerprint_of("impl");
     assert_eq!(stored.as_deref(), Some(found.as_str()));
 }
@@ -524,7 +525,7 @@ fn reseal_refuses_unexplained_drift() {
         })
         .unwrap();
     let before = f.fingerprint_of("impl").0;
-    assert!(replace_test::reseal(&mut f.env, &plan, "impl").is_err());
+    assert!(replace_test::reseal(&mut f.env, &plan, "impl", "lead-pay").is_err());
     assert_eq!(
         f.fingerprint_of("impl").0,
         before,
@@ -562,5 +563,66 @@ fn replace_test_validates_selectors_on_worker_commit() {
     assert!(!f.io.validations.is_empty());
     for (_, tip) in &f.io.validations {
         assert_eq!(tip, &f.commit, "validated off the Worker's commit");
+    }
+}
+
+#[test]
+fn reseal_reconstructs_needs_at_sealing_point() {
+    let mut f = Fixture::repetition();
+    let plan = PlanId::parse("pay").unwrap();
+    // old-tests was replaced by mid before impl sealed; mid by final after.
+    f.env
+        .store
+        .write("fixture chain", |tx| {
+            tx.execute_batch(
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, tests, test_files, resources, created_txn, created_at)
+                   SELECT plan, workflow, 'mid', title, tier, goal, context, touches, acceptance, out_of_scope, kind, 'queued', appended, fingerprint, tests, test_files, resources, cpd_txn(), created_at FROM jobs WHERE key = 'old-tests';
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, tests, test_files, resources, created_txn, created_at)
+                   SELECT plan, workflow, 'final', title, tier, goal, context, touches, acceptance, out_of_scope, kind, 'queued', appended, fingerprint, tests, test_files, resources, cpd_txn(), created_at FROM jobs WHERE key = 'old-tests';
+                 UPDATE dependencies SET needs = 'mid' WHERE job = 'impl';
+                 INSERT INTO test_replacements (plan, source, new_key, request, state, created_txn)
+                   VALUES ('pay', 'old-tests', 'mid', '{}', 'complete', cpd_txn()),
+                          ('pay', 'mid', 'final', '{}', 'complete', cpd_txn());",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    f.seal();
+    let sealed = f.fingerprint_of("impl").0.unwrap();
+    f.env
+        .store
+        .write("fixture redirect", |tx| {
+            tx.execute(
+                "UPDATE dependencies SET needs = 'final' WHERE job = 'impl'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    f.set_fingerprint("impl", &sealed);
+    replace_test::reseal(&mut f.env, &plan, "impl", "lead-pay")
+        .expect("only the mid-to-final redirect explains the drift");
+    let (stored, found) = f.fingerprint_of("impl");
+    assert_eq!(stored.as_deref(), Some(found.as_str()));
+}
+
+#[test]
+fn reseal_refuses_a_non_lead_requester() {
+    let mut f = Fixture::repetition();
+    f.seal();
+    let sealed = f.fingerprint_of("impl").0.unwrap();
+    f.run().expect("replace-test succeeds");
+    f.set_fingerprint("impl", &sealed);
+    let plan = PlanId::parse("pay").unwrap();
+    let before = f.fingerprint_of("impl").0;
+    for requester in ["lead-other", "nobody"] {
+        let err = replace_test::reseal(&mut f.env, &plan, "impl", requester)
+            .expect_err("a non-Lead cannot reseal");
+        assert_eq!(err.code(), ErrorCode::NotALead);
+        assert_eq!(
+            f.fingerprint_of("impl").0,
+            before,
+            "refusal changes nothing"
+        );
     }
 }
