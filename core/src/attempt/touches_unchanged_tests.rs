@@ -148,6 +148,19 @@ fn a_base_merge_does_not_satisfy_a_declared_touch() {
     assert_eq!(e.details()["paths"], json!(["src/from_base.rs"]));
 }
 
+/// A Job that deliberately reverts an earlier Job's file to the base branch's version (it deletes a file the Lead
+/// Branch added and `main` lacks) has changed the declared path: it is accepted without a waiver.
+#[test]
+fn deleting_a_file_an_earlier_job_added_satisfies_the_touch() {
+    let mut r = rig(Spec {
+        touches: "[\"declared.txt\"]",
+        lead_only: &[("declared.txt", "earlier\n")],
+        deleted: &["declared.txt"],
+        ..Spec::default()
+    });
+    r.submit().expect("the reversion is the Job's own change");
+}
+
 /// A waiver is its own field: it never authorises a write outside the touches, even a waived directory.
 #[test]
 fn a_waiver_does_not_authorise_an_out_of_scope_write() {
