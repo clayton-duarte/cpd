@@ -79,8 +79,16 @@ test("pi records answer.parse_failed for a malformed answer file", async () => {
 	await run("{not json", (_f, line) => lines.push(JSON.parse(line) as Line), false);
 	const failed = lines.find((l) => l.event === "answer.parse_failed");
 	assert.ok(failed, `events: ${lines.map((l) => l.event).join(",")}`);
-	assert.equal(typeof failed.message, "string");
+	assert.equal(failed.error, "json_syntax");
 	assert.ok(!JSON.stringify(failed).includes(SECRET));
+});
+
+test("answer.parse_failed never quotes sensitive text from a malformed file", async () => {
+	const lines: Line[] = [];
+	await run(`{"result":{"answers":[{"answer":${SECRET}}]}}`, (_f, line) => lines.push(JSON.parse(line) as Line), false);
+	const failed = lines.find((l) => l.event === "answer.parse_failed");
+	assert.ok(failed, "parse_failed recorded");
+	assert.ok(!lines.some((l) => JSON.stringify(l).includes(SECRET)), "no answer text in the log");
 });
 
 test("a failing diagnostic write does not change the poll result", async () => {

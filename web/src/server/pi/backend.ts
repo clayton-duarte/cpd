@@ -400,15 +400,25 @@ export function createPiBackend(deps: {
             try {
               await nodeFs.stat(askPath);
               await nodeFs.rm(askPath, { force: true });
-              diag("respond.escape_sent");
-              const shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
+              let shown: Record<string, unknown>;
+              try {
+                shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
+              } catch (error) {
+                diag("respond.escape_failed", { reason: "lookup_failed" });
+                throw error;
+              }
               const pane =
                 typeof (shown["session"] as Record<string, unknown> | undefined)?.["tmux_pane"] === "string"
                   ? ((shown["session"] as Record<string, unknown>)["tmux_pane"] as string)
                   : null;
-              if (pane !== null) {
+              if (pane === null) {
+                diag("respond.escape_failed", { reason: "no_pane" });
+              } else {
                 await new Promise<void>((resolve) => {
-                  execFile("tmux", ["send-keys", "-t", pane, "Escape"], () => resolve());
+                  execFile("tmux", ["send-keys", "-t", pane, "Escape"], (error) => {
+                    diag(error ? "respond.escape_failed" : "respond.escape_sent", error ? { reason: "send_failed" } : {});
+                    resolve();
+                  });
                 });
               }
               if (response.outcome === "answered") {

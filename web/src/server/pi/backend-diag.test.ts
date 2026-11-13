@@ -53,9 +53,9 @@ const watch: WatchBoundary = { watch: (): Disposable => ({ dispose: () => undefi
 const git: GitBoundary = { branch: () => Promise.resolve("main") };
 const ref: SessionRef = { id: "s1", key: "ctx:plan:job", runner: "pi", role: "worker", state: "working", title: "t", file: FILE, tier: "S3", cwd: "/repo" };
 
-async function setup(diag: (r: Record<string, unknown>) => void) {
+async function setup(diag: (r: Record<string, unknown>) => void, useCpd: Cpd = cpd) {
   const backend = createPiBackend({
-    cpd, fs: fakeFs(), watch, git, cpdHome: "/home/cpd", attachmentsDir: "/att", now: () => Date.UTC(2026, 0, 15, 12), scheduler: new FakeScheduler(), diag,
+    cpd: useCpd, fs: fakeFs(), watch, git, cpdHome: "/home/cpd", attachmentsDir: "/att", now: () => Date.UTC(2026, 0, 15, 12), scheduler: new FakeScheduler(), diag,
   });
   return backend.attach({ ref, file: FILE, tierOptions: ["S1", "S2", "S3"] }, () => undefined);
 }
@@ -101,6 +101,37 @@ describe("ask answer diagnostics (web)", () => {
     expect(rs.find((r) => r.event === "respond.escape_sent")).toMatchObject({ side: "web", session: "s1", dialogId: "call:q1" });
     expect(JSON.stringify(rs)).not.toContain(SECRET);
     await h.dispose();
+  });
+
+  const escapeOutcome = async (useCpd: Cpd) => {
+    const rs: Record<string, unknown>[] = [];
+    const h = await setup((r) => rs.push(r), useCpd);
+    await h.respond("call:q1", ANSWER);
+    await vi.advanceTimersByTimeAsync(350);
+    await h.dispose();
+    expect(JSON.stringify(rs)).not.toContain(SECRET);
+    return rs.filter((r) => String(r.event).startsWith("respond.escape"));
+  };
+
+  it("records escape_failed when the session lookup rejects", async () => {
+    const out = await escapeOutcome({ json: () => Promise.reject(new Error("down")) });
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ event: "respond.escape_failed", reason: "lookup_failed", session: "s1" });
+    expect(mocks.execFile).not.toHaveBeenCalled();
+  });
+
+  it("records escape_failed when the session has no tmux pane", async () => {
+    const out = await escapeOutcome({ json: () => Promise.resolve({ ok: true, session: {} }) });
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ event: "respond.escape_failed", reason: "no_pane" });
+    expect(mocks.execFile).not.toHaveBeenCalled();
+  });
+
+  it("records escape_failed when tmux send-keys errors", async () => {
+    mocks.execFile.mockImplementation((_c: string, _a: string[], cb: (e: Error) => void) => cb(new Error("no server")));
+    const out = await escapeOutcome(cpd);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ event: "respond.escape_failed", reason: "send_failed" });
   });
 
   it("a throwing diagnostic sink does not change the respond result", async () => {

@@ -353,7 +353,8 @@ async function mountQuestionnaire(config: {
 						resolve(parsed.result);
 					}
 				} catch (error) {
-					diag("answer.parse_failed", { message: error instanceof Error ? error.message : String(error) });
+					// Never log the exception message: JSON.parse errors can quote the answer text.
+					diag("answer.parse_failed", { error: error instanceof SyntaxError ? "json_syntax" : "read_or_parse" });
 					// ignore transient read/parse errors
 				}
 			}, 120);
