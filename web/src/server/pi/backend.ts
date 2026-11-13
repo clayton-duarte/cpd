@@ -338,13 +338,6 @@ export function createPiBackend(deps: {
       listModels: () => Promise.reject(unsupported(REASON.model)),
       async respond(dialogId, response) {
         if (response.method === "ask_user_question") {
-          openQuestions.delete(dialogId);
-          out({
-            type: "session.dialogResolved",
-            sessionId,
-            dialogId,
-            outcome: response.outcome === "answered" ? "answered" : "cancelled",
-          });
           const askPath = `${deps.cpdHome}/run/ask/${sessionId}.json`;
           const payload = {
             dialogId,
@@ -353,15 +346,19 @@ export function createPiBackend(deps: {
                 ? response.result
                 : { answers: [], cancelled: true },
           };
-          try {
-            await nodeFs.mkdir(nodePath.dirname(askPath), { recursive: true });
-          } catch {
-            // ignore
-          }
           await deps.fs.write(
             askPath,
             new TextEncoder().encode(JSON.stringify(payload)),
           );
+          // The file boundary creates parent directories. Only acknowledge
+          // delivery once its write succeeds, so failures leave the dialog open.
+          openQuestions.delete(dialogId);
+          out({
+            type: "session.dialogResolved",
+            sessionId,
+            dialogId,
+            outcome: response.outcome === "answered" ? "answered" : "cancelled",
+          });
           void (async () => {
             await new Promise((r) => setTimeout(r, 350));
             try {

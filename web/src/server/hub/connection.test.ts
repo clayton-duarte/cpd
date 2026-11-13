@@ -253,6 +253,24 @@ describe("hub connection", () => {
     expect((t.sent[1] as { clientSubmissionId?: string }).clientSubmissionId).toBeUndefined();
   });
 
+  it("reports a dialog delivery failure and forwards a retry to the same session", async () => {
+    const t = setup();
+    await t.hub.handle({ type: "session.attach", sessionId: "pi-1" });
+    const handle = t.pi.attaches[0]?.handle as FakeHandle;
+    const response = { method: "ask_user_question", outcome: "cancelled" };
+    handle.failWith = new Error("disk full");
+    await t.hub.handle(sessionMsg("dialog.respond", { dialogId: "call:q1", response }));
+    expect(t.sent).toMatchObject([
+      { type: "session.error", sessionId: "pi-1", error: { code: "internal", message: "disk full" } },
+    ]);
+    handle.failWith = null;
+    await t.hub.handle(sessionMsg("dialog.respond", { dialogId: "call:q1", response }));
+    expect(handle.calls.filter(([name]) => name === "respond")).toEqual([
+      ["respond", "call:q1", response], ["respond", "call:q1", response],
+    ]);
+    expect(t.sent).toHaveLength(1);
+  });
+
   describe("/q and /quit (decision pro-d406)", () => {
     const planTree = () => {
       const lead = { ref: { ...refOf("lead-1", "pi"), role: "lead" }, contextId: "c1", planId: "p1", jobKey: null, archived: false, dot: { state: "idle", attention: null } };
