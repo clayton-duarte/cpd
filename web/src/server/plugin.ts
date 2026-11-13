@@ -145,6 +145,8 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
       createDurableBackend({
         connect: (socketPath) => connectHost(socketPath, { factory: b.socketFactory, scheduler: b.scheduler, ...(b.webuiToken === undefined ? {} : { webuiToken: b.webuiToken }) }),
         cpd,
+        fs: b.fs,
+        cpdHome: b.cpdHome,
         git: b.git,
         scheduler: b.scheduler,
       }),
