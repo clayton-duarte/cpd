@@ -674,6 +674,50 @@ fn gh_poll_keeps_cached_data_when_the_call_fails() {
     assert_eq!(row.error_count, 1, "the failure is the endpoint's");
 }
 
+fn rate_limit_failure_with_reset(reset_seconds: Option<i64>) -> Rig {
+    let mut rig = Rig::new();
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    if let Some(seconds) = reset_seconds {
+        let reset = rig.t0 + time::Duration::seconds(seconds);
+        endpoint::record_rate(&mut rig.store, "github", 4000, reset).unwrap();
+    } else {
+        rig.sql("UPDATE swr_endpoints SET rate_reset_at=NULL WHERE endpoint='github'");
+    }
+    rig.state().fail = Some(Reply::exit(1, "", "API rate limit exceeded"));
+    let error = rig.pass(10).unwrap_err();
+    assert_eq!(error.details()["rate_limited"], true);
+    rig
+}
+
+#[test]
+fn gh_rate_limit_expired_or_missing_reset_uses_a_future_fallback() {
+    for reset in [Some(-60), Some(7), None] {
+        let mut rig = rate_limit_failure_with_reset(reset);
+        let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+        assert_eq!(
+            row.paused_until,
+            Some(rig.t0 + Duration::from_secs(10 + 15 * 60)),
+            "a stale deadline must not immediately unpause the source"
+        );
+        let calls = rig.graphql().len();
+        rig.pass(11).unwrap();
+        assert_eq!(
+            rig.graphql().len(),
+            calls,
+            "cooldown makes no upstream call"
+        );
+        assert_eq!(rig.pr_state(1).as_deref(), Some("open"));
+    }
+}
+
+#[test]
+fn gh_rate_limit_future_reset_keeps_its_grace_deadline() {
+    let mut rig = rate_limit_failure_with_reset(Some(60));
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(row.paused_until, Some(rig.t0 + Duration::from_secs(63)));
+}
+
 #[test]
 fn gh_poll_head_ref_oid_goes_through_the_runner() {
     let fakes = Fakes::new();

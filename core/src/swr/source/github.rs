@@ -293,7 +293,7 @@ impl GithubSource {
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
-    /// until its stored reset plus the grace (or [`RATE_LIMITED_PAUSE`] when none is known) and is returned to E5, which
+    /// until its future stored reset plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
     /// pauses its own poll; it is not an error.
     fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
         let flag = |name: &str| {
@@ -306,6 +306,7 @@ impl GithubSource {
             let until = endpoint::get(cx.store, "github")?
                 .and_then(|row| row.rate_reset_at)
                 .map(|reset| reset + RATE_GRACE)
+                .filter(|until| *until > now)
                 .unwrap_or(now + RATE_LIMITED_PAUSE);
             endpoint::pause_until(cx.store, "github", until)?;
             return Err(e);
