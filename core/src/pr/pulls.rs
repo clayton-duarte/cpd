@@ -52,13 +52,15 @@ pub struct PullRequest {
 
 /// The expression "ready to merge" (pro-d118) over the `pull_requests` row aliased `alias`: 1 or 0, never NULL. The
 /// pull request is open, not a draft, its merge state is clean, its base is the repo's default branch and its head
-/// contains the current default-branch head (the stored `base_contained` flag, set by the poll); an unknown (NULL)
+/// contains the current default-branch head (the stored `base_contained` flag, set by the poll), and no open review thread is in its stored `feedback` (pro-d588); an unknown (NULL)
 /// base, default branch or containment flag is not ready. The one definition: every reader uses it.
 pub fn ready_to_merge_sql(alias: &str) -> String {
     format!(
         "COALESCE({alias}.state = 'open' AND {alias}.draft = 0 AND {alias}.merge_state = 'clean' \
          AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch \
-         AND {alias}.base_contained = 1 AND {alias}.head_oid IS NOT NULL, 0)"
+         AND {alias}.base_contained = 1 AND {alias}.head_oid IS NOT NULL \
+         AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid({alias}.feedback) THEN {alias}.feedback ELSE '[]' END) f \
+                         WHERE json_extract(f.value, '$.kind') = 'thread'), 0)"
     )
 }
 
