@@ -65,7 +65,7 @@ fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
             stub("impl", "impl", "Implement", Some("tests")),
         ],
         "docs" => vec![stub("docs", "docs", "Docs", None)],
-        "coverage" => vec![stub("coverage", "work", "Coverage", None)],
+        "coverage" => vec![stub("cov", "work", "Coverage", None)],
         "refactor" => vec![stub("impl", "impl", "Refactor", None)],
         _ => vec![stub("config", "work", "Config", None)],
     }
@@ -447,7 +447,7 @@ fn coverage_green(
     repo: &str,
 ) -> Result<bool, CpdError> {
     Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM workflows w LEFT JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2 AND w.repo = ?3 AND w.shape = 'coverage' AND (w.status = 'merged' OR (EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key) AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status != 'merged') AND (p.id IS NULL OR p.checks = 'passed'))))",
+        "SELECT EXISTS (SELECT 1 FROM workflows w LEFT JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2 AND w.repo = ?3 AND w.shape = 'coverage' AND (w.status = 'merged' OR (EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status = 'merged') AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status NOT IN ('merged', 'cancelled')) AND (p.id IS NULL OR p.checks = 'passed'))))",
         rusqlite::params![plan.as_str(), key, repo],
         |r| r.get::<_, bool>(0),
     )?)
