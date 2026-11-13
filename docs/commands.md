@@ -6239,7 +6239,7 @@ For cpd secret approve:
 <session name> asks to <action> in vault <vault>: item <item>, field <field>. Reason: <reason>
 ```
 
-with the options `Allow once` and `Deny`. **`Allow once`:** the adapter runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` (commands §24.7) atomically, writing `$CPD_HOME/run/secret/approve/<uuid>.json` with `{session, action, vault, item, field, at}`. The tool returns the text `Approved for one command in the next 10 minutes: run it now.` **`Deny`:** nothing is run and the tool returns `The User denied it. Do not try again.` **No dialog available** (no UI): an error `no_ui` saying the cockpit chat is needed.
+with the options `Allow once` and `Deny`. **`Allow once`:** the adapter runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` (commands §24.7) atomically, writing `$CPD_HOME/run/secret/approve/<uuid>.json` with `{session, action, vault, item, field, at}`. The tool returns the text `Approved for one command in the next 10 minutes: run it now.` **`Deny`:** nothing is run and the tool returns `The User denied it. Do not try again.` **Aborted:** when the tool call is aborted (for example, by a Session timeout or workflow abort), the dialog is dismissed and the blocked fact is closed, releasing the Session. **No dialog available** (no UI): an error `no_ui` saying the cockpit chat is needed.
 
 #### A Worker's way
 
@@ -6253,7 +6253,7 @@ This writes `$CPD_HOME/run/secret/allow/<attempt-id>.json` (contract §8.4). The
 
 ### 15.18 The pi tool `cpd_host_approve`
 
-**Manager only** (internal): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 `host-alert`). The adapter refuses an agent's bash `cpd host approve` with the reason `φ: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: cpd host approve` (model: §15.17).
+**Manager only** (internal): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 `host-alert`). **Aborted:** when the tool call is aborted, the dialog is dismissed and the blocked fact is closed, releasing the Session. The adapter refuses an agent's bash `cpd host approve` with the reason `φ: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: cpd host approve` (model: §15.17).
 
 ### 15.19 The compaction ratio (hs-d660)
 
@@ -6519,6 +6519,8 @@ On `Allow once` the tool runs, by `kind`:
 - `pr_reply`: `cpd pr approve --kind reply --workflow <workflow> --to <to>`
 - `pr_post`: `cpd pr approve --kind post --workflow <workflow>`
 - `slack_send`: no command. The grant is in process and one-shot: the next `mcp__slack__slack_send_message` or `mcp__slack__slack_send_message_draft` call of that Session passes, then the grant is gone (nothing is written to a file).
+
+**Aborted:** when the tool call is aborted, the dialog is dismissed and the blocked fact is closed, releasing the Session.
 
 `cpd pr approve --kind reply|post --workflow <key> [--to <item-id>] [--plan <id>]` is internal and Lead only: it needs `$CPD_SESSION` (else `usage`), requires `--to` for `reply` and refuses it for `post`, and writes one JSON file `$CPD_HOME/run/pr/approve/<uuid>.json` (directory 0700, file 0600, atomic write, valid 10 minutes, checked at read) holding `{session, kind, plan, workflow, to?, at}`. It is bound to the calling Session, the kind, the Workflow and, for `reply`, the item id. Kind `post` approves one `pr post` or one `pr repost` of that Workflow. It is removed only after the guarded action succeeded. Output `{"ok": true, "approved": {"kind", "workflow", "to", "expires_at"}}`. An agent is a process with `$CPD_SESSION` set and non-empty; the cockpit runs without it and is never asked.
 
