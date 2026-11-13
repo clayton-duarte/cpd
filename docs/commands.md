@@ -3001,7 +3001,7 @@ Answers one feedback item (contract §2.2 "Feedback item"; pro-d68, Plan fb-path
 | not exactly one of `--body` and `--body-file`, or the body empty after trimming | `usage` | 2 |
 | `--body-file` unreadable | `file_unreadable` | 2 |
 | the Workflow is not `open` (`details` `{workflow, status}`) | `workflow_not_open` | 3 |
-| `--to` is the `id` of no item in the Workflow's stored list (`details` `{workflow, to, open: [ids]}`); nothing is posted | `feedback_not_found` | 3 |
+| `--to` is the `id` of no item in the Workflow's stored list: when the stored `feedback` is null (never polled), a GitHub node-id shape (`PRRC_`, `PRRT_` or `PRR_` prefix) bypasses the lookup and is enqueued; the drain validates against live GitHub and reports a failed mutation if the id is wrong. When `feedback` is present and the id is absent (`details` `{workflow, to, open: [ids]}`), the reply is refused; a malformed id is refused either way. Nothing is posted on refusal | `feedback_not_found` | 3 |
 | `$CPD_SESSION` is set, `pr.feedback.reply = bots_only`, the item is not a bot review thread and the Session holds no live approval for the Workflow and item (§9.8d); checked after `feedback_not_found` (it needs the item) and before the mutation is written (`details` `{workflow, to, kind: "reply"}`); nothing is posted | `approval_required` | 3 |
 | the `gh` call fails (§1.3) | `gh_failed` | 1 |
 
