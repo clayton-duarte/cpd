@@ -79,6 +79,8 @@ struct Wanted {
     title: String,
     /// `--jira`: the Workflow's ticket.
     jira: Option<String>,
+    /// `--bug`: the bug the Workflow fixes, checked to have an issue.
+    bug: Option<String>,
     /// `--shape` (§9.4): `tdd` by default.
     shape: String,
     /// `--needs` as given, as sorted Workflow references (`needs_refs`); `Some(vec![])` is `--no-needs`; `None`: the default.
@@ -610,6 +612,10 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let home = env.home.clone();
     env.store.read(|conn| check_plan(conn, &plan))?;
+    if let Some(bug) = &args.bug {
+        env.store
+            .read(|conn| crate::protocol::linked_issue(conn, bug).map(drop))?;
+    }
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
     let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none())
@@ -657,6 +663,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         name,
         title,
         jira: args.jira.map(|j| j.to_string()),
+        bug: args.bug,
         shape: args.shape,
         key: args.key,
         needs,
@@ -1148,8 +1155,8 @@ fn insert(
     lead_branch: &str,
 ) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO workflows (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, jira, created_txn, created_at)
-         SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, ?10, id, at FROM txns WHERE id = cpd_txn()",
+        "INSERT INTO workflows (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, jira, bug_id, created_txn, created_at)
+         SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, ?10, ?11, id, at FROM txns WHERE id = cpd_txn()",
         rusqlite::params![
             plan.as_str(),
             wanted.key.as_str(),
@@ -1160,7 +1167,8 @@ fn insert(
             wanted.title,
             wanted.shape,
             wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str()),
-            wanted.jira
+            wanted.jira,
+            wanted.bug
         ],
     )?;
     insert_needs(tx, plan, &wanted.key, needs)

@@ -67,7 +67,7 @@ pub struct MitigateArgs {
     /// The diagnosed cause, when it is first known here
     #[arg(long, value_name = "text")]
     pub cause: Option<Text>,
-    /// The GitHub issue of the bug, https://github.com/<owner>/<repo>/issues/<N> (required; a stub until implemented)
+    /// The GitHub issue of the bug, https://github.com/<owner>/<repo>/issues/<N> (required)
     #[arg(long, value_name = "url")]
     pub issue: Option<String>,
 }
@@ -107,7 +107,7 @@ pub struct ShowArgs {
 
 /// Every column of a `bug_records` row, in the order [`raw`] reads them.
 const COLUMNS: &str = "id, plan, title, symptom, cause, mitigation, mitigated_by, mitigated_at, root_fix, \
-                       regression_test, status, reported_by, reported_at, closed_at, closed_by";
+                       regression_test, status, reported_by, reported_at, closed_at, closed_by, issue";
 
 /// Runs one `protocol` command.
 pub fn run(command: Command) -> Result<Output, CpdError> {
@@ -140,6 +140,7 @@ struct Bug {
     reported_at: String,
     closed_at: Option<String>,
     closed_by: Option<String>,
+    issue: Option<String>,
 }
 
 impl Bug {
@@ -161,6 +162,7 @@ impl Bug {
             "reported_at": self.reported_at,
             "closed_at": self.closed_at,
             "closed_by": self.closed_by,
+            "issue": self.issue,
         })
     }
 }
@@ -182,6 +184,7 @@ fn raw(r: &rusqlite::Row<'_>) -> rusqlite::Result<Bug> {
         reported_at: r.get(12)?,
         closed_at: r.get(13)?,
         closed_by: r.get(14)?,
+        issue: r.get(15)?,
     })
 }
 
@@ -194,6 +197,59 @@ fn fetch(conn: &Connection, id: &str) -> Result<Option<Bug>, CpdError> {
             raw,
         )
         .optional()?)
+}
+
+/// Splits `https://github.com/<owner>/<repo>/issues/<N>` into `(<owner>/<repo>, N)`; `None` for any other shape.
+fn parse_issue(url: &str) -> Option<(&str, u64)> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    let (repo, number) = rest.split_once("/issues/")?;
+    let (owner, name) = repo.split_once('/')?;
+    let word = |w: &str| {
+        !w.is_empty()
+            && w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    if !word(owner) || !word(name) {
+        return None;
+    }
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let number: u64 = number.parse().ok()?;
+    (number > 0).then_some((repo, number))
+}
+
+/// The `Fixes` line of a pull request body for `issue`: `Fixes #<N>` when the issue is on `repo` (`<owner>/<repo>`), else
+/// `Fixes <owner>/<repo>#<N>`.
+pub(crate) fn fixes_line(issue: &str, repo: &str) -> Option<String> {
+    let (issue_repo, number) = parse_issue(issue)?;
+    Some(if issue_repo.eq_ignore_ascii_case(repo) {
+        format!("Fixes #{number}")
+    } else {
+        format!("Fixes {issue_repo}#{number}")
+    })
+}
+
+/// The issue of bug `id`, for a Workflow that links it: `bug_unknown` (exit 4) for no such bug, `bug_issue_required`
+/// (exit 3) for a bug with no issue.
+pub(crate) fn linked_issue(conn: &Connection, id: &str) -> Result<String, CpdError> {
+    let bug = fetch(conn, id)?.ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::BugUnknown,
+            format!("Bug {id} is unknown: no bug record has that id."),
+        )
+        .with("id", id)
+    })?;
+    bug.issue.ok_or_else(|| bug_issue_required(id))
+}
+
+/// `bug_issue_required` (exit 3): the bug has no issue; mitigate it with `--issue`.
+fn bug_issue_required(id: &str) -> CpdError {
+    CpdError::new(
+        ErrorCode::BugIssueRequired,
+        format!("Bug {id} has no GitHub issue: run cpd protocol bug mitigate {id} --mitigation \"<text>\" --issue <url> first."),
+    )
+    .with("id", id)
 }
 
 /// `bug_not_found` (exit 4): no `bug_records` row `id`.
@@ -273,6 +329,20 @@ fn report(store: &mut Store, args: ReportArgs) -> Result<Output, CpdError> {
 fn mitigate(store: &mut Store, args: MitigateArgs) -> Result<Output, CpdError> {
     require_lead()?;
     let caller = caller()?;
+    let issue = args.issue.as_deref().ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::IssueRequired,
+            format!("Bug {} cannot be mitigated without --issue: open its GitHub issue (gh issue create) and pass the URL.", args.id),
+        )
+        .with("id", args.id.as_str())
+    })?;
+    if parse_issue(issue).is_none() {
+        return Err(CpdError::new(
+            ErrorCode::IssueInvalid,
+            "An --issue is https://github.com/<owner>/<repo>/issues/<N>.",
+        )
+        .with("issue", issue));
+    }
     store.write("protocol bug mitigate", |tx| {
         let bug = fetch(tx, &args.id)?.ok_or_else(|| bug_not_found(&args.id))?;
         if bug.status == "closed" {
@@ -290,17 +360,21 @@ fn mitigate(store: &mut Store, args: MitigateArgs) -> Result<Output, CpdError> {
             .map(|cause| cause.as_str().to_owned())
             .or_else(|| bug.cause.clone());
         let mitigation = args.mitigation.as_str();
-        if bug.mitigation.as_deref() == Some(mitigation) && bug.cause == cause {
+        if bug.mitigation.as_deref() == Some(mitigation)
+            && bug.cause == cause
+            && bug.issue.as_deref() == Some(issue)
+        {
             return Ok(Output::success(json!({"already": true, "bug": bug.json()})));
         }
         tx.execute(
-            "UPDATE bug_records SET mitigation = ?1, mitigated_by = ?2, mitigated_at = ?3, cause = ?4 WHERE id = ?5",
+            "UPDATE bug_records SET mitigation = ?1, mitigated_by = ?2, mitigated_at = ?3, cause = ?4, issue = ?6 WHERE id = ?5",
             params![
                 mitigation,
                 caller.as_deref(),
                 clock::now(),
                 cause.as_deref(),
                 args.id,
+                issue,
             ],
         )?;
         let bug = fetch(tx, &args.id)?.expect("the row just updated");
@@ -317,6 +391,9 @@ fn close(store: &mut Store, args: CloseArgs) -> Result<Output, CpdError> {
         let bug = fetch(tx, &args.id)?.ok_or_else(|| bug_not_found(&args.id))?;
         if bug.status == "closed" {
             return Ok(Output::success(json!({"already": true, "bug": bug.json()})));
+        }
+        if args.root_fix.is_some() && bug.issue.is_none() {
+            return Err(bug_issue_required(&args.id));
         }
         // Malformed text is `usage` (over 200 characters or a NUL); a missing or empty flag is the refusal below.
         for value in [args.root_fix.as_deref(), args.regression_test.as_deref()]

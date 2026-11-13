@@ -877,11 +877,19 @@ pub fn stored_description_of(
     plan: &PlanId,
     key: &WorkflowKey,
 ) -> Result<Option<String>, CpdError> {
-    let (stored, adopted): (Option<String>, bool) = conn.query_row(
-        "SELECT description, head_ref IS NOT NULL FROM workflows WHERE plan = ?1 AND key = ?2",
+    let (stored, adopted, name, issue): (Option<String>, bool, String, Option<String>) = conn.query_row(
+        "SELECT w.description, w.head_ref IS NOT NULL, w.name, b.issue
+           FROM workflows w LEFT JOIN bug_records b ON b.id = w.bug_id WHERE w.plan = ?1 AND w.key = ?2",
         [plan.as_str(), key.as_str()],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
+    // A Workflow that fixes a bug ends its body with `Fixes <issue>`, so the merge closes the issue.
+    let stored = match (stored, issue.and_then(|i| crate::protocol::fixes_line(&i, &name))) {
+        (Some(body), Some(line)) if !body.lines().any(|l| l.trim() == line) => {
+            Some(format!("{}\n\n{line}\n", body.trim_end()))
+        }
+        (stored, _) => stored,
+    };
     if stored.is_none() && !adopted {
         return Err(description_required(plan, key));
     }
