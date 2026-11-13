@@ -1104,3 +1104,112 @@ fn conflicting_pr_level_triggers_update_job_when_not_queued() {
         "the update Job's cause is conflict"
     );
 }
+
+// --- open feedback wakes the Lead even when no item is new (pro-d588, bug b71) ---
+
+/// The in-process `gh` of an open `acme/pay#801` whose thread `T1` (last comment `C1`) stays open; its `updatedAt` is the one set.
+struct Threaded {
+    updated: std::sync::Mutex<&'static str>,
+}
+
+impl Handler for Threaded {
+    fn handle(&self, call: &Call) -> Reply {
+        let updated = *self.updated.lock().unwrap();
+        let query = query_of(call);
+        if query.contains("search(type: ISSUE") {
+            let node = open_node(801, "", true).replace("\"U1\"", &format!("\"{updated}\""));
+            return search_reply(&[node], &[]);
+        }
+        if query.contains("reviewThreads") && query.contains(": repository(") {
+            let empty = serde_json::json!({"totalCount": 0, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": []});
+            let page = |nodes: serde_json::Value| serde_json::json!({"totalCount": 1, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": nodes});
+            let comment = serde_json::json!({"id": "C1", "author": {"__typename": "User", "login": "rev"}, "body": "fix this", "url": "https://github.com/acme/pay/pull/801#discussion_r1", "createdAt": "2026-10-20T10:00:00Z"});
+            let thread = serde_json::json!({"id": "T1", "isResolved": false, "isOutdated": false, "path": "a.rs", "comments": page(serde_json::json!([comment]))});
+            return Reply::ok(&serde_json::json!({"data": {
+                "viewer": {"login": "me"},
+                "p0": {"pullRequest": {"id": "PR_0", "updatedAt": updated, "reviewThreads": page(serde_json::json!([thread])), "comments": empty, "reviews": empty}}
+            }}).to_string());
+        }
+        if query.contains("contexts(first: 100") {
+            let pull = serde_json::json!({"labels": {"nodes": []}, "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}}}}]}});
+            return Reply::ok(
+                &serde_json::json!({"data": {"p0": {"pullRequest": pull}}}).to_string(),
+            );
+        }
+        Reply::exit(9, "", "unexpected gh call\n")
+    }
+}
+
+fn threaded_rig() -> (Rig, Arc<Threaded>) {
+    let mut rig = Rig::new();
+    rig.workflow("api", "open");
+    let dir = rig.home.root().join("policy/acme");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("owner.toml"), OWNER_POLICY).unwrap();
+    let gh = Arc::new(Threaded {
+        updated: std::sync::Mutex::new("U1"),
+    });
+    let _ = (*rig.fakes.runner).clone().route("gh", gh.clone());
+    (rig, gh)
+}
+
+#[test]
+fn feedback_open_without_new_items_emits_pr_feedback() {
+    let (rig, gh) = threaded_rig();
+    run_poll(&rig); // the first read: the open thread T1 is new
+    let first = event_count(&rig, "pr-feedback");
+    *gh.updated.lock().unwrap() = "U2"; // the PR moved, T1 is still open and unanswered: no new item
+    run_poll(&rig);
+    assert_eq!(
+        event_count(&rig, "pr-feedback"),
+        first + 1,
+        "open feedback with no new item still wakes the Lead"
+    );
+}
+
+#[test]
+fn feedback_open_wake_is_idempotent_on_rerun() {
+    let (rig, gh) = threaded_rig();
+    run_poll(&rig);
+    *gh.updated.lock().unwrap() = "U2";
+    run_poll(&rig);
+    let woken = event_count(&rig, "pr-feedback");
+    assert!(
+        woken >= 2,
+        "the moved PR with open feedback woke the Lead: {woken}"
+    );
+    run_poll(&rig); // nothing moved
+    assert_eq!(
+        event_count(&rig, "pr-feedback"),
+        woken,
+        "a rerun on an unchanged PR wakes nothing new"
+    );
+}
+
+const OWNER_POLICY: &str = "\
+[gate]
+merge = \"none\"
+pr = \"none\"
+text = \"\"
+
+[pr]
+text = \"\"
+
+[pr.feedback]
+checks = \"any\"
+
+[deploy]
+text = \"\"
+
+[code]
+text = \"\"
+
+[tests]
+text = \"\"
+
+[monitor]
+text = \"\"
+
+[instructions]
+text = \"\"
+";
