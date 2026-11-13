@@ -286,7 +286,6 @@ fn run_tests(
 }
 
 /// What the repo's `related` command ended as.
-#[allow(dead_code)] // stub: the Gate wiring lands with the impl Job
 pub(crate) struct RelatedRun {
     pub exit: i32,
     /// One test name per line.
@@ -295,13 +294,42 @@ pub(crate) struct RelatedRun {
 
 /// The tests the Gate runs: the changed tests, unioned with what `related` (the `[test-commands]` key, with `{{ files }}`
 /// the changed files) prints; a non-zero exit is `gate_related_failed`. No `related` is the changed tests alone.
-/// STUB: the old behaviour.
-#[allow(dead_code)] // stub: the Gate wiring lands with the impl Job
+#[allow(dead_code)] // the Gate's run path calls it
 pub(crate) fn gate_tests(
-    _related: Option<&str>,
-    _changed_files: &[String],
+    related: Option<&str>,
+    changed_files: &[String],
     changed_tests: &[String],
-    _run: &mut dyn FnMut(&str) -> RelatedRun,
+    run: &mut dyn FnMut(&str) -> RelatedRun,
 ) -> Result<Vec<String>, CpdError> {
-    Ok(changed_tests.to_vec())
+    let mut tests = changed_tests.to_vec();
+    let Some(template) = related else {
+        return Ok(tests);
+    };
+    let failed = |message: String| CpdError::new(ErrorCode::GateRelatedFailed, message);
+    // `files` is the changed files, each shell-escaped, space-joined (as a list renders in a hook).
+    let files = changed_files
+        .iter()
+        .map(|f| crate::git::hooks::shell_escape(f))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let command = minijinja::Environment::new()
+        .render_str(template, minijinja::context! { files })
+        .map_err(|e| {
+            failed(format!(
+                "The repo's [test-commands] `related` cannot run: {e}"
+            ))
+        })?;
+    let ran = run(&command);
+    if ran.exit != 0 {
+        return Err(failed(format!(
+            "The repo's [test-commands] `related` failed (exit {}): `{command}`.",
+            ran.exit
+        )));
+    }
+    for name in ran.stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !tests.iter().any(|t| t == name) {
+            tests.push(name.to_owned());
+        }
+    }
+    Ok(tests)
 }
