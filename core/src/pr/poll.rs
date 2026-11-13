@@ -1315,13 +1315,18 @@ fn tell(
         enabled: resolved.post_enabled,
         posted: posts::find(tx, plan.as_str(), key.as_str())?.is_some(),
     };
-    let reasons: Vec<Reason> = pulls::attention(
+    let mut reasons: Vec<Reason> = pulls::attention(
         change.before.as_ref(),
         &change.after,
         resolved.checks,
         &new,
         post,
     );
+    // pro-d588: a pull request that moved with feedback still open wakes the Lead, though no item is new. A poll that
+    // finds no change has no `Change` and never reaches here, so a rerun wakes nothing.
+    if reasons.is_empty() && !open.is_empty() {
+        reasons.push(Reason::Comments);
+    }
     if reasons.is_empty() {
         return Ok(false);
     }
