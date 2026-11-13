@@ -237,7 +237,8 @@ test("retier: a failed session show keeps retier due and reports switch-failed",
     // retier stayed due: the next idle retries the switch with no new Event
     f0.respond("session-show", shownO2());
     await f0.pi.fire("agent_settled");
-    await waitFor("the retried switch", () => switchCalls(f0, "switched").length > 0, WAIT);
+    await f0.quiet();
+    assert.equal(switchCalls(f0, "switched").length, 1, "the retried switch ran");
     assert.deepEqual(f0.pi.modelsSet, [{ provider: "p", id: "opus" }]);
   }
 });
