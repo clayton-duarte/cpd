@@ -1669,6 +1669,10 @@ mod poll_uptodate_tests;
 mod poll_ready_tests;
 
 #[cfg(test)]
+#[path = "poll_cas_tests.rs"]
+mod poll_cas_tests;
+
+#[cfg(test)]
 mod due_reads_tests {
     use super::super::comments::{Item, Kind};
     use super::super::status::{MergeState, Mergeable, ReviewDecision};
