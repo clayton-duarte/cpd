@@ -135,6 +135,13 @@ export const resetTurn = (r: Run) => {
   r.turnRefusals = 0;
 };
 
+/** Whether the last assistant message of the run (pi's `agent_end` `messages`) stopped with `error` or `aborted`. */
+function endedBadly(event: unknown): boolean {
+  const messages = isObject(event) ? event.messages : undefined;
+  const last = Array.isArray(messages) ? messages.findLast((m) => isObject(m) && m.role === "assistant") : undefined;
+  return isObject(last) && (last.stopReason === "error" || last.stopReason === "aborted");
+}
+
 /** Registered once (pi has no unsubscribe); the run and its role are read at each call. */
 export function registerLoopGuard(host: Host): void {
   host.pi.on("before_agent_start", function loopGuardHandler(event) {
@@ -150,10 +157,11 @@ export function registerLoopGuard(host: Host): void {
     r.turnStarts = [...r.turnStarts.filter((t) => t > now - WINDOW_MS), now];
     if (!r.tripped && r.turnStarts.length > r.info.loopGuardTurns) trip(host, r, now, "inter-turn", r.info.loopGuardTurns + 1);
   });
-  host.pi.on("agent_end", function loopGuardAgentEnd() {
+  host.pi.on("agent_end", function loopGuardAgentEnd(event) {
     const r = host.run;
     if (!r || !guarded(r)) return;
     resetTurn(r);
+    if (endedBadly(event)) return; // an errored or aborted run does not clear the trip
     const window = r.turnStarts;
     clearTrip(host, r);
     r.turnStarts = window; // the window stays: runs that each end cleanly still count. A turn that ended leaves the blocked state (the trip gated deliveries only within it)

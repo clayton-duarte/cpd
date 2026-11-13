@@ -654,3 +654,18 @@ test("loop guard: runs that each end cleanly within the window still trip the gu
   await f.pi.fire("agent_end");
   assert.notEqual((await settled(f)).at(-1), LABEL, "its clean end clears the trip");
 });
+
+test("loop guard: a tripped run that ends with stopReason error or aborted keeps the trip", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+  await selfTurn(f, 21);
+  assert.ok((await settled(f)).includes(LABEL), "blocked");
+
+  for (const stopReason of ["error", "aborted"]) {
+    await f.pi.fire("agent_end", { messages: [{ role: "assistant", content: [], stopReason }] });
+    assert.ok((await settled(f)).includes(LABEL), `${stopReason}: still blocked`);
+    assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true], `${stopReason}: no clear persisted`);
+    assert.deepEqual(await probe(f), GATED, `${stopReason}: deliveries stay gated`);
+  }
+});
