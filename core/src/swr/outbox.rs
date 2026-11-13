@@ -200,7 +200,7 @@ pub fn enqueue_tx(
 }
 
 /// Take the oldest due `pending` row of `system`: `in_flight`, `started_at`, `attempt_count` + 1.
-/// A row waits while another of its key is `in_flight`.
+/// A row waits while another of its key is `in_flight`. A keyless `pending` row is marked `failed` (`no_ticket_key`), never retried.
 pub fn claim_next(
     store: &mut Store,
     now: OffsetDateTime,
@@ -208,6 +208,12 @@ pub fn claim_next(
 ) -> Result<Option<Mutation>, CpdError> {
     let at = timestamp(now);
     store.write("swr claim", |tx| {
+        // A keyless row (the jira-swr migration's) carries no ticket anywhere, so it can never run: discard it once.
+        tx.execute(
+            "UPDATE swr_mutations SET status = 'failed', error = 'no_ticket_key: the mutation has no target key',
+               completed_at = ?2 WHERE system = ?1 AND status = 'pending' AND target_key IS NULL",
+            params![system, at],
+        )?;
         let id = tx
             .query_row(
                 "SELECT m.id FROM swr_mutations m
