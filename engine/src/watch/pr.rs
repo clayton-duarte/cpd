@@ -140,11 +140,14 @@ pub(super) fn apply(engine: &mut Engine, finished: Finished) {
         Err(failure) => {
             engine.last_poll_end = Some(finished.ended);
             if failure.details["rate_limited"] == true {
-                // A rate-limit reply is a pause until the stored reset plus the grace, not a machine error (A2).
+                // A rate-limit reply pauses until a future reset plus grace,
+                // or the fallback when that deadline is absent/expired (A2).
                 let clock = &*engine.ports.clock;
-                let wait = engine.rate_reset.map_or(RATE_FALLBACK, |reset| {
-                    Duration::try_from(reset - clock.utc()).unwrap_or_default() + RATE_GRACE
-                });
+                let wait = engine
+                    .rate_reset
+                    .and_then(|reset| Duration::try_from(reset + RATE_GRACE - clock.utc()).ok())
+                    .filter(|wait| !wait.is_zero())
+                    .unwrap_or(RATE_FALLBACK);
                 engine.paused_until = Some(clock.now() + wait);
                 engine.log.line(&format!(
                     "pr-poll: GitHub's rate limit is spent: polling pauses {} s.",
@@ -450,6 +453,31 @@ mod tests {
             code: code.as_str().to_owned(),
             message: String::new(),
             details,
+        }
+    }
+
+    #[test]
+    fn a_rate_limit_failure_uses_a_future_reset_or_the_fallback() {
+        for (reset_seconds, expected) in
+            [(Some(-60), 60), (Some(-3), 60), (None, 60), (Some(60), 63)]
+        {
+            let mut fx = super::super::testkit::Fx::new("");
+            let fakes = cpd_core::ports::Fakes::new();
+            fx.engine.ports = fakes.ports.clone();
+            fx.engine.rate_reset =
+                reset_seconds.map(|seconds| fakes.clock.utc() + time::Duration::seconds(seconds));
+            let now = fakes.clock.now();
+            apply(
+                &mut fx.engine,
+                Finished {
+                    result: Err(failure(ErrorCode::GhFailed, json!({"rate_limited": true}))),
+                    ended: now,
+                },
+            );
+            assert_eq!(
+                fx.engine.paused_until.unwrap() - now,
+                Duration::from_secs(expected)
+            );
         }
     }
 

@@ -425,3 +425,22 @@ Not decided by this page. Each is recorded so no Job guesses it.
 - A teammate's open pull request whose stored rollup is `failed` and whose labels (`labels_json`) match an excused label is hydrated (the `Heavy` set, within the cap) although it is not the User's own, and once for its head: the contexts are what excuse a failing Danger. The Light read has only the rollup state, so a later light node of the same head reduces the stored detail's contexts again under the policy hold instead of bringing `failed` back.
 - `poll_node` computes the policy hold once (`status::policy_hold`) and passes it to `ChecksSummary::of`, which excuses a failing `danger` CheckRun and a failing `Danger` StatusContext. The hold needs the excused label: a failing Danger without it stays failed (pro-d447).
 - The Inbox reader derives `checks_state` from the effective `checks` first (`passed` is `SUCCESS`, `failed` `FAILURE`, `pending` `PENDING`); only a row with `none` falls back to the detail's rollup. It takes the reviews from the Light read's `latestReviews` and the author from `author_login`.
+
+## Expired reset deadlines on rate-limit failures (QA #1118)
+
+A hard rate-limit failure may arrive after the stored reset timestamp expired.
+The source and engine failure paths use reset plus the existing three-second
+grace only while that deadline is strictly in the future. An absent or expired
+deadline instead uses the existing future-relative fallback: 15 minutes for
+the persisted GitHub source pause, 60 seconds for the engine's in-memory pause.
+A paused source makes no read request and retains its cached data. This leaves
+the successful-response rate guard and valid future reset behavior unchanged.
+
+This corrects the stale-deadline behavior in [issue #1118](https://github.com/clayton-duarte/cpd/issues/1118).
+The [GitHub rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately),
+accessed 2026-11-13, requires future pauses on rate-limit errors. This narrow
+fix does not claim new support for Retry-After headers or a complete secondary
+rate-limit policy; those need current response metadata and separate research.
+Tests use fake provider replies and virtual time, including expired/missing
+resets, an exactly exhausted grace period, valid future resets, preserved PR
+rows and no calls during the pause.
