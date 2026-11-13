@@ -914,6 +914,14 @@ fn apply(
         }
     }
     for follow in follows {
+        // A Workflow merged in this pass keeps its stored base: it has no base left to follow.
+        if out
+            .merged
+            .iter()
+            .any(|(p, k)| *p == follow.plan && *k == follow.workflow)
+        {
+            continue;
+        }
         let is_ahead = ahead
             .iter()
             .any(|a| a.plan == follow.plan && a.workflow == follow.workflow && a.ahead);
