@@ -1,9 +1,9 @@
-# QA process decisions and research
+# QA Protocol decisions and research
 
-Provenance: the User's QA process design conversation, 2026-11-13. These are
+Provenance: the User's QA Protocol design conversation, 2026-11-13. These are
 explicit User decisions unless described as implementation choices below.
 Setup research and acceptance criteria: [issue #1115](https://github.com/clayton-duarte/cpd/issues/1115).
-The process and scripts are proposed for User review through this PR; the
+The Protocol and scripts are proposed for User review through this PR; the
 QA loop remains inactive until merge and an explicit start instruction.
 
 ## User decisions
@@ -27,8 +27,10 @@ QA loop remains inactive until merge and an explicit start instruction.
 | QA-15 | All decisions, processes and adopted patterns must be documented. | Record lasting intent in repo docs; link issue research and implementation PRs. |
 | QA-16 | Lint/format on commit, changed-area test subsets locally; CI runs automated checks. | Match local verification to changed behavior; do not substitute CI for focused evidence. |
 | QA-17 | Local tool installs and disposable instances allowed. Remote access is read-only and needs a separate access plan, deferred to the next session. | This PR neither configures SSH nor modifies live hosts. |
-| QA-18 | Use Git/GitHub directly first; consider CPD after proving the workflow. | No premature dependency on the system being investigated. |
-| QA-19 | Initial PR contains process, decisions and tested limit scripts only. Begin actual QA only after merge and explicit start. | No product fixes, automatic schedule or active investigation loop in this change. |
+| QA-18 | Use Git/GitHub directly first; consider CPD after proving the Protocol. | No premature dependency on the system being investigated. |
+| QA-19 | Initial PR contains the Protocol, decisions and tested limit scripts only. Begin actual QA only after merge and explicit start. | No product fixes, automatic schedule or active investigation loop in this change. |
+
+| QA-20 | Name this document the QA Protocol; CPD calls collections of procedures and methods Protocols. | User clarification, 2026-11-13; glossary and ADR-0018 record the vocabulary and standalone execution. |
 
 ## Adopted patterns and evidence
 
@@ -71,7 +73,7 @@ from full architecture documentation.
 Adopt: research in issues; current intended behavior in owning docs; significant
 architectural decisions in the existing `docs/adr/` structure; links between
 them. Record context, options, choice, consequences, evidence, status and
-supersession. This process's own decisions fit in this single table rather
+supersession. This Protocol's own decisions fit in this single table rather
 than generating nineteen separate ADRs. No claim is made that these sources
 mandate the exact issue/PR split chosen by the User.
 
@@ -116,5 +118,5 @@ provides the complete configured gate. The User retains review and merge.
 
 An iteration comment on the selected issue records work and next steps; GitHub
 is the durable run record. No parallel Markdown backlog, local quota ledger or
-schedule is introduced. Revisit process design through a new documented
+schedule is introduced. Revisit Protocol design through a new documented
 decision when actual execution exposes a limitation.

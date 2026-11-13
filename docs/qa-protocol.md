@@ -1,4 +1,4 @@
-# Repository QA process
+# QA Protocol
 
 Status: proposed until this PR is merged. The loop starts only after the User
 explicitly starts it after merge. No scheduler, live-host access or CPD adoption
@@ -115,7 +115,7 @@ and stronger coordination, not an unsupported claim of atomic quota enforcement.
 
 At the beginning of every iteration:
 
-1. Read this process, its decisions and applicable `AGENTS.md` instructions.
+1. Read this Protocol, its decisions and applicable `AGENTS.md` instructions.
    Run the status script. Read the previous iteration's issue comment, if any.
    Verify clean worktrees, current base SHAs and the existing issues/open PRs.
 2. Search open **and closed** issues, PRs, previous audits and ADRs for duplicates,
@@ -230,7 +230,7 @@ Before implementation, expand the selected issue into an actionable investigatio
 7. A PR being opened is not a resolved issue. Let the User's merge close it via
    the linked closing reference when applicable; verify closure after merge and
    retain residual work as linked issues. CPD adoption and process automation
-   can be proposed after this process has proved useful.
+   can be proposed after this Protocol has proved useful.
 
 ## Issue format
 
