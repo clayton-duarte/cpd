@@ -62,6 +62,18 @@ Other dialog methods (`ask_user_question`, `secret_approve`, `host_approve`, and
 
 The rule holds for all dialog methods: `view.dialog` is non-null ⇒ dialog card shown, Composer hidden; `view.dialog` is null ⇒ Composer shown, no card.
 
+### A4: Review root layout
+
+The PlanReviewCard root is a plain column, never an Item or Card: `section[data-dialog="cpd_plan_review"]` with `className="flex min-h-0 flex-1 flex-col"`. No border, no margin, no radius. The one border is the pane's border, inherited from its parent. The card itself is borderless and spans the full width and height of the pane.
+
+### A5: Single scroll region
+
+The review card has exactly one scroll region, the body (summary and sections). The body is `ScrollArea[data-part="body"]` with `min-h-0 flex-1 overflow-y-auto` (or, when using ScrollArea, every ancestor from the body to the pane root is `min-h-0` in a `flex flex-col`). The header row (title, subtitle, stats) and the action buttons are `shrink-0` and always visible; they do not scroll.
+
+### A6: Verification
+
+With jsdom (unit tests), the class structure (the presence of `flex`, `min-h-0`, `flex-1`, `overflow-y-auto`, `shrink-0`) is pinned by the test assertions. With a real-layout Playwright Electron spec (`web/src/testing/e2e-*.spec.ts`), computed boxes (the header height, body height, body scroll height) and whether the body scrolls (overflow visible vs. scroll) are pinned by visual measurements.
+
 ---
 
 ## 1. Composer
