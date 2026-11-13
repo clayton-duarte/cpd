@@ -85,7 +85,7 @@ base independently per repository; it need not be `main`.
 For an explicitly authorized daily reset, record the instruction, then use the
 same `QA_BATCH=YYYY-MM-DD-reset-N` on every command. The date uses the configured
 timezone. A stale/empty/malformed batch fails before API calls. A reset does not
-reset a run's own cap. Without `--run`, only daily/batch caps apply; therefore
+reset a run's own cap. Without `--run`, count-only mode applies daily/batch caps; weekly mode refuses creation until a descriptor is supplied. Therefore
 always pass the descriptor for a bounded run.
 
 Status exposes `counts` (today's active daily/reset allowance), `day_counts`
@@ -187,6 +187,16 @@ rounding while keeping the reader expiry at the earliest observed boundary.
 The guard refreshes status after GitHub pagination and rejects a window change
 within a status/creation operation. One-shot users must also preserve the initially
 authorized window in their run handoff and stop before spending reset allowance.
+Across fresh processes, the guard binds each supplied run's immutable `started_at`
+to the current half-open weekly interval `[resets_at - window_minutes, resets_at)`.
+An older run is rejected before GitHub access. Weekly creation requires `--run`;
+standalone `status` without one remains inspection only, reports `run_required: true`
+and sets both `can_create_*` flags false. It does not authorize continuation.
+Current-window resumption is supported, including a run started exactly at the
+window boundary. Count-only runs can still span weeks. After a weekly rollover,
+record new explicit User authorization and a new descriptor; never rewrite an old
+run's start or ID to bypass this check. The guard enforces the descriptor's dates,
+not the authenticity of its prose authorization reference.
 
 A continuous reader removes its sample on orderly exit/errors; an uncatchable
 kill leaves a file that expires within60 seconds. Use a private local output

@@ -18,6 +18,7 @@ test("the CPD entry point preserves historical attribution and the legacy batch 
     resets_at: new Date(Date.now() + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false }));
   const previous = { usage: process.env.QA_USAGE_FILE, legacy: process.env.CPD_QA_BATCH, generic: process.env.QA_BATCH };
   const batch = `${day(new Date())}-compat`;
+  const descriptor = {version:1,id:"compat",started_at:new Date().toISOString(),limits:null,authorization:"Synthetic test approval"};
   try {
     process.env.QA_USAGE_FILE = usageFile;
     delete process.env.QA_BATCH;
@@ -30,9 +31,9 @@ test("the CPD entry point preserves historical attribution and the legacy batch 
       if (!args.includes("POST")) return [];
       posts++;
       assert.equal(payload.base, "main");
-      assert.equal(payload.body, `${MARKER}\n${batchMarker(batch)}\n\nreason`);
+      assert.equal(payload.body, `${MARKER}\n${batchMarker(batch)}\n<!-- cpd-repo-qa-run:compat -->\n\nreason`);
       return { number: 1 };
-    }, () => "reason");
+    }, () => "reason", undefined, descriptor);
     assert.equal(result.exit, 0);
     assert.equal(posts, 1);
     process.env.QA_BATCH = `${day(new Date())}-different`;

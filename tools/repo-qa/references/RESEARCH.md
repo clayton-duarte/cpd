@@ -98,3 +98,15 @@ requirement and API behavior, not a universal consensus claim. The command uses
 existing Node/gh infrastructure, makes no writes and adds no dependency,
 scheduler or automatic merge. Metadata is a snapshot, so CI/reviews and changed
 revisions must still be checked by the agent.
+
+
+Cross-process weekly authorization (2026-11-13): official app-server telemetry
+provides reset and duration; the existing immutable run supplies its start. Bind
+that start to `[reset - duration, reset)` using ordinary timestamp arithmetic.
+This enforces the existing no-automatic-rollover policy across fresh one-shot
+reader/guard processes without another credential store or local quota ledger.
+Require a run descriptor for weekly creation; preserve descriptor-free read-only
+inspection and count-only multiweek runs. Rejecting an old descriptor cannot
+prove a replacement descriptor was authorized: that remains a trusted operator
+and recorded User-decision boundary. This is a policy enforcement choice, not
+an industry-consensus claim. Existing in-process reset/freshness checks remain.

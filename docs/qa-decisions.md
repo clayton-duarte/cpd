@@ -254,3 +254,6 @@ universal consensus. Consumers update immutable reviewed pins separately.
 
 
 The User merged skills#6 on 2026-11-13. CPD now pins reviewed source 53523a3e5fcaf68aad249410fb391e53a0531bfe, including the read-only `pr-status` gate. The vendor manifest hashes the exact upstream tracked files. Weekly cross-process window binding remains tracked in skills#4/PR#7; the active native helper also pins this run's authorized reset, so no later weekly window is allowed.
+
+
+The User merged skills#7. CPD pins reviewed source 5569e37c4f09e079d7be30dce177eb2c351340c3, including cross-process weekly-window binding and required descriptors for weekly creation. Compatibility coverage supplies a synthetic approved current-window descriptor rather than bypassing this requirement. The recorded active run ID/start and shared repository scope remain unchanged.

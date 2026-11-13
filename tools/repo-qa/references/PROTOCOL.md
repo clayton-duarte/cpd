@@ -47,7 +47,7 @@ User-reset batches are separate. All are ceilings; never manufacture findings,
 split one cause into extra issues, or weaken validation to fill them.
 
 Use the configured creator and the same immutable run descriptor for every
-creation/status call. GitHub is the count source. Optional weekly mode requires fresh official account telemetry; see the README. Closed/merged/draft items still
+creation/status call. GitHub is the count source. Optional weekly mode requires fresh official account telemetry and an immutable run descriptor for creation; its start must belong to the current weekly window. An old run never renews authorization at reset. Descriptor-free status is inspection only; see the README. Closed/merged/draft items still
 count, and comments/updates do not. Setup work uses the allowance too. A daily
 reset needs a recorded User instruction and preserves aggregate totals; changing
 run IDs, scope or config to regain allowance is forbidden. Status failures mean
