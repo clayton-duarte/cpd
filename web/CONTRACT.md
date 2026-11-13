@@ -2073,7 +2073,7 @@ Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7
 ### 13.4 Decision 3: coalescing
 
 - `COALESCE_MS` = 16 (one frame). It replaces 250 of 6.3 and has two uses: the spawn fallback's burst of 6.3 rule 3, and the emission of snapshot panes.
-- A `snapshot` frame stores its rows at once. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
+- A `snapshot` frame validates and maps all pane candidates before storing its rows. A rejected frame leaves the last accepted raw/mapped/status state and pending coalesced update intact (#1227). The coalesced emit uses the accepted mapped value; a synchronous session-state patch refreshes that value too. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
 
 ### 13.5 Decision 4: the `session-state` patch
 
