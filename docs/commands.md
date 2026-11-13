@@ -8435,7 +8435,7 @@ One bug record, every field (contract §2.2 "Bug record"), so **mitigation appli
 
 ## 34. The refactor protocol
 
-Decisions pro-d579 and pro-d581 (Context `cpd`) define the coverage and refactor workflow protocol.
+Decisions pro-d579 and pro-d581 (Context `cpd`) define the coverage and refactor Workflow protocol.
 
 The protocol makes a refactor safe by its tests: coverage is proven before the code changes, and the tests do not change while it does. [protocols.md](protocols.md) lists it in the registry.
 
@@ -8479,6 +8479,6 @@ The three codes are the protocol's error codes. A refusal exits 3, as the state 
 
 ### 34.5 Coverage measurement
 
-A `coverage` workflow uses a work Job for tests passing against existing code; a `refactor` workflow uses an implementation Job. A coverage base is green when merged, or when all its Jobs are merged and its PR checks are not failing.
+A `coverage` Workflow uses a work Job for tests passing against existing code; a `refactor` Workflow uses an implementation Job. A coverage base is green when merged, or when all its Jobs are merged and its PR checks are not failing.
 
-A repo can configure `[coverage-commands] measure` as a command producing JSON with aggregate `line` and `branch` numbers and, optionally, `files` mapping paths to the same two numbers. At refactor workflow creation, cpd measures and stores the coverage base commit and report; a failed measurement refuses creation. Once an amended coverage base is incorporated, cpd refreshes the baseline. At push, cpd measures the refactor commit and refuses `coverage_below_baseline` if either value drops. When per-file data is present, the comparison applies to touched files; otherwise it uses aggregate values. A failed measurement also refuses the push. If no measure command is configured, coverage checking is skipped. Mutation testing is omitted (A2).
+A repo can configure `[coverage-commands] measure` as a command producing JSON with aggregate `line` and `branch` numbers and, optionally, `files` mapping paths to the same two numbers. At refactor Workflow creation, cpd measures and stores the coverage base commit and report; a failed measurement refuses creation. Once an amended coverage base is incorporated, cpd refreshes the baseline. At push, cpd measures the refactor commit and refuses `coverage_below_baseline` if either value drops. When per-file data is present, the comparison applies to touched files; otherwise it uses aggregate values. A failed measurement also refuses the push. If no measure command is configured, coverage checking is skipped. Mutation testing is omitted (A2).
