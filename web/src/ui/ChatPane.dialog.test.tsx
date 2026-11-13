@@ -158,3 +158,28 @@ it("ChatPane swaps composer for dialog card when session is waiting on dialog", 
   expect(c.textContent).toContain("Allow once");
   expect(c.textContent).toContain("Deny");
 });
+
+function abortSetup(dialog: Dialog | null) {
+  const abort = vi.fn();
+  const respond = vi.fn();
+  const conn: Connection = Object.assign(new FakeConnection(), { abort, respond });
+  const m = mount(<ChatPane view={{ ...withDialog(dialog), busy: true }} connection={conn} reader={reader} />);
+  mounted = m;
+  return { c: m.container, abort, respond };
+}
+const esc = () => new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+
+it("Escape in a dialog aborts the running turn", () => {
+  const { c, abort } = abortSetup(ask());
+  const target = c.querySelector('[data-dialog="ask_user_question"]')!;
+  act(() => { target.dispatchEvent(esc()); });
+  expect(abort).toHaveBeenCalledTimes(1);
+});
+
+it("Escape in the composer aborts the running turn", () => {
+  const { c, abort } = abortSetup(null);
+  // Focus is outside the composer textarea (the pane itself), no dialog shown.
+  const pane = c.querySelector("[data-chat-dropzone]")!;
+  act(() => { pane.dispatchEvent(esc()); });
+  expect(abort).toHaveBeenCalledTimes(1);
+});
