@@ -1,9 +1,10 @@
-import type { Completion, SessionRef, TranscriptItem } from "../protocol/domain.ts";
+import type { Completion, SessionRef } from "../protocol/domain.ts";
 import type { PlanViewModel } from "../protocol/cockpit.ts";
 import type { SessionServerMessage } from "../protocol/wire.ts";
 import type { CompletionClassifier } from "./completion-classify.ts";
 import type { CompletionStore } from "./completion-store.ts";
 import { buildPayload } from "./completion-payload.ts";
+import { appendItems, applyDelta, emptyTranscript, prependEarlier, removeItems, setTail, updateItems } from "../state/transcript.ts";
 
 export interface CompletionTracker { observe(m: SessionServerMessage): void; dispose(): void }
 
@@ -13,7 +14,7 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
   const inflight = new Map<string, Promise<Completion | null>>();
   return {
     track(ref, send) {
-      let items: TranscriptItem[] = [];
+      let transcript = emptyTranscript;
       let dialogs = new Set<string>();
       let busy = false;
       let disposed = false;
@@ -21,8 +22,8 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
       if (replay !== undefined) send({ type: "session.completion", sessionId: ref.id, completion: replay });
 
       const compute = async (): Promise<void> => {
-        if (ref.role !== "lead" || items.length === 0) return;
-        const snapshot = items.slice();
+        if (ref.role !== "lead" || transcript.items.length === 0) return;
+        const snapshot = transcript.items.slice();
         const hasOpenDialog = dialogs.size > 0;
         let plan: PlanViewModel | null;
         try {
@@ -71,15 +72,21 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
             switch (m.type) {
               case "session.window":
                 if (m.mode === "tail") {
-                  items = [...m.window.items];
+                  transcript = setTail(m.window, transcript);
                   schedule();
-                } else items = [...m.window.items, ...items];
+                } else transcript = prependEarlier(transcript, m.window);
                 return;
               case "session.append":
-                items = [...items, ...m.items];
+                transcript = appendItems(transcript, m.items);
                 return;
               case "session.update":
-                items = items.map((it) => m.items.find((u) => u.id === it.id) ?? it);
+                transcript = updateItems(transcript, m.items);
+                return;
+              case "session.remove":
+                transcript = removeItems(transcript, [m.itemId]);
+                return;
+              case "session.delta":
+                transcript = applyDelta(transcript, m);
                 return;
               case "session.dialog":
                 dialogs = new Set(dialogs).add(m.dialog.id);
