@@ -1526,7 +1526,8 @@ fn stored_thread_closed(row: &pulls::PullRequest, open_threads: &[String]) -> bo
         .any(|item| item.kind == super::comments::Kind::Thread && !open_threads.contains(&item.id))
 }
 
-/// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or
+/// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved,
+/// whose stored feedback is NULL (a first read, so feedback is populated and Lead is woken), or
 /// whose stored feedback holds a review thread that is no longer open (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
 fn due_reads(
     owned: &[(PlanId, WorkflowKey, pulls::PullRequest)],
@@ -1538,7 +1539,8 @@ fn due_reads(
             l.pr.repo == row.repo
                 && l.pr.number == row.number
                 && l.pr.state == PrState::Open
-                && (row.updated_at.as_deref() != Some(l.pr.updated_at.as_str())
+                && (row.feedback.is_none()
+                    || row.updated_at.as_deref() != Some(l.pr.updated_at.as_str())
                     || stored_thread_closed(row, &l.pr.open_threads))
         });
         if is_due && !due.contains(&(row.repo.clone(), row.number)) {
@@ -1802,8 +1804,11 @@ mod due_reads_tests {
     }
 
     #[test]
-    fn null_feedback_with_an_unmoved_updated_at_is_not_due() {
-        assert!(due_reads(&[row("1", None)], &[listed("1", PrState::Open)]).is_empty());
+    fn null_feedback_on_an_owned_open_pr_is_due() {
+        assert_eq!(
+            due_reads(&[row("1", None)], &[listed("1", PrState::Open)]),
+            key()
+        );
     }
 
     #[test]
