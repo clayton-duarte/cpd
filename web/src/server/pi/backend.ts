@@ -2,7 +2,14 @@ import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
-import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, PI_SEND_TEXT_MAX, WINDOW_SIZE, WebError, toWireError } from "../../protocol/domain.ts";
+import {
+  IMAGE_MAX_COUNT,
+  IMAGE_MAX_TOTAL_BASE64,
+  PI_SEND_TEXT_MAX,
+  WINDOW_SIZE,
+  WebError,
+  toWireError,
+} from "../../protocol/domain.ts";
 import type {
   Capabilities,
   ConfigureChange,
@@ -20,7 +27,11 @@ import type { SessionServerMessage } from "../../protocol/wire.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import { toArgv } from "../cpd-argv.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
-import type { SessionEmit, SessionHandle, SessionBackend } from "../hub/connection.ts";
+import type {
+  SessionEmit,
+  SessionHandle,
+  SessionBackend,
+} from "../hub/connection.ts";
 import type { GitBoundary } from "../../protocol/runtime.ts";
 import type { JsonlFacts, PiNormalizer, PushResult } from "./jsonl.ts";
 import { watchSession } from "./watch.ts";
@@ -34,26 +45,48 @@ export type { Disposable };
 
 // The chat argv builders of cockpit/actions.ts (CONTRACT 6.3), through the shared builder (docs/contract.md §5.6).
 const WEB_UNBLOCKS = "User message from the web chat";
-const sessionSendArgs = (id: string, text: string, webuiToken?: string): readonly string[] =>
-  toArgv({ kind: "session.send", sessionId: id, text, unblocks: WEB_UNBLOCKS, origin: "webui", ...(webuiToken === undefined ? {} : { webuiToken }) });
+const sessionSendArgs = (
+  id: string,
+  text: string,
+  webuiToken?: string,
+): readonly string[] =>
+  toArgv({
+    kind: "session.send",
+    sessionId: id,
+    text,
+    unblocks: WEB_UNBLOCKS,
+    origin: "webui",
+    ...(webuiToken === undefined ? {} : { webuiToken }),
+  });
 const sessionRetierArgs = (id: string, tier: string): readonly string[] =>
   toArgv({ kind: "session.retier", sessionId: id, tier });
 
 const REASON = {
-  steer: "`cpd session send` cannot steer a running pi turn; send a follow-up instead",
+  steer:
+    "`cpd session send` cannot steer a running pi turn; send a follow-up instead",
   abort: "cpd has no command to abort a pi session turn",
   abortSubmission: "pi sessions have no submission queue to cancel from",
   compact: "cpd has no command to compact a pi session",
   model: "cpd cannot change the model of a pi session; pick a Tier instead",
   thinking: "cpd cannot change the thinking level of a pi session",
-  dialogs: "a question of a pi session cannot be answered from outside; it is shown read-only, rebuilt from the transcript",
+  dialogs:
+    "a question of a pi session cannot be answered from outside; it is shown read-only, rebuilt from the transcript",
 } as const;
-const IMAGE_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" } as const;
+const IMAGE_EXT = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+} as const;
 function sanitizeFileName(name: string): string {
   return name.replace(/[^A-Za-z0-9._-]/g, "_");
 }
-const no = (reason: string): { supported: false; reason: string } => ({ supported: false, reason });
-const unsupported = (reason: string): WebError => new WebError("unsupported_capability", reason);
+const no = (reason: string): { supported: false; reason: string } => ({
+  supported: false,
+  reason,
+});
+const unsupported = (reason: string): WebError =>
+  new WebError("unsupported_capability", reason);
 
 const known = <T>(value: T): Stat<T> => ({ state: "known", value });
 const unknown = (reason: string): Stat<never> => ({ state: "unknown", reason });
@@ -66,11 +99,13 @@ interface ShowStats {
   readonly error?: string;
 }
 
-/** `state` is the engine session state; a stub for now: behaviour is unchanged. */
-export const isBusy = (f: JsonlFacts, _state?: string): boolean =>
-  f.lastRole === "user" ||
-  f.lastRole === "toolResult" ||
-  (f.lastRole === "assistant" && (f.lastStopReason === "toolUse" || f.lastStopReason === "pending"));
+/** `state` is the engine session state: a stopped session is never busy. */
+export const isBusy = (f: JsonlFacts, state?: string): boolean =>
+  state !== "stopped" &&
+  (f.lastRole === "user" ||
+    f.lastRole === "toolResult" ||
+    (f.lastRole === "assistant" &&
+      (f.lastStopReason === "toolUse" || f.lastStopReason === "pending")));
 
 export function createPiBackend(deps: {
   cpd: Cpd;
@@ -89,7 +124,10 @@ export function createPiBackend(deps: {
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
-  async function attach(session: ResolvedSession, emit: SessionEmit): Promise<SessionHandle> {
+  async function attach(
+    session: ResolvedSession,
+    emit: SessionEmit,
+  ): Promise<SessionHandle> {
     const { ref } = session;
     let currentFile: string | undefined = session.file;
     const sessionId = ref.id;
@@ -101,15 +139,29 @@ export function createPiBackend(deps: {
       normalizer: createNormalizer(),
       openDialogs: [],
     });
-    let tail = currentFile === undefined ? emptyTail() : await readTail(currentFile, deps.fs, windowSize);
+    let tail =
+      currentFile === undefined
+        ? emptyTail()
+        : await readTail(currentFile, deps.fs, windowSize);
 
     const readShow = async (): Promise<ShowStats> => {
       try {
-        const reply = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
+        const reply = await deps.cpd.json(
+          toArgv({ kind: "session.show", sessionId }),
+        );
         const row = reply.session;
-        const o = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : {};
-        const s = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
-        return { model: s(o.model), thinking: s(o.thinking), tier: s(o.tier), file: s(o.file) };
+        const o =
+          typeof row === "object" && row !== null
+            ? (row as Record<string, unknown>)
+            : {};
+        const s = (v: unknown): string | undefined =>
+          typeof v === "string" && v !== "" ? v : undefined;
+        return {
+          model: s(o.model),
+          thinking: s(o.thinking),
+          tier: s(o.tier),
+          file: s(o.file),
+        };
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
       }
@@ -127,26 +179,45 @@ export function createPiBackend(deps: {
       }
     }
 
-    const pick = (fact: string | undefined, shown: string | undefined, what: string): Stat<string> => {
+    const pick = (
+      fact: string | undefined,
+      shown: string | undefined,
+      what: string,
+    ): Stat<string> => {
       const v = fact ?? shown;
       if (v !== undefined) return known(v);
-      return unknown(show.error === undefined ? `cpd session show has no ${what}` : `cpd session show failed: ${show.error}`);
+      return unknown(
+        show.error === undefined
+          ? `cpd session show has no ${what}`
+          : `cpd session show failed: ${show.error}`,
+      );
     };
     const footer = (): FooterStats => {
       const facts = tail.normalizer.facts;
       const tier = show.tier ?? ref.tier;
       return {
         model: pick(facts.model, show.model, "model"),
-        tier: tier === undefined ? unknown("no Tier known for this session") : known(tier),
+        tier:
+          tier === undefined
+            ? unknown("no Tier known for this session")
+            : known(tier),
         thinking: pick(facts.thinking, show.thinking, "thinking level"),
-        contextPercent: unknown("the model's context window is not available for pi sessions"),
-        cost: unknown("pi session cost needs a full-file scan, which Phase 1 never does"),
+        contextPercent: unknown(
+          "the model's context window is not available for pi sessions",
+        ),
+        cost: unknown(
+          "pi session cost needs a full-file scan, which Phase 1 never does",
+        ),
         branch,
       };
     };
 
     const capabilities: Capabilities = {
-      images: { supported: true, maxCount: IMAGE_MAX_COUNT, maxTotalBase64: IMAGE_MAX_TOTAL_BASE64 },
+      images: {
+        supported: true,
+        maxCount: IMAGE_MAX_COUNT,
+        maxTotalBase64: IMAGE_MAX_TOTAL_BASE64,
+      },
       steer: no(REASON.steer),
       followUp: { supported: true },
       abort: no(REASON.abort),
@@ -173,12 +244,13 @@ export function createPiBackend(deps: {
       return fresh;
     };
     syncTurns();
-    let busy = isBusy(tail.normalizer.facts);
+    let busy = isBusy(tail.normalizer.facts, ref.state);
     let watcher: Disposable | undefined;
     const out = (m: SessionServerMessage): void => {
       if (!disposed) emit(m);
     };
-    const status = (): void => out({ type: "session.status", sessionId, busy, queued: [] });
+    const status = (): void =>
+      out({ type: "session.status", sessionId, busy, queued: [] });
     const openReviews = new Set<string>();
     const openQuestions = new Set<string>();
     const answeringQuestions = new Set<string>();
@@ -188,7 +260,11 @@ export function createPiBackend(deps: {
       out({ type: "session.dialog", sessionId, dialog: d });
     };
 
-    const startWatch = (normalizer: PiNormalizer, offset: number, identity: string): void => {
+    const startWatch = (
+      normalizer: PiNormalizer,
+      offset: number,
+      identity: string,
+    ): void => {
       if (currentFile === undefined) return;
       watcher = watchSession({
         path: currentFile,
@@ -200,25 +276,43 @@ export function createPiBackend(deps: {
         onEvent: (e) => {
           if (e.kind === "reset") {
             watcher?.dispose();
-            void reload().catch((err: unknown) => out({ type: "session.error", sessionId, error: toWireError(err) }));
+            void reload().catch((err: unknown) =>
+              out({
+                type: "session.error",
+                sessionId,
+                error: toWireError(err),
+              }),
+            );
           } else applyAppend(e.result);
         },
-        onError: (error) => out({ type: "session.error", sessionId, error: toWireError(error) }),
+        onError: (error) =>
+          out({ type: "session.error", sessionId, error: toWireError(error) }),
       });
     };
 
     const applyAppend = (r: PushResult): void => {
-      for (const ts of syncTurns()) if (liveIds.delete(`live:${ts}`)) out({ type: "session.remove", sessionId, itemId: `live:${ts}` });
-      if (r.added.length > 0) out({ type: "session.append", sessionId, items: r.added });
-      if (r.updated.length > 0) out({ type: "session.update", sessionId, items: r.updated });
+      for (const ts of syncTurns())
+        if (liveIds.delete(`live:${ts}`))
+          out({ type: "session.remove", sessionId, itemId: `live:${ts}` });
+      if (r.added.length > 0)
+        out({ type: "session.append", sessionId, items: r.added });
+      if (r.updated.length > 0)
+        out({ type: "session.update", sessionId, items: r.updated });
       for (const d of r.dialogsOpened) dialog(d);
       for (const id of r.dialogsResolved) {
         openReviews.delete(id);
         openQuestions.delete(id);
       }
-      for (const id of r.dialogsResolved) out({ type: "session.dialogResolved", sessionId, dialogId: id, outcome: "answered" });
-      if (r.factsChanged) out({ type: "session.footer", sessionId, footer: footer() });
-      const now = isBusy(tail.normalizer.facts);
+      for (const id of r.dialogsResolved)
+        out({
+          type: "session.dialogResolved",
+          sessionId,
+          dialogId: id,
+          outcome: "answered",
+        });
+      if (r.factsChanged)
+        out({ type: "session.footer", sessionId, footer: footer() });
+      const now = isBusy(tail.normalizer.facts, ref.state);
       if (now !== busy) {
         busy = now;
         status();
@@ -226,7 +320,12 @@ export function createPiBackend(deps: {
     };
 
     const emitTail = (): void => {
-      out({ type: "session.window", sessionId, mode: "tail", window: tail.window });
+      out({
+        type: "session.window",
+        sessionId,
+        mode: "tail",
+        window: tail.window,
+      });
       out({ type: "session.footer", sessionId, footer: footer() });
       status();
       for (const d of tail.openDialogs) dialog(d);
@@ -240,18 +339,26 @@ export function createPiBackend(deps: {
       liveIds.clear();
       turnsSeen = 0;
       syncTurns();
-      busy = isBusy(tail.normalizer.facts);
+      busy = isBusy(tail.normalizer.facts, ref.state);
       emitTail();
       startWatch(tail.normalizer, tail.endOffset, tail.identity);
     }
 
-    emit({ type: "session.attached", sessionId, capabilities, title: ref.title, meta: { ref, footer: footer() } });
+    emit({
+      type: "session.attached",
+      sessionId,
+      capabilities,
+      title: ref.title,
+      meta: { ref, footer: footer() },
+    });
     emitTail();
     startWatch(tail.normalizer, tail.endOffset, tail.identity);
     live?.attach(
       sessionId,
       (m) => {
-        if (m.type === "session.append") for (const i of m.items) if (i.id.startsWith("live:")) liveIds.add(i.id);
+        if (m.type === "session.append")
+          for (const i of m.items)
+            if (i.id.startsWith("live:")) liveIds.add(i.id);
         if (m.type === "session.remove") liveIds.delete(m.itemId);
         out(m);
       },
@@ -261,7 +368,8 @@ export function createPiBackend(deps: {
     const POLL_MS = 250;
     const POLL_MAX = 20;
     let poll: Disposable | undefined;
-    const pollError = (error: unknown): void => out({ type: "session.error", sessionId, error: toWireError(error) });
+    const pollError = (error: unknown): void =>
+      out({ type: "session.error", sessionId, error: toWireError(error) });
     const startPoll = (): void => {
       let ticks = 0;
       const arm = (): void => {
@@ -281,7 +389,13 @@ export function createPiBackend(deps: {
         }
         if (ticks >= POLL_MAX) {
           poll = undefined;
-          pollError(new WebError("session_file_missing", `session ${sessionId} has no session file`, { sessionId }));
+          pollError(
+            new WebError(
+              "session_file_missing",
+              `session ${sessionId} has no session file`,
+              { sessionId },
+            ),
+          );
           return;
         }
         arm();
@@ -293,45 +407,93 @@ export function createPiBackend(deps: {
       capabilities,
       async loadEarlier(before) {
         if (currentFile === undefined) {
-          out({ type: "session.window", sessionId, mode: "earlier", window: { items: [], hasEarlier: false, cursor: null } });
+          out({
+            type: "session.window",
+            sessionId,
+            mode: "earlier",
+            window: { items: [], hasEarlier: false, cursor: null },
+          });
           return;
         }
-        const page = await readEarlier(currentFile, deps.fs, before, windowSize);
-        out({ type: "session.window", sessionId, mode: "earlier", window: page.window });
+        const page = await readEarlier(
+          currentFile,
+          deps.fs,
+          before,
+          windowSize,
+        );
+        out({
+          type: "session.window",
+          sessionId,
+          mode: "earlier",
+          window: page.window,
+        });
       },
       async submit(input) {
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
         const files = input.files ?? [];
-        if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
+        if (
+          input.text.trim() === "" &&
+          input.images.length === 0 &&
+          files.length === 0
+        )
+          throw new WebError("invalid_submission", "the message is empty");
         const stamp = deps.now();
-        const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
-        const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
+        const imagePaths = input.images.map(
+          (im, i) =>
+            `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`,
+        );
+        const filePaths = files.map(
+          (f, i) =>
+            `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`,
+        );
         const markers: string[] = [];
         for (const p of imagePaths) markers.push(`[Attached image: ${p}]`);
         for (const p of filePaths) markers.push(`[Attached file: ${p}]`);
         const attached = markers.join("\n");
-        const text = markers.length === 0 ? input.text : input.text.trim() === "" ? attached : `${input.text}\n\n${attached}`;
+        const text =
+          markers.length === 0
+            ? input.text
+            : input.text.trim() === ""
+              ? attached
+              : `${input.text}\n\n${attached}`;
         if (text.length > PI_SEND_TEXT_MAX) {
-          throw new WebError("invalid_submission", `the message is longer than ${PI_SEND_TEXT_MAX} characters`);
+          throw new WebError(
+            "invalid_submission",
+            `the message is longer than ${PI_SEND_TEXT_MAX} characters`,
+          );
         }
         for (const [i, im] of input.images.entries()) {
-          await deps.fs.write(imagePaths[i] as string, Uint8Array.from(Buffer.from(im.dataBase64, "base64")));
+          await deps.fs.write(
+            imagePaths[i] as string,
+            Uint8Array.from(Buffer.from(im.dataBase64, "base64")),
+          );
         }
         for (const [i, f] of files.entries()) {
-          await deps.fs.write(filePaths[i] as string, new TextEncoder().encode(f.text));
+          await deps.fs.write(
+            filePaths[i] as string,
+            new TextEncoder().encode(f.text),
+          );
         }
         await deps.cpd.json(sessionSendArgs(sessionId, text, deps.webuiToken));
-        out({ type: "session.submitAck", sessionId, clientSubmissionId: input.clientSubmissionId, queued: false });
+        out({
+          type: "session.submitAck",
+          sessionId,
+          clientSubmissionId: input.clientSubmissionId,
+          queued: false,
+        });
         if (currentFile === undefined && poll === undefined) startPoll();
       },
       abort: () => Promise.reject(unsupported(REASON.abort)),
-      abortSubmission: () => Promise.reject(unsupported(REASON.abortSubmission)),
+      abortSubmission: () =>
+        Promise.reject(unsupported(REASON.abortSubmission)),
       compact: () => Promise.reject(unsupported(REASON.compact)),
       async configure(change) {
         if (change.kind === "model") throw unsupported(REASON.model);
         if (change.kind === "thinking") throw unsupported(REASON.thinking);
         if (!session.tierOptions.includes(change.tier)) {
-          throw new WebError("invalid_message", `unknown Tier ${change.tier}`, { field: "tier" });
+          throw new WebError("invalid_message", `unknown Tier ${change.tier}`, {
+            field: "tier",
+          });
         }
         await deps.cpd.json(sessionRetierArgs(sessionId, change.tier));
         show = await readShow();
@@ -340,8 +502,15 @@ export function createPiBackend(deps: {
       listModels: () => Promise.reject(unsupported(REASON.model)),
       async respond(dialogId, response) {
         if (response.method === "ask_user_question") {
-          if (!openQuestions.has(dialogId) || answeringQuestions.has(dialogId)) {
-            throw new WebError("invalid_message", `no answerable question ${dialogId}`, { field: "dialogId" });
+          if (
+            !openQuestions.has(dialogId) ||
+            answeringQuestions.has(dialogId)
+          ) {
+            throw new WebError(
+              "invalid_message",
+              `no answerable question ${dialogId}`,
+              { field: "dialogId" },
+            );
           }
           const askPath = `${deps.cpdHome}/run/ask/${sessionId}.json`;
           const payload = {
@@ -374,14 +543,22 @@ export function createPiBackend(deps: {
             try {
               await nodeFs.stat(askPath);
               await nodeFs.rm(askPath, { force: true });
-              const shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
+              const shown = await deps.cpd.json(
+                toArgv({ kind: "session.show", sessionId }),
+              );
               const pane =
-                typeof (shown["session"] as Record<string, unknown> | undefined)?.["tmux_pane"] === "string"
-                  ? ((shown["session"] as Record<string, unknown>)["tmux_pane"] as string)
+                typeof (
+                  shown["session"] as Record<string, unknown> | undefined
+                )?.["tmux_pane"] === "string"
+                  ? ((shown["session"] as Record<string, unknown>)[
+                      "tmux_pane"
+                    ] as string)
                   : null;
               if (pane !== null) {
                 await new Promise<void>((resolve) => {
-                  execFile("tmux", ["send-keys", "-t", pane, "Escape"], () => resolve());
+                  execFile("tmux", ["send-keys", "-t", pane, "Escape"], () =>
+                    resolve(),
+                  );
                 });
               }
               if (response.outcome === "answered") {
@@ -389,13 +566,18 @@ export function createPiBackend(deps: {
                   .map((a) => {
                     const val =
                       a.kind === "multi"
-                        ? [...(a.selected ?? []), ...(a.answer ? [a.answer] : [])].join(", ")
+                        ? [
+                            ...(a.selected ?? []),
+                            ...(a.answer ? [a.answer] : []),
+                          ].join(", ")
                         : a.answer;
                     return `${a.question} => ${val}`;
                   })
                   .join("\n");
                 if (summary.trim() !== "") {
-                  await deps.cpd.json(sessionSendArgs(sessionId, summary, deps.webuiToken));
+                  await deps.cpd.json(
+                    sessionSendArgs(sessionId, summary, deps.webuiToken),
+                  );
                 }
               }
             } catch {
@@ -404,17 +586,36 @@ export function createPiBackend(deps: {
           })();
           return;
         }
-        if (!openReviews.has(dialogId)) throw new WebError("invalid_message", `no pending plan review ${dialogId}`, { field: "dialogId" });
+        if (!openReviews.has(dialogId))
+          throw new WebError(
+            "invalid_message",
+            `no pending plan review ${dialogId}`,
+            { field: "dialogId" },
+          );
         if (response.outcome === "cancelled") return;
         const n = dialogId.slice("review:".length);
         const plan = ref.key.split(":")[1] as string;
-        const decide = (decision: "approve" | "reject", feedbackFile?: string): string[] =>
-          toArgv({ kind: "plan.decide", review: n, decision, planId: plan, feedbackFile });
-        if (response.outcome === "approve") await deps.cpd.json(decide("approve"));
-        else if (response.outcome === "reject") await deps.cpd.json(decide("reject"));
+        const decide = (
+          decision: "approve" | "reject",
+          feedbackFile?: string,
+        ): string[] =>
+          toArgv({
+            kind: "plan.decide",
+            review: n,
+            decision,
+            planId: plan,
+            feedbackFile,
+          });
+        if (response.outcome === "approve")
+          await deps.cpd.json(decide("approve"));
+        else if (response.outcome === "reject")
+          await deps.cpd.json(decide("reject"));
         else {
           const path = `${deps.cpdHome}/run/${plan}/feedback-${n}.md`;
-          await deps.fs.write(path, new TextEncoder().encode(response.feedback));
+          await deps.fs.write(
+            path,
+            new TextEncoder().encode(response.feedback),
+          );
           await deps.cpd.json(decide("reject", path));
         }
       },
