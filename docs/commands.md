@@ -7842,6 +7842,9 @@ cpd test run <name>...
 
 Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>` and refused when the title is in no `test(` or `it(` call of the file), a web name, `web/<file>.test.ts(x)::<title>` (the file's path, `::`, the exact vitest title; run through the web package's vitest, `pnpm --filter cpd-web-client exec vitest run --testNamePattern <title> <file>`), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). For web execution, the default reporter output is forwarded and an isolated, automatically cleaned JSON report must confirm passed assertions for the requested file/title. Missing, malformed, unrelated or skipped/todo-only execution reports fail even when Vitest exits 0 (#1235). This does not change collection-only `list` behavior. All run filtered, so none takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
 
+Node runs preserve the human spec reporter and confirm each requested title/file through a private structured execution report. A skipped/todo, absent, failed or unverified requested test is nonzero even if Node itself exits zero. Temporary reports and the official-API reporter module are removed after each run.
+
+
 ### 23.3 `test list` and `test build`
 
 ```
