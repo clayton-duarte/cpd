@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "id": "replace-with-unique-run-id",
+  "started_at": "REPLACE_WITH_ACTUAL_UTC_START",
+  "limits": { "issues": 10, "prs": 5 },
+  "authorization": "REPLACE with the User instruction reference and canonical GitHub run/handoff URL"
+}

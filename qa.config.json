@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "scope": "cpd-repo-qa",
+  "timezone": "America/Toronto",
+  "limits": {
+    "issues": 20,
+    "prs": 10
+  },
+  "repositories": [
+    {
+      "name": "clayton-duarte/cpd",
+      "base": "main"
+    },
+    {
+      "name": "clayton-duarte/dotfiles",
+      "base": "main"
+    },
+    {
+      "name": "clayton-duarte/skills",
+      "base": "main"
+    }
+  ]
+}

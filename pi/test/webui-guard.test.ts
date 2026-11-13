@@ -109,8 +109,8 @@ const TRIPPED = [{ kind: ENTRY_TYPE, data: { tripped: true, at: 1, turns: 21 } }
 test("webui_verified_input_clears_trip_and_starts_turn", { timeout: 20_000 }, async () => {
   const home = mkdtempSync(join(tmpdir(), "webui-guard-"));
   try {
-    mkdirSync(join(home, "run"));
-    writeFileSync(join(home, "run", "webui-token"), TOKEN, { mode: 0o600 });
+    mkdirSync(join(home, "run", "webui-tokens"), { recursive: true });
+    writeFileSync(join(home, "run", "webui-tokens", `${process.pid}.token`), TOKEN, { mode: 0o600 });
     await withHost({ stored: TRIPPED, answers: {}, config: { ...CONFIG, home } }, async (r) => {
       await r.up();
       const hello = (c: ReturnType<typeof r.connect>, token?: string) => {

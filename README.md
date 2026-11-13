@@ -88,7 +88,9 @@ State lives in `$CPD_HOME`, default `~/.cpd`: the database `cpd.db` (with its `-
 
 The continuous repository QA Protocol, its operating limits and creation
 tools are documented in [QA Protocol](docs/qa-protocol.md), with the
-[decisions and research](docs/qa-decisions.md) behind it.
+[decisions and research](docs/qa-decisions.md) behind it. To adopt the same method
+in another repo or agent session, use [`clayton-duarte/skills`](https://github.com/clayton-duarte/skills),
+package `skills/repo-qa`. CPD keeps a [pinned consumer snapshot](docs/qa-source.md).
 
 ```sh
 pnpm run verify

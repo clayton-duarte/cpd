@@ -111,6 +111,56 @@ const CANCEL: DialogResponse = { method: "ask_user_question", outcome: "cancelle
 const decide = (n: string, flag: string[]) => ["plan", "decide", n, ...flag, "--plan", "plan"];
 
 describe("pi backend plan review dialogs", () => {
+  it.each([ANSWER, CANCEL])("refuses an unknown $outcome question ID without touching the pending question", async (response) => {
+    const s = await setup({ text: ASK_TEXT });
+    await expect(s.handle.respond("call:missing", response)).rejects.toMatchObject({ code: "invalid_message" });
+    expect(s.fs.writes).toEqual([]);
+    expect(s.out.filter((m) => m.type === "session.dialogResolved")).toEqual([]);
+    await s.handle.respond("call:q1", response);
+    expect(s.fs.writes).toHaveLength(1);
+    await s.handle.dispose();
+  });
+
+  it.each([ANSWER, CANCEL])("refuses a replayed $outcome question response", async (response) => {
+    const s = await setup({ text: ASK_TEXT });
+    await s.handle.respond("call:q1", response);
+    await expect(s.handle.respond("call:q1", response)).rejects.toMatchObject({ code: "invalid_message" });
+    expect(s.fs.writes).toHaveLength(1);
+    expect(s.out.filter((m) => m.type === "session.dialogResolved")).toHaveLength(1);
+    await s.handle.dispose();
+  });
+
+  it.each([ANSWER, CANCEL])("refuses a duplicate $outcome while delivery is in flight", async (response) => {
+    const s = await setup({ text: ASK_TEXT });
+    let finishWrite!: () => void;
+    const delivery = new Promise<void>((resolve) => { finishWrite = resolve; });
+    const write = vi.spyOn(s.fs, "write").mockReturnValueOnce(delivery);
+    const first = s.handle.respond("call:q1", response);
+    try {
+      await expect(s.handle.respond("call:q1", response)).rejects.toMatchObject({ code: "invalid_message" });
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(s.out.filter((m) => m.type === "session.dialogResolved")).toEqual([]);
+    } finally {
+      finishWrite();
+      await first;
+      await s.handle.dispose();
+    }
+  });
+
+  it("refuses mismatched methods and unknown review cancellations before effects", async () => {
+    const s = await setup({ text: `${ASK_TEXT}${REVIEW_TEXT}` });
+    await expect(s.handle.respond("review:7", ANSWER)).rejects.toMatchObject({ code: "invalid_message" });
+    for (const dialogId of ["call:q1", "review:missing"]) {
+      await expect(s.handle.respond(dialogId, { method: "cpd_plan_review", outcome: "cancelled" })).rejects.toMatchObject({ code: "invalid_message" });
+    }
+    expect(s.fs.writes).toEqual([]);
+    expect(s.out.filter((m) => m.type === "session.dialogResolved")).toEqual([]);
+    expect(s.cpd.calls.some((args) => args[1] === "decide")).toBe(false);
+    await s.handle.respond("call:q1", ANSWER);
+    await s.handle.respond("review:7", { method: "cpd_plan_review", outcome: "cancelled" });
+    await s.handle.dispose();
+  });
+
   it.each([ANSWER, CANCEL])("keeps $outcome unresolved while the response write is pending", async (response) => {
     const s = await setup({ text: ASK_TEXT });
     expect(s.out).toContainEqual(expect.objectContaining({ type: "session.dialog", dialog: expect.objectContaining({ id: "call:q1" }) }));
@@ -149,7 +199,7 @@ describe("pi backend plan review dialogs", () => {
   });
 
   it("a cancelled ask_user_question answer resolves cancelled and goes to the ask answer file", async () => {
-    const s = await setup({ text: REVIEW_TEXT });
+    const s = await setup({ text: ASK_TEXT });
     await s.handle.respond("call:q1", { method: "ask_user_question", outcome: "cancelled" });
     expect(s.out).toContainEqual({ type: "session.dialogResolved", sessionId: "s1", dialogId: "call:q1", outcome: "cancelled" });
     const write = s.fs.writes.find((w) => w.path === "/home/cpd/run/ask/s1.json");

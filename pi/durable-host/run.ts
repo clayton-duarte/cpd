@@ -1,5 +1,5 @@
 import { compactionPolicy, type CompactionSettings } from "./compaction.ts";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ConversationBusy, GenerationTask, hook, section, type Extension } from "@earendil-works/pi-durable";
@@ -33,6 +33,7 @@ import { HostRunning } from "./sockets.ts";
 import { Ring } from "./ring.ts";
 import { createServer, type Server } from "./server.ts";
 import { hostExtension } from "./extension.ts";
+import { webuiVerified } from "./webui-token.ts";
 import { registerHostTools } from "./tools.ts";
 import type { ViewCall, ViewStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
@@ -73,19 +74,6 @@ type TurnRuntime = LoopRuntime & { info: { role: "lead" | "manager" }; readStrea
 export function loopGate(r: LoopRuntime, now: number): boolean {
   r.turnStarts = [...r.turnStarts.filter((t) => t > now - WINDOW_MS), now];
   return r.turnStarts.length > r.info.loopGuardTurns;
-}
-
-/** The WebUI token (contract §6.16): the presented value against `$CPD_HOME/run/webui-token`, read at each check and compared in constant time; no file or no match is unverified. */
-async function webuiVerified(home: string, presented: string | undefined): Promise<boolean> {
-  if (presented === undefined) return false;
-  let actual: Buffer;
-  try {
-    actual = await readFile(join(home, "run", "webui-token"));
-  } catch {
-    return false;
-  }
-  const given = Buffer.from(presented);
-  return given.length === actual.length && timingSafeEqual(given, actual);
 }
 
 /** One model of `list_models` and of the `configure` validation (contract §6.17). */

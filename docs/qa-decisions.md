@@ -3,8 +3,10 @@
 Provenance: the User's QA Protocol design conversation, 2026-11-13. These are
 explicit User decisions unless described as implementation choices below.
 Setup research and acceptance criteria: [issue #1115](https://github.com/clayton-duarte/cpd/issues/1115).
-The Protocol and scripts are proposed for User review through this PR; the
-QA loop remains inactive until merge and an explicit start instruction.
+The original Protocol was adopted in PR #1116 and the 20/10 limits in PR #1132.
+Portable extraction was adopted in PR #1149; migration to its own source repo
+is tracked in issue #1152. No new QA run starts during this
+distillation. Each run still needs the User's explicit start/resume instruction.
 
 ## User decisions
 
@@ -32,6 +34,12 @@ QA loop remains inactive until merge and an explicit start instruction.
 | QA-20 | Name this document the QA Protocol; CPD calls collections of procedures and methods Protocols. | User clarification, 2026-11-13; glossary and ADR-0018 record the vocabulary and standalone execution. |
 | QA-21 | The User may explicitly reset today's allowance by starting a named dated batch while preserving all prior resources and aggregate totals. | User instruction, 2026-11-13 ([authorization record](https://github.com/clayton-duarte/cpd/issues/1115#issuecomment-6854012406)). Record authorization in GitHub; no autonomous resets or marker removal. |
 | QA-22 | Permanent limits are now 20 new issues and 10 new PRs, shared across CPD/dotfiles, per Toronto day or explicitly reset batch. | User instruction, 2026-11-13; supersedes QA-07's numeric limits. The currently requested reset uses the new limits. |
+| QA-23 | Make the method reproducible by a fresh agent in any repository using a self-contained kit, explicit project config/profile and durable GitHub handoffs. | User request after the measured pilot, 2026-11-13; implementation proposal and acceptance criteria in [#1148](https://github.com/clayton-duarte/cpd/issues/1148). No new loop, scheduler or live-host authority. |
+| QA-24 | Distinguish iteration, User-started run, daily allowance and explicit reset batch; enforce optional lower run caps from GitHub run markers. | Distillation of the 10/5 measurement run versus permanent 20/10 limits; intent-only run descriptors are not a local creation ledger. Existing attribution is preserved. |
+| QA-25 | Record the measured 10-issue/5-PR run as approximately a little over one weekly allowance percentage point, based on User dashboard readings. | User observed 80% before, 79% at start and 78% after; rounded readings are not exact telemetry or a guaranteed weekly throughput. [Run record](qa-runs/2026-11-13.md). |
+| QA-26 | Adopt the open Agent Skills package layout with a manual Markdown entry, one generic implementation, configurable repo/base/timezone/scope/caps and a CPD compatibility entry point. | Researched implementation choice for User review; [portable pattern sources](../tools/repo-qa/references/RESEARCH.md). Discovery differs by agent; no universal auto-install claim. |
+| QA-27 | The canonical reusable toolkit moves to `clayton-duarte/skills`, package `skills/repo-qa`; CPD consumes an immutable-revision, hash-verified vendored snapshot. | User explicitly requested creation/migration on 2026-11-13. Keeps CPD operational without secondary private-repo checkout credentials. [Source/consumer ownership](qa-source.md), tracking [#1152](https://github.com/clayton-duarte/cpd/issues/1152). |
+| QA-28 | Count the explicitly authorized skills-source migration in the existing shared CPD/dotfiles allowance by including `clayton-duarte/skills` in the canonical allowlist. | Conservative implementation choice for the User-authorized related source, preserving 20/10 and all history rather than granting a fresh allowance. Unrelated consumers still require explicit grouping decisions; no automatic parallel writers. |
 
 ## Adopted patterns and evidence
 
@@ -141,3 +149,55 @@ fail before API access. Starting a batch is an explicit User policy exception,
 not an automatic response to exhaustion. This is a User operating decision,
 not a claim about industry consensus. Existing REST/pagination and atomic body
 marker evidence above supports the mechanism; tests pin scoping and boundaries.
+
+### Distillation and cold-start reproducibility
+
+The portable source is `tools/repo-qa/`; CPD policy is `qa.config.json` plus the
+CPD profile. The existing `scripts/qa.mjs` entry and historical markers remain.
+The generic Protocol owns common procedures once; project facts, decisions and
+run retrospectives remain in CPD docs. Adopters configure their repository/base,
+permissions and User-approved grouping rather than inheriting private CPD facts.
+One serialized operator still owns a shared group. No distributed service or
+provider-specific memory was introduced.
+
+The cold-start experiment copies the whole kit into an unrelated temporary
+location, uses another repo/base/timezone, invokes fresh Node processes from a
+different working directory, and substitutes a fake GitHub CLI. It verifies
+atomic literal markers, restart recovery and independent run/day refusals.
+Malformed/unverifiable inputs fail closed. A two-day ordinary REST lookback
+replaces the Toronto-specific 26-hour optimization; exact timezone day filtering
+preserves counts, while a long run extends listings to its immutable start.
+
+Run descriptors store authorization/ID/start/limits only. GitHub markers and
+all-state REST listings are the ledger; copied counts in handoffs are snapshots.
+Changing ID/start or scope to regain allowance is forbidden. A reset does not
+reset a run cap. The script cannot authenticate prose permission references,
+coordinate concurrent writers or prevent deliberate bypass; these limits are
+explicit, rather than claims of automatic governance.
+
+Today showed why reproducers must survive the workspace, why a fake boundary
+alone does not prove the real caller permits a bug, why CI state must be current,
+and why unrelated test failures need a base comparison. Those lessons now appear
+in the generic procedure and handoff template. Earlier issue comments remain the
+durable rationale; [the run record](qa-runs/2026-11-13.md) indexes the evidence.
+
+### Canonical skills source and pinned consumers
+
+The User requested `clayton-duarte/skills` after adopting the portable kit. Only
+`tools/repo-qa` is extracted, with exact original commit/tree provenance; CPD's
+private product Git history, machine definitions, profile and pilot records stay
+here. The new repository matches CPD's private visibility; no public release or
+new license is implied. The User created the empty repo after the integration's
+create-repository endpoint returned 403. README initialization supplies a PR
+base; actual migration/consumer feature changes remain User-reviewed PRs.
+
+[The source migration record](https://github.com/clayton-duarte/skills/blob/9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859/docs/repo-qa-migration.md)
+compares a pinned vendored copy against submodule/private-token setup and package
+publication. Git's upstream subtree documentation supports self-contained embedded
+consumers/extraction: https://github.com/git/git/blob/master/contrib/subtree/git-subtree.adoc .
+GitHub checkout documents private secondary-repo token needs:
+https://github.com/actions/checkout#checkout-multiple-repos-private .
+Sources consulted 2026-11-13. The dependency-free copy-based adoption method is
+retained; no new updater service, registry or credential is required. The local
+copy is deliberately a consumer, with upstream revision/file hashes verified in
+CPD tests. Changes go upstream first, then consumers update through reviewed PRs.
