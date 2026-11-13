@@ -1,7 +1,4 @@
-//! The drain's up-to-date merge check: immediately before `gh pr merge`, the engine re-reads whether the merge
-//! operation's head still contains the default branch's head, and a head that no longer does is not merged. In
-//! process on the janitor's `Rig`: `gh` is a scripted route on the `FakeRunner`, the store is the rig's temp
-//! database. No process, no network, no real git.
+//! The drain submits a clean behind-main PR with its expected head; GitHub enforces branch protection.
 
 use std::sync::Arc;
 
@@ -52,7 +49,7 @@ fn rig() -> Rig {
 }
 
 #[test]
-fn the_drain_does_not_merge_a_head_that_no_longer_contains_main() {
+fn the_drain_merges_a_clean_head_even_when_it_does_not_contain_main() {
     let rig = rig();
     let mut store = Store::open(&rig.home, 5000).unwrap();
     let now = rig.fakes.ports.clock.utc();
@@ -77,14 +74,21 @@ fn the_drain_does_not_merge_a_head_that_no_longer_contains_main() {
         GithubSource::default().execute(&mut cx, &m)
     });
     assert!(
-        !matches!(outcome, ExecOutcome::Done),
-        "the drain does not execute the merge"
+        matches!(outcome, ExecOutcome::Done),
+        "the drain executes the merge"
     );
     let calls = rig.fakes.runner.calls();
     assert!(
-        !calls
+        !calls.iter().any(|c| c
+            .args
+            .iter()
+            .any(|a| a.starts_with("repos/acme/pay/compare/"))),
+        "no redundant containment request: {calls:?}"
+    );
+    assert!(
+        calls
             .iter()
             .any(|c| { c.program == "gh" && c.args.iter().any(|a| a == "merge") }),
-        "gh pr merge is not called: {calls:?}"
+        "gh pr merge is called: {calls:?}"
     );
 }

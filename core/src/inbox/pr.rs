@@ -281,8 +281,11 @@ pub fn conditions(
             if behind_main && !broken {
                 // STATUS row 5a (behind main) is removed (pro-d554): no row, no label, no grace.
                 // Row 9: otherwise, including a pull request behind its base with no conflict (pro-d554) -> none: no item.
-                // But do NOT omit when status == Status::ChecksRunning or Status::ReadyForReview.
-                if status != Status::ChecksRunning && status != Status::ReadyForReview {
+                // Keep actionable rows, including ready-to-merge PRs: behind main alone does not block merging.
+                if !matches!(
+                    status,
+                    Status::ChecksRunning | Status::ReadyForReview | Status::ReadyToMerge
+                ) {
                     continue;
                 }
             }
