@@ -877,7 +877,7 @@ pub fn stored_description_of(
     plan: &PlanId,
     key: &WorkflowKey,
 ) -> Result<Option<String>, CpdError> {
-    let (stored, adopted, name, issue): (Option<String>, bool, String, Option<String>) = conn.query_row(
+    let (stored, adopted, name, issue): (Option<String>, bool, Option<String>, Option<String>) = conn.query_row(
         "SELECT w.description, w.head_ref IS NOT NULL, w.name, b.issue
            FROM workflows w LEFT JOIN bug_records b ON b.id = w.bug_id WHERE w.plan = ?1 AND w.key = ?2",
         [plan.as_str(), key.as_str()],
@@ -886,7 +886,9 @@ pub fn stored_description_of(
     // A Workflow that fixes a bug ends its body with `Fixes <issue>`, so the merge closes the issue.
     let stored = match (
         stored,
-        issue.and_then(|i| crate::protocol::fixes_line(&i, &name)),
+        issue
+            .zip(name)
+            .and_then(|(i, n)| crate::protocol::fixes_line(&i, &n)),
     ) {
         (Some(body), Some(line)) if !body.lines().any(|l| l.trim() == line) => {
             Some(format!("{}\n\n{line}\n", body.trim_end()))
