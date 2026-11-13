@@ -2058,13 +2058,13 @@ Idempotent: yes, as stated above. An abandoned or failed operation never removes
 cpd job reseal <key> [--plan <id>]
 ```
 
-Recomputes and stores the Locked-Job fingerprint of a Job when its stored fingerprint does not match the current inputs (§2.3), but only when every unexplained difference can be attributed to a recorded redirect of one of its needs by a `job replace-test` operation. Use this to repair a Job that `doctor` reports as tampered due to replaced test dependencies (§14.1; contract §3.7 "The window", bug b62). A Job whose fingerprint mismatch has any other cause (a specification field changed without a recorded redirect, or changes made outside cpd) is refused `reseal_unexplained` (exit 3) and is not rewritten. **The Lead only**: a Worker (`CPD_ATTEMPT` set) is refused `not_a_lead` (exit 3), and nothing is written.
+Recomputes and stores the Locked-Job fingerprint of a Job when its stored fingerprint does not match the current inputs (§2.3), but only when every unexplained difference can be attributed to a recorded redirect of one of its needs by a `job replace-test` operation. Use this to repair a Job that `doctor` reports as tampered due to replaced test dependencies (§14.1; contract §3.7 "The window", bug b62). A Job whose fingerprint mismatch has any other cause (a specification field changed without a recorded redirect, or changes made outside cpd) is refused `reseal_unexplained` (exit 3) and is not rewritten. **The Lead only**: a Worker (`CPD_ATTEMPT` set), or a session that is not the target Plan's Lead, is refused `not_a_lead` (exit 3), and nothing is written. The Job's needs are reconstructed at its actual sealing point: any point along each need's recorded redirect chain that reproduces the sealed fingerprint explains the drift.
 
 When it applies: the Job is `queued` or `running`, its stored `fingerprint` does not match the Locked-Job fingerprint computed from its current Locked fields and needs, and the `jobs_history` rows of all prior `job-edited` Events linked to `job-replaced` Events document that every need change is a redirect from a `replace-test` operation (the old and new test Job keys are recorded in the redirect Event).
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the caller is a Worker (`CPD_ATTEMPT` set) | `not_a_lead` | 3 |
+| the caller is a Worker (`CPD_ATTEMPT` set) or is not the Plan's Lead session | `not_a_lead` | 3 |
 | the Job's stored fingerprint matches the Locked-Job fingerprint of its current inputs (the Job is not tampered) | `already` | 0 |
 | the Job's stored fingerprint does not match, but the mismatch cannot be fully explained by recorded `job replace-test` redirects of its needs (some difference is unexplained, meaning a field was changed outside of a replace-test, or a replace-test Event is missing, or the Spec or other Locked fields are not as sealed) | `reseal_unexplained` | 3 |
 
