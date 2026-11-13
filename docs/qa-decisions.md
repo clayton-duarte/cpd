@@ -4,7 +4,8 @@ Provenance: the User's QA Protocol design conversation, 2026-11-13. These are
 explicit User decisions unless described as implementation choices below.
 Setup research and acceptance criteria: [issue #1115](https://github.com/clayton-duarte/cpd/issues/1115).
 The original Protocol was adopted in PR #1116 and the 20/10 limits in PR #1132.
-Portable extraction is proposed in issue #1148; no new QA run starts during this
+Portable extraction was adopted in PR #1149; migration to its own source repo
+is tracked in issue #1152. No new QA run starts during this
 distillation. Each run still needs the User's explicit start/resume instruction.
 
 ## User decisions
@@ -37,6 +38,8 @@ distillation. Each run still needs the User's explicit start/resume instruction.
 | QA-24 | Distinguish iteration, User-started run, daily allowance and explicit reset batch; enforce optional lower run caps from GitHub run markers. | Distillation of the 10/5 measurement run versus permanent 20/10 limits; intent-only run descriptors are not a local creation ledger. Existing attribution is preserved. |
 | QA-25 | Record the measured 10-issue/5-PR run as approximately a little over one weekly allowance percentage point, based on User dashboard readings. | User observed 80% before, 79% at start and 78% after; rounded readings are not exact telemetry or a guaranteed weekly throughput. [Run record](qa-runs/2026-11-13.md). |
 | QA-26 | Adopt the open Agent Skills package layout with a manual Markdown entry, one generic implementation, configurable repo/base/timezone/scope/caps and a CPD compatibility entry point. | Researched implementation choice for User review; [portable pattern sources](../tools/repo-qa/references/RESEARCH.md). Discovery differs by agent; no universal auto-install claim. |
+| QA-27 | The canonical reusable toolkit moves to `clayton-duarte/skills`, package `skills/repo-qa`; CPD consumes an immutable-revision, hash-verified vendored snapshot. | User explicitly requested creation/migration on 2026-11-13. Keeps CPD operational without secondary private-repo checkout credentials. [Source/consumer ownership](qa-source.md), tracking [#1152](https://github.com/clayton-duarte/cpd/issues/1152). |
+| QA-28 | Count the explicitly authorized skills-source migration in the existing shared CPD/dotfiles allowance by including `clayton-duarte/skills` in the canonical allowlist. | Conservative implementation choice for the User-authorized related source, preserving 20/10 and all history rather than granting a fresh allowance. Unrelated consumers still require explicit grouping decisions; no automatic parallel writers. |
 
 ## Adopted patterns and evidence
 
@@ -177,3 +180,24 @@ alone does not prove the real caller permits a bug, why CI state must be current
 and why unrelated test failures need a base comparison. Those lessons now appear
 in the generic procedure and handoff template. Earlier issue comments remain the
 durable rationale; [the run record](qa-runs/2026-11-13.md) indexes the evidence.
+
+### Canonical skills source and pinned consumers
+
+The User requested `clayton-duarte/skills` after adopting the portable kit. Only
+`tools/repo-qa` is extracted, with exact original commit/tree provenance; CPD's
+private product Git history, machine definitions, profile and pilot records stay
+here. The new repository matches CPD's private visibility; no public release or
+new license is implied. The User created the empty repo after the integration's
+create-repository endpoint returned 403. README initialization supplies a PR
+base; actual migration/consumer feature changes remain User-reviewed PRs.
+
+[The source migration record](https://github.com/clayton-duarte/skills/blob/9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859/docs/repo-qa-migration.md)
+compares a pinned vendored copy against submodule/private-token setup and package
+publication. Git's upstream subtree documentation supports self-contained embedded
+consumers/extraction: https://github.com/git/git/blob/master/contrib/subtree/git-subtree.adoc .
+GitHub checkout documents private secondary-repo token needs:
+https://github.com/actions/checkout#checkout-multiple-repos-private .
+Sources consulted 2026-11-13. The dependency-free copy-based adoption method is
+retained; no new updater service, registry or credential is required. The local
+copy is deliberately a consumer, with upstream revision/file hashes verified in
+CPD tests. Changes go upstream first, then consumers update through reviewed PRs.
