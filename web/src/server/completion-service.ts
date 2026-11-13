@@ -12,16 +12,21 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
   const cache = new Map<string, Completion>();
   const last = new Map<string, Completion>();
   const inflight = new Map<string, Promise<Completion | null>>();
+  const latest = new Map<string, number>();
+  const writes = new Map<string, Promise<void>>();
+  let nextRequest = 0;
   return {
     track(ref, send) {
       let transcript = emptyTranscript;
       let dialogs = new Set<string>();
       let busy = false;
       let disposed = false;
+      let currentRequest = 0;
       const replay = ref.role === "lead" ? last.get(ref.id) : undefined;
       if (replay !== undefined) send({ type: "session.completion", sessionId: ref.id, completion: replay });
 
-      const compute = async (): Promise<void> => {
+      const compute = async (request: number): Promise<void> => {
+        const current = (): boolean => !disposed && currentRequest === request;
         if (ref.role !== "lead" || transcript.items.length === 0) return;
         const snapshot = transcript.items.slice();
         const hasOpenDialog = dialogs.size > 0;
@@ -31,7 +36,7 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
         } catch {
           return;
         }
-        if (plan === null || disposed) return;
+        if (plan === null || !current()) return;
         const entryId = String(snapshot[snapshot.length - 1]?.id);
         const key = `${ref.id}|${entryId}|${plan.cursor}`;
         let stored: Awaited<ReturnType<CompletionStore["get"]>> = null;
@@ -40,6 +45,7 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
         } catch {
           stored = null;
         }
+        if (!current()) return;
         let result: Completion | null;
         const hit = cache.get(key);
         if (stored !== null && stored.entryId === entryId) result = stored.completion;
@@ -53,17 +59,33 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
               inflight.delete(key);
               if (c !== null) {
                 cache.set(key, c);
-                void deps.store?.put(ref.id, entryId, c).catch(() => undefined);
               }
             });
           }
           result = (await p) ?? stored?.completion ?? null;
         }
-        if (result === null) return;
-        last.set(ref.id, result);
-        if (!disposed) send({ type: "session.completion", sessionId: ref.id, completion: result });
+        if (result === null || !current()) return;
+        if (latest.get(ref.id) === request) {
+          last.set(ref.id, result);
+          const store = deps.store;
+          if (store !== undefined) {
+            // Only persistence waits for earlier writes; classification and UI stay concurrent.
+            const write = (writes.get(ref.id) ?? Promise.resolve()).then(async () => {
+              if (current() && latest.get(ref.id) === request) await store.put(ref.id, entryId, result);
+            }).catch(() => undefined);
+            writes.set(ref.id, write);
+            void write.then(() => { if (writes.get(ref.id) === write) writes.delete(ref.id); });
+          }
+        }
+        send({ type: "session.completion", sessionId: ref.id, completion: result });
       };
-      const schedule = (): void => { void compute().catch(() => undefined); };
+      const schedule = (): void => {
+        if (ref.role !== "lead") return;
+        const request = ++nextRequest;
+        currentRequest = request;
+        latest.set(ref.id, request);
+        void compute(request).catch(() => undefined);
+      };
 
       return {
         observe(m) {
