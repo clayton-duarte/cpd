@@ -430,3 +430,23 @@ it.each(["null", "rejected"])("does not persist an older fallback under the new 
   expect(completions(sent).at(-1)).toMatchObject({ completion: fresh });
   expect(writes).toEqual(["u2"]);
 });
+
+it.each([true, false])("only a surviving same-input tracker inherits disposed shared ownership (same=%s)", async (same) => {
+  const pending: Array<(c: Completion | null) => void> = [];
+  const writes: string[] = [];
+  const service = createCompletionService({ classifier: { classify: () => new Promise<Completion | null>((r) => pending.push(r)) },
+    planOf: async () => plan(1), store: { get: async () => null, put: async (_id, entry) => { writes.push(entry); } } });
+  const sent: SessionServerMessage[] = [];
+  const first = service.track(lead, (m) => sent.push(m));
+  first.observe(tail([user("u1")])); await flush();
+  const second = service.track(lead, () => {});
+  second.observe(tail([user(same ? "u1" : "u2")])); await flush();
+  second.dispose();
+  pending[0]!(done); await flush();
+  const replay: SessionServerMessage[] = [];
+  service.track(lead, (m) => replay.push(m));
+  expect(completions(sent)).toHaveLength(1);
+  expect(completions(replay)).toHaveLength(same ? 1 : 0);
+  expect(writes).toEqual(same ? ["u1"] : []);
+  expect(pending).toHaveLength(same ? 1 : 2);
+});

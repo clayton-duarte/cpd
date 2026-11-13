@@ -12,7 +12,8 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
   const cache = new Map<string, Completion>();
   const last = new Map<string, Completion>();
   const inflight = new Map<string, Promise<Completion | null>>();
-  const latest = new Map<string, number>();
+  const latest = new Map<string, { request: number; key?: string }>();
+  const active = new Set<number>();
   const writes = new Map<string, Promise<void>>();
   let nextRequest = 0;
   return {
@@ -39,6 +40,8 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
         if (plan === null || !current()) return;
         const entryId = String(snapshot[snapshot.length - 1]?.id);
         const key = `${ref.id}|${entryId}|${plan.cursor}`;
+        const owner = latest.get(ref.id);
+        if (owner?.request === request) owner.key = key;
         let stored: Awaited<ReturnType<CompletionStore["get"]>> = null;
         try {
           stored = (await deps.store?.get(ref.id)) ?? null;
@@ -68,13 +71,18 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
           result = classified ?? stored?.completion ?? null;
         }
         if (result === null || !current()) return;
-        if (latest.get(ref.id) === request) {
+        const latestInput = latest.get(ref.id);
+        if (latestInput !== undefined && !active.has(latestInput.request) && latestInput.key === key) {
+          // A current consumer of the identical input can replace a detached owner.
+          latest.set(ref.id, { request, key });
+        }
+        if (latest.get(ref.id)?.request === request) {
           last.set(ref.id, result);
           const store = deps.store;
           if (store !== undefined && persistResult) {
             // Only persistence waits for earlier writes; classification and UI stay concurrent.
             const write = (writes.get(ref.id) ?? Promise.resolve()).then(async () => {
-              if (current() && latest.get(ref.id) === request) await store.put(ref.id, entryId, result);
+              if (current() && latest.get(ref.id)?.request === request) await store.put(ref.id, entryId, result);
             }).catch(() => undefined);
             writes.set(ref.id, write);
             void write.then(() => { if (writes.get(ref.id) === write) writes.delete(ref.id); });
@@ -85,8 +93,10 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
       const schedule = (): void => {
         if (ref.role !== "lead") return;
         const request = ++nextRequest;
+        active.delete(currentRequest);
         currentRequest = request;
-        latest.set(ref.id, request);
+        active.add(request);
+        latest.set(ref.id, { request });
         void compute(request).catch(() => undefined);
       };
 
@@ -132,7 +142,7 @@ export function createCompletionService(deps: { classifier: CompletionClassifier
             // observe never throws
           }
         },
-        dispose() { disposed = true; },
+        dispose() { disposed = true; active.delete(currentRequest); },
       };
     },
   };
