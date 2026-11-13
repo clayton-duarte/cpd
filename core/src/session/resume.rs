@@ -3,10 +3,10 @@
 
 use serde_json::json;
 
-use super::moves::start_parked;
+use super::moves::{require_pane, start_parked};
 use super::row::{self, State};
 use super::send::check;
-use super::state::{scoped, set};
+use super::state::scoped;
 use super::{Env, ResumeArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -21,6 +21,8 @@ pub(super) fn resume(args: ResumeArgs) -> Result<Output, CpdError> {
     let id = env.resolve(&args.id)?;
     let target = env.store.read(|conn| row::load(conn, &id))?;
     check(&target)?;
+    // A durable Session has no pane: the engine's hosts step supervises it, so nothing here may start a `session run`.
+    require_pane(&target)?;
     match target.state {
         State::Stopped => restart(&mut env, &target),
         State::Blocked => loop_guard(&mut env, &id),
@@ -30,23 +32,24 @@ pub(super) fn resume(args: ResumeArgs) -> Result<Output, CpdError> {
     }
 }
 
-/// A stopped Session: started as a parked `session run <id>` window (the cockpit is created when missing), then `idle`.
-/// Its id and transcript are kept (issue #1207).
+/// A stopped Session: started as a parked `session run <id>` window (the cockpit is created when missing). Its id and
+/// transcript are kept (issue #1207). A live pane tagged with the Session is the wrapper `session run` leaves waiting at
+/// "Press Enter to resume" after pi exited (pi is not running: the state is `stopped`): it is replaced. The state stays
+/// `stopped` until the restarted pi's adapter reports `idle`, so the adapter watchdog (`adapter_missing_with`) still holds.
 fn restart(env: &mut Env, target: &row::Row) -> Result<Output, CpdError> {
-    let pane = start_parked(env, target, "session resume")?;
-    if pane.is_some() {
-        set(
-            &mut env.store,
-            "session resume",
-            &target.id,
-            State::Idle,
-            None,
-        )?;
+    let tmux = env.tmux();
+    for wrapper in tmux
+        .list_panes()?
+        .iter()
+        .filter(|p| !p.dead && p.cpd_session.as_ref() == Some(&target.id))
+    {
+        tmux.kill_pane(&wrapper.pane)?;
     }
+    let pane = start_parked(env, target, "session resume")?;
     Ok(Output::success(json!({
         "session": target.id,
         "pane": pane.as_ref().map(|p| p.as_str()),
-        "state": if pane.is_some() { "idle" } else { target.state.as_str() },
+        "state": target.state.as_str(),
         "already": pane.is_none(),
     })))
 }

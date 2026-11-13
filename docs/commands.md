@@ -3935,14 +3935,15 @@ Restarts a stopped pi Session (§6.2, issue #1207): a Lead or a Manager with `ru
 
 Effects:
 - **Already running or not stopped:** the Session's `state` is not `stopped`: nothing is written; `"already": true` in the output; no Event, no tmux.
-- **Rows**, one transaction: `state` = `idle` (waiting for the restarted pi to connect); **Event** `session-state` `{from: "stopped", to: "idle", label: null}`.
+- **Rows:** none for the state: it stays `stopped` until the restarted pi's adapter connects and reports `idle`, so the adapter watchdog (a pi running while the adapter reports `stopped`) still applies. No `session-state` Event.
+- **A live wrapper:** a pane tagged with the Session that is still alive is the wrapper `session run` leaves at "Press Enter to resume" after pi exited; it is killed and replaced by the new window.
 - **tmux:** as `session open` (§10.4) for a pi Session with no live pane: `new-window -d -t =cpd: -n park-<label> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<id> -P -F '#{window_id} #{pane_id}' -- <the engine's own executable> session run <id>`, set `@cpd_session`, `@cpd_title` (dynamic `title` or key/name), record `tmux_pane`; **Event** `session-moved` `{place: "parked"}`.
 
 ```json
-{"ok": true, "event": 4821, "session": "596d007f-…", "pane": "%41", "state": "idle"}
+{"ok": true, "session": "596d007f-…", "pane": "%41", "state": "stopped", "already": false}
 ```
 
-`event` is the id of the `session-state` Event. `pane` is the new pane, or null if already running. `state` is the Session's new state. Idempotent: yes; a running Session (not `stopped`) returns `"already": true` and changes nothing.
+`pane` is the new pane, or null if already running. `state` is the Session's state (`stopped` after a restart). Idempotent: yes; a running Session (not `stopped`) returns `"already": true` and changes nothing.
 
 ### 10.19 `session tail` (P1.11)
 
