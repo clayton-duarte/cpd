@@ -842,3 +842,113 @@ fn gh_deploy_rows_go_inactive_when_the_pr_closes() {
         None
     );
 }
+
+struct UncachedReply {
+    kind: &'static str,
+    wrong_pull: bool,
+}
+impl Handler for UncachedReply {
+    fn handle(&self, call: &Call) -> Reply {
+        let query = call
+            .args
+            .iter()
+            .find_map(|a| a.strip_prefix("query="))
+            .unwrap_or("");
+        let data = if query.contains("node(id:") {
+            json!({"node": {"__typename": self.kind, "databaseId": 42, "url": "https://github.com/acme/pay/pull/801#review-42", "pullRequest": {"number": if self.wrong_pull { 802 } else { 801 }, "repository": {"nameWithOwner": "acme/pay"}}}})
+        } else {
+            json!({"repository": {"pullRequest": {"id": "PR_801"}}, "addPullRequestReviewThreadReply": {"comment": {"url": "https://reply"}}, "addComment": {"commentEdge": {"node": {"url": "https://reply"}}}})
+        };
+        Reply::ok(&json!({"data": data}).to_string())
+    }
+}
+
+#[test]
+fn uncached_reply_targets_are_looked_up_and_delivered_by_the_drain() {
+    for (kind, to, operation) in [
+        (
+            "PullRequestReviewThread",
+            "PRRT_one",
+            "addPullRequestReviewThreadReply",
+        ),
+        (
+            "PullRequestReviewComment",
+            "PRRC_one",
+            "comments/42/replies",
+        ),
+        ("PullRequestReview", "PRR_one", "addComment"),
+    ] {
+        let rig = rig();
+        rig.sql("UPDATE pull_requests SET feedback = NULL WHERE number = 801");
+        let _ = (*rig.fakes.runner).clone().route(
+            "gh",
+            Arc::new(UncachedReply {
+                kind,
+                wrong_pull: false,
+            }),
+        );
+        let mut store = store(&rig);
+        let id = crate::swr::source::github_write::enqueue(
+            &mut store,
+            now(&rig),
+            KEY,
+            "reply",
+            json!({"to": to, "body": "Fixed."}),
+            None,
+        )
+        .unwrap();
+        let m = outbox::get(&mut store, id).unwrap().unwrap();
+        let config = Config::load(&rig.home).unwrap();
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &rig.fakes.ports,
+            home: &rig.home,
+            config: &config,
+        };
+        let outcome = GithubSource::default().execute(&mut cx, &m);
+        assert!(matches!(outcome, ExecOutcome::Done), "{kind}: {outcome:?}");
+        let calls = gh_calls(&rig);
+        assert!(
+            calls.iter().any(|c| c.contains(operation)),
+            "{kind}: {calls:?}"
+        );
+        assert!(
+            calls.iter().any(|c| c.contains("cpd:reply")),
+            "the actual reply includes its marker: {calls:?}"
+        );
+    }
+}
+
+#[test]
+fn uncached_reply_cannot_be_delivered_to_another_pull_request() {
+    let rig = rig();
+    rig.sql("UPDATE pull_requests SET feedback = NULL WHERE number = 801");
+    let _ = (*rig.fakes.runner).clone().route(
+        "gh",
+        Arc::new(UncachedReply {
+            kind: "PullRequestReviewThread",
+            wrong_pull: true,
+        }),
+    );
+    let mut store = store(&rig);
+    let id = crate::swr::source::github_write::enqueue(
+        &mut store,
+        now(&rig),
+        KEY,
+        "reply",
+        json!({"to": "PRRT_other", "body": "Fixed."}),
+        None,
+    )
+    .unwrap();
+    let m = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    let outcome = GithubSource::default().execute(&mut cx, &m);
+    assert!(!matches!(outcome, ExecOutcome::Done), "{outcome:?}");
+    assert_eq!(gh_calls(&rig).len(), 1, "only the lookup, never a write");
+}

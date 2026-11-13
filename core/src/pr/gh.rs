@@ -1334,6 +1334,66 @@ pub fn pull_request_id(
 }
 
 /// Replies in the review thread `thread` (never resolves it); the new comment's url.
+pub fn reply_to_uncached(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+    node: &str,
+    body: &str,
+) -> Result<(), CpdError> {
+    let query = "query($node: ID!) { node(id: $node) { __typename ... on PullRequestReviewComment { databaseId url pullRequest { number repository { nameWithOwner } } } ... on PullRequestReviewThread { id pullRequest { number repository { nameWithOwner } } } ... on PullRequestReview { url pullRequest { number repository { nameWithOwner } } } } }";
+    let (args, out) = graphql_with(runner, cwd, query, &[("node", node)])?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply {
+        args: &refs,
+        out: &out,
+    };
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("Cannot look up reply target {node}.")));
+    }
+    let (data, errors): (Value, _) = reply.envelope()?;
+    if !errors.is_empty() {
+        return Err(reply.fail(format!(
+            "Cannot look up reply target {node}: GitHub returned errors."
+        )));
+    }
+    let target = &data["node"];
+    let pull = &target["pullRequest"];
+    if pull["number"].as_i64() != Some(number)
+        || pull["repository"]["nameWithOwner"].as_str() != Some(repo)
+    {
+        return Err(reply.fail(format!(
+            "Reply target {node} does not belong to {repo}#{number}."
+        )));
+    }
+    match target["__typename"].as_str() {
+        Some("PullRequestReviewThread") => reply_to_thread(runner, cwd, node, body).map(drop),
+        Some("PullRequestReviewComment") => {
+            let id = target["databaseId"]
+                .as_i64()
+                .ok_or_else(|| reply.fail("Review comment has no databaseId.".into()))?;
+            let endpoint = format!("repos/{repo}/pulls/{number}/comments/{id}/replies");
+            let field = format!("body={body}");
+            run_on(runner, cwd, &["api", "-X", "POST", &endpoint, "-f", &field]).map(drop)
+        }
+        Some("PullRequestReview") => {
+            let url = target["url"]
+                .as_str()
+                .ok_or_else(|| reply.fail("Review has no URL.".into()))?;
+            pull_request_id(runner, cwd, repo, number)
+                .and_then(|pull| {
+                    reply_to_comment(runner, cwd, &pull, &format!("Re: {url}\n\n{body}"))
+                })
+                .map(drop)
+        }
+        _ => Err(reply.fail(format!(
+            "Reply target {node} is not a review, comment or thread."
+        ))),
+    }
+}
+
+/// Replies in the review thread `thread` (never resolves it); the new comment's url.
 pub fn reply_to_thread(
     runner: &dyn Runner,
     cwd: &Path,

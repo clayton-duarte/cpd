@@ -532,7 +532,17 @@ impl GithubSource {
         });
         let items: Vec<crate::pr::comments::Item> = match feedback {
             Ok(Some(text)) => serde_json::from_str(&text).unwrap_or_default(),
-            Ok(None) => Vec::new(),
+            Ok(None) => {
+                return gh::reply_to_uncached(
+                    runner,
+                    cwd,
+                    repo,
+                    number,
+                    to,
+                    &format!("{body}\n\n{MARKER}"),
+                )
+                .map_or_else(|e| retry(&e), |()| ExecOutcome::Done);
+            }
             Err(e) => return failed(e.message()),
         };
         // The item is gone from the raw feedback: someone answered it already.
