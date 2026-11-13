@@ -75,7 +75,11 @@ impl Boundary for Boundaries {
             tx.execute("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'aborted', ended_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND job = ?2 AND status = 'running'", rusqlite::params![plan.as_str(), request.source])?;
             Ok(())
         })?;
-        if self.models_a9_reset {
+        // The fixed driver skips the A9 reset for a Job stopped for replacement.
+        let replaced = env
+            .store
+            .read(|c| replace_test::stopped_for_replacement(c, plan, &request.source))?;
+        if self.models_a9_reset && !replaced {
             self.refs.insert(LEAD.into(), "base".into());
         }
         Ok(())
@@ -552,12 +556,11 @@ fn replace_test_stop_keeps_worker_commit() {
 #[test]
 fn replace_test_validates_selectors_on_worker_commit() {
     // b63: selectors are validated against the Worker's red-test state, i.e.
-    // with the Lead Branch on that commit, after the stop and its restore.
+    // with the Lead Branch on that commit (nothing resets it), at any stop count.
     let mut f = reset_fixture();
     f.run().unwrap();
     assert!(!f.io.validations.is_empty());
-    for (stops, tip) in &f.io.validations {
-        assert_eq!(*stops, 1, "validated before the stop was restored");
+    for (_, tip) in &f.io.validations {
         assert_eq!(tip, &f.commit, "validated off the Worker's commit");
     }
 }
