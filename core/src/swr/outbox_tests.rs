@@ -344,3 +344,56 @@ fn swr_transient_failure_backs_off_and_retries() {
     assert_eq!(again.id, id);
     assert_eq!(again.attempt_count, 2);
 }
+
+/// A jira `transition` with no `target_key` (the jira-swr migration's rows of a Workflow with no ticket) carries no ticket
+/// anywhere (`vars_json` holds only target and rank), so it cannot be recovered; the claim discards it once, as `failed`
+/// with `no_ticket_key`, never retried. A keyed row still drains.
+#[test]
+fn ticketless_jira_mutation_discarded() {
+    let (_dir, mut store) = store();
+    let clock = ManualClock::new();
+    let t0 = at(&clock, 0);
+    store
+        .write("test keyless", |tx| {
+            tx.execute(
+                "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, submitted_at, context_json)
+                 VALUES ('jira', NULL, 'transition', '{\"target\":\"in_review\",\"rank\":2}', 'pending', ?1, '{\"plan\":\"p\",\"workflow\":\"w\"}')",
+                [crate::clock::timestamp(t0)],
+            )?;
+            Ok::<(), crate::error::CpdError>(())
+        })
+        .unwrap();
+    let mut keyed = op("transition", json!({"ticket": "EEC-1", "target": "done"}));
+    keyed.system = "jira".into();
+    let keyed = outbox::enqueue(&mut store, at(&clock, 1), keyed, Coalesce::LatestWins).unwrap();
+
+    let now = at(&clock, 1);
+    let claimed = outbox::claim_next(&mut store, now, "jira")
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.id, keyed, "the keyed row still drains");
+    assert!(
+        outbox::claim_next(&mut store, now, "jira")
+            .unwrap()
+            .is_none(),
+        "the keyless row is never handed out"
+    );
+    let (status, error, retry_at) = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT status, error, next_attempt_at FROM swr_mutations WHERE target_key IS NULL",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )?)
+        })
+        .unwrap();
+    assert_eq!(status, "failed", "the keyless row leaves pending");
+    assert!(error.unwrap_or_default().contains("no_ticket_key"));
+    assert_eq!(retry_at, None, "never retried");
+}
