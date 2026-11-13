@@ -377,7 +377,7 @@ test("loop guard intra-turn: read-only cpd commands and other tools count as rea
 });
 
 const STATE_WRITES = [
-  "job add|edit|cancel|retry|steer|addendum|urgent|approve-tests|approve-touches",
+  "job add|edit|cancel|retry|steer|addendum|urgent|approve-tests|approve-touches|approve-untouched",
   "workflow add|edit|describe|cancel|start",
   "plan new|phase|outline|lock|review|rename|move|done|cancel|archive",
   "pr open|merge|post|rebase|push|describe|reply|rerun",
@@ -396,7 +396,7 @@ const STATE_WRITES = [
 test("loop guard intra-turn: every listed state-mutating cpd subcommand resets the read streak", async (t) => {
   const f = await freshStart(t);
   const all = [...STATE_WRITES, "cpd answer j-a1-q1 ok"];
-  assert.equal(all.length, 9 + 5 + 10 + 8 + 10 + 5 + 1 + 1 + 1 + 1 + 1 + 1);
+  assert.equal(all.length, 10 + 5 + 10 + 8 + 10 + 5 + 1 + 1 + 1 + 1 + 1 + 1);
   // a control: 12 reads and a read-only command leave the 13th refused
   await twelveThenRefused(f, "control");
   await reset(f);
