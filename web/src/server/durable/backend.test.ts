@@ -416,6 +416,22 @@ describe("durable backend", () => {
     await handle.respond("a1", approvalAnswer("Deny"));
     expect(host.respond).toHaveBeenCalledWith("a1", { value: "Deny" });
   });
+  const purposeReq = (id: string, purpose: string) =>
+    ({ type: "ui_request", id, purpose, created_at: 1, method: "select", title: "Run it?", options: ["Allow once", "Deny"] }) as unknown as HostFrame;
+  it("answering an external_approve dialog Allow once sends ui_response with value Allow once", async () => {
+    const { handle, host } = await setup([viewFrame([userEntry(0)])]);
+    host.deliver(purposeReq("e1", "external_approve"));
+    await tick();
+    await handle.respond("e1", approvalAnswer("Allow once"));
+    expect(host.respond).toHaveBeenCalledWith("e1", { value: "Allow once" });
+  });
+  it("answering a host_approve dialog Deny sends ui_response with value Deny", async () => {
+    const { handle, host } = await setup([viewFrame([userEntry(0)])]);
+    host.deliver(purposeReq("h2", "host_approve"));
+    await tick();
+    await handle.respond("h2", approvalAnswer("Deny"));
+    expect(host.respond).toHaveBeenCalledWith("h2", { value: "Deny" });
+  });
   it("cancelling an approval dialog sends ui_response Deny", async () => {
     const { handle, host } = await approvalSetup();
     await handle.respond("a1", { method: "ask_user_question", outcome: "cancelled" });
