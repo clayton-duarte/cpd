@@ -249,3 +249,31 @@ pub fn check_over(
     )
     .with("paths", json!(paths)))
 }
+
+/// A test case of a test file: its name and how many assertions it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestCase {
+    pub name: String,
+    pub assertions: usize,
+}
+
+/// The test cases of one test file's source (Rust `#[test]`, node:test/vitest/jest `it`/`test`). Stub.
+pub fn test_cases(_src: &str) -> Vec<TestCase> {
+    Vec::new()
+}
+
+/// Refuses `tests_removed` when `head` lacks a test case of `base` or holds fewer assertions in it,
+/// except the names in `approved`. Stub.
+pub fn check_tests_kept(_base: &str, _head: &str, _approved: &[String]) -> Result<(), CpdError> {
+    Ok(())
+}
+
+/// `job approve-test-removal --test <name> --reason <why>`: adds `test` to `approved` and returns the
+/// text of the event the User sees. A blank reason is a `usage` error. Stub.
+pub fn approve_test_removal(
+    _approved: &mut Vec<String>,
+    _test: &str,
+    _reason: &str,
+) -> Result<String, CpdError> {
+    Ok(String::new())
+}
