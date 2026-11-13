@@ -180,6 +180,7 @@ export function createPiBackend(deps: {
     const status = (): void => out({ type: "session.status", sessionId, busy, queued: [] });
     const openReviews = new Set<string>();
     const openQuestions = new Set<string>();
+    const answeringQuestions = new Set<string>();
     const dialog = (d: Dialog): void => {
       if (d.method === "cpd_plan_review") openReviews.add(d.id);
       if (d.method === "ask_user_question") openQuestions.add(d.id);
@@ -338,6 +339,9 @@ export function createPiBackend(deps: {
       listModels: () => Promise.reject(unsupported(REASON.model)),
       async respond(dialogId, response) {
         if (response.method === "ask_user_question") {
+          if (!openQuestions.has(dialogId) || answeringQuestions.has(dialogId)) {
+            throw new WebError("invalid_message", `no answerable question ${dialogId}`, { field: "dialogId" });
+          }
           const askPath = `${deps.cpdHome}/run/ask/${sessionId}.json`;
           const payload = {
             dialogId,
@@ -346,10 +350,15 @@ export function createPiBackend(deps: {
                 ? response.result
                 : { answers: [], cancelled: true },
           };
-          await deps.fs.write(
-            askPath,
-            new TextEncoder().encode(JSON.stringify(payload)),
-          );
+          answeringQuestions.add(dialogId);
+          try {
+            await deps.fs.write(
+              askPath,
+              new TextEncoder().encode(JSON.stringify(payload)),
+            );
+          } finally {
+            answeringQuestions.delete(dialogId);
+          }
           // The file boundary creates parent directories. Only acknowledge
           // delivery once its write succeeds, so failures leave the dialog open.
           openQuestions.delete(dialogId);
@@ -394,8 +403,8 @@ export function createPiBackend(deps: {
           })();
           return;
         }
-        if (response.outcome === "cancelled") return;
         if (!openReviews.has(dialogId)) throw new WebError("invalid_message", `no pending plan review ${dialogId}`, { field: "dialogId" });
+        if (response.outcome === "cancelled") return;
         const n = dialogId.slice("review:".length);
         const plan = ref.key.split(":")[1] as string;
         const decide = (decision: "approve" | "reject", feedbackFile?: string): string[] =>
