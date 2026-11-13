@@ -320,6 +320,15 @@ fn run_checks(
         .with("touches", json!(touches))
         .with("generated", json!(policy.generated.paths)));
     }
+    // The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's
+    // branch is the Lead Branch, so the Lead tip is not a comparison ref.
+    let mut compare_with: Vec<&str> = base_refs.clone();
+    if !git::worktree::is_linear(branch, &lead) {
+        compare_with.push(&lead);
+    }
+    let written = git::tamper::written_paths(root, base, sha, &compare_with)?;
+    // The test files the Attempt wrote keep their test cases and assertions (b70), unless the Lead approved the removal.
+    kind::tests_kept(env, plan, key, root, base, sha, &written)?;
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
@@ -327,13 +336,7 @@ fn run_checks(
     if kind::has_checks(job) {
         kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
     }
-    // The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's
-    // branch is the Lead Branch, so the Lead tip is not a comparison ref.
-    let mut compare_with: Vec<&str> = base_refs.clone();
-    if !git::worktree::is_linear(branch, &lead) {
-        compare_with.push(&lead);
-    }
-    git::tamper::written_paths(root, base, sha, &compare_with)
+    Ok(written)
 }
 
 /// The Lead Branch and the base of the Workflow that holds Job `job` of `plan`.

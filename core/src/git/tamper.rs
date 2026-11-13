@@ -433,7 +433,10 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
         for f in &mut stack {
             f.seen |= depth > f.depth;
         }
-        if fresh && open > 0 && let Some(f) = stack.last_mut() {
+        if fresh
+            && open > 0
+            && let Some(f) = stack.last_mut()
+        {
             f.seen = true;
         }
         if let Some(i) = stack.iter().rev().find_map(|f| f.case) {

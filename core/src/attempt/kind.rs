@@ -67,6 +67,44 @@ pub(super) fn guard_tests(
     .with("jobs", json!(guard.jobs)))
 }
 
+/// The test-removal guard (b70): of the `written` files of the Attempt, each that held test cases at `base` keeps them
+/// at `sha`, with no fewer assertions, unless the Lead approved the case (`job approve-test-removal`, read now so an
+/// approval reaches a running Attempt). A file gone at `sha` lost every case. `tests_removed`, `details.path`/`tests`.
+pub(super) fn tests_kept(
+    env: &mut Env,
+    plan: &PlanId,
+    key: &str,
+    root: &Path,
+    base: &str,
+    sha: &str,
+    written: &[String],
+) -> Result<(), CpdError> {
+    let job = crate::ids::JobKey::parse(key)?;
+    let approved = env
+        .store
+        .read(|conn| crate::job::approved_test_removals(conn, plan, &job))?;
+    for path in written {
+        let Some(before) = git::tamper::file_at(root, base, path)? else {
+            continue;
+        };
+        if git::tamper::test_cases(&before).is_empty() {
+            continue;
+        }
+        let after = git::tamper::file_at(root, sha, path)?.unwrap_or_default();
+        git::tamper::check_tests_kept(&before, &after, &approved).map_err(|e| {
+            let message = format!(
+                "{} In {path}: restore them, or ask the Lead (cpd ask), who approves it with cpd job approve-test-removal.",
+                e.message()
+            );
+            CpdError::new(ErrorCode::TestsRemoved, message)
+                .with("job", key)
+                .with("path", path.as_str())
+                .with("tests", e.details().get("tests").cloned().unwrap_or_default())
+        })?;
+    }
+    Ok(())
+}
+
 fn unconfigured(job: &str) -> CpdError {
     CpdError::new(
         ErrorCode::TestsUnconfigured,

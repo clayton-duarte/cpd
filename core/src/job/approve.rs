@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::{ApproveArgs, Env, find, guard, plan_phase};
+use super::{ApproveArgs, ApproveTestRemovalArgs, Env, find, guard, plan_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::tamper::path_matches;
@@ -134,4 +134,122 @@ fn decide(
     } else {
         Decision::Approve(job, approved)
     })
+}
+
+/// `job approve-test-removal` (commands.md §5.9b, contract §7.5; b70): the Lead lets a Job's submit remove or weaken the
+/// named test cases. Sets `jobs.test_removal_approved` to the union of its old value and the names; not a Locked field,
+/// in no fingerprint. The Event is `job-edited` with `fields: ["test_removal_approved"]`, its text carrying the reason.
+pub(super) fn approve_test_removal(args: ApproveTestRemovalArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    approve_test_removal_in(&mut env, args)
+}
+
+/// [`approve_test_removal`] on an open `env`: what a test hands in.
+pub(super) fn approve_test_removal_in(
+    env: &mut Env,
+    args: ApproveTestRemovalArgs,
+) -> Result<Output, CpdError> {
+    const COMMAND: &str = "job approve-test-removal";
+    // The Lead only, through `CPD_ATTEMPT` (hs-d497), as `job approve-tests`.
+    if std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()) {
+        return Err(CpdError::new(
+            ErrorCode::NotALead,
+            "Only the Lead approves the removal of a test: ask it with cpd ask, and it runs cpd job approve-test-removal.",
+        ));
+    }
+    let plan = args.plan.require()?.clone();
+    let key = args.key;
+    let mut names: Vec<String> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    for name in args.tests {
+        if name.trim().is_empty() {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                "--test needs a non-empty test name.",
+            ));
+        }
+        lines.push(crate::git::tamper::approve_test_removal(
+            &mut names,
+            name.trim(),
+            args.reason.as_str(),
+        )?);
+    }
+
+    let decide = |conn: &Connection| -> Result<(Job, Vec<String>, bool), CpdError> {
+        plan_phase(conn, &plan)?;
+        let all = jobs::load(conn, &plan)?;
+        let job = find(&all, &plan, &key)?.clone();
+        if !matches!(job.status.as_str(), "queued" | "running" | "failed") {
+            return Err(CpdError::new(
+                ErrorCode::IllegalTransition,
+                format!("Job {key} is {}: only a queued, running or failed Job is approved (a draft is not checked yet, an ended one never will be).", job.status),
+            )
+            .with("plan", plan.as_str())
+            .with("job", key.as_str())
+            .with("status", job.status.as_str()));
+        }
+        let mut approved = approved_test_removals(conn, &plan, &key)?;
+        let before = approved.len();
+        for name in &names {
+            if !approved.contains(name) {
+                approved.push(name.clone());
+            }
+        }
+        let new = approved.len() != before;
+        Ok((job, approved, new))
+    };
+    let (job, approved, new) = env.store.read(|conn| decide(conn))?;
+    if new {
+        env.store.write(COMMAND, |tx| {
+            let (job, approved, new) = decide(tx)?;
+            if !new {
+                return Ok(());
+            }
+            let stored = serde_json::to_string(&approved).expect("a list of text serialises");
+            tx.execute(
+                "UPDATE jobs SET test_removal_approved = ?3 WHERE plan = ?1 AND key = ?2",
+                rusqlite::params![plan.as_str(), key.as_str(), stored],
+            )?;
+            let text = format!(
+                "Job {key} of Plan {plan} may remove or weaken tests. {} Next: cpd job show {key} --plan {plan}",
+                lines.join(" ")
+            );
+            append(
+                tx,
+                NewEvent::job_edited(text, ["test_removal_approved"])
+                    .plan(plan.clone())
+                    .job(key.clone()),
+            )?;
+            if let Some(workflow) = &job.workflow {
+                crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
+            }
+            Ok(())
+        })?;
+    }
+    let mut out = json!({
+        "job": {"key": job.key, "status": job.status, "kind": job.kind},
+        "approved": approved,
+        "fields": if new { json!(["test_removal_approved"]) } else { json!([]) },
+    });
+    if !new {
+        out["already"] = json!(true);
+    }
+    Ok(Output::success(out))
+}
+
+/// The test names the Lead approved Job `key` to remove or weaken (`jobs.test_removal_approved`), read as stored now so
+/// an approval reaches a running Attempt; empty when it approved none.
+pub fn approved_test_removals(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &JobKey,
+) -> Result<Vec<String>, CpdError> {
+    let stored: Option<String> = conn.query_row(
+        "SELECT test_removal_approved FROM jobs WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| r.get(0),
+    )?;
+    Ok(stored.map_or_else(Vec::new, |text| {
+        serde_json::from_str(&text).expect("the column's CHECK keeps a JSON array of text")
+    }))
 }
