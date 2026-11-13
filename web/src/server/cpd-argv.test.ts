@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toArgv } from "./cpd-argv.ts";
+import { allCpdCommands, generateArgvFixturesJson, toArgv } from "./cpd-argv.ts";
 
 describe("toArgv", () => {
   it("context.new builds the context new argv", () => {
@@ -23,5 +23,16 @@ describe("toArgv", () => {
     // When tui.attach is omitted/removed from CpdCommand and toArgv, passing it must not produce ["tui", "--attach"]
     // (tui subcommand was removed in #1070 and commands.md §13.1).
     expect(() => toArgv({ kind: "tui.attach" } as any)).toThrow();
+  });
+
+  it("serializes allCpdCommands() to JSON fixture or passes to parser test", () => {
+    const commands = allCpdCommands();
+    const argvs = commands.map(toArgv);
+    expect(argvs.length).toBeGreaterThan(0);
+    // Fixture JSON representation of all WebUI argv patterns
+    const json = generateArgvFixturesJson();
+    expect(json).toBeDefined();
+    const parsed = JSON.parse(json);
+    expect(parsed).toEqual(argvs);
   });
 });

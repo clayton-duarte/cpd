@@ -4,6 +4,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod argv_parity;
 mod cargo_script;
 mod config_tiers_list;
 mod dead_code;
