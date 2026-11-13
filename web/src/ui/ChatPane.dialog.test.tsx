@@ -183,3 +183,43 @@ it("Escape in the composer aborts the running turn", () => {
   act(() => { pane.dispatchEvent(esc()); });
   expect(abort).toHaveBeenCalledTimes(1);
 });
+
+const transcriptOf = (c: HTMLElement) => c.querySelector('[data-part="transcript"]');
+const headerOf = (c: HTMLElement) => c.querySelector('[data-part="chat-header"], header');
+
+it("plan review hides the transcript and the card fills the pane", () => {
+  const c = setup(plan);
+  expect(transcriptOf(c)).toBeNull();
+  expect(headerOf(c)).not.toBeNull();
+  const card = c.querySelector<HTMLElement>('section[data-dialog="cpd_plan_review"]')!;
+  expect(card).not.toBeNull();
+  expect(card.classList.contains("flex-1")).toBe(true);
+  expect(card.classList.contains("min-h-0")).toBe(true);
+});
+
+it("transcript returns when the plan review resolves", () => {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    act(() => root.render(<ChatPane view={withDialog(plan)} connection={connection} reader={reader} />));
+    expect(transcriptOf(container)).toBeNull();
+    act(() => root.render(<ChatPane view={withDialog(null)} connection={connection} reader={reader} />));
+    expect(transcriptOf(container)).not.toBeNull();
+    expect(composerOf(container)).not.toBeNull();
+    expect(planOf(container)).toBeNull();
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+  }
+});
+
+it("other dialogs keep the transcript", () => {
+  const c = setup(ask());
+  expect(transcriptOf(c)).not.toBeNull();
+  expect(askOf(c)).not.toBeNull();
+  mounted?.unmount();
+  // Contrast: only the plan review replaces the transcript.
+  const p = setup(plan);
+  expect(transcriptOf(p)).toBeNull();
+});

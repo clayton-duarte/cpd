@@ -288,6 +288,21 @@ describe("optimistic merge", () => {
     expect(ids(run(loaded(), merge))).toEqual([2, 3]);
   });
 
+  it("action_result_with_armed_true_does_not_start_removal_timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStore(loaded());
+      store.dispatch(merge);
+      store.dispatch(server({ type: "action.result", actionId: "a1", ok: true, output: { armed: true } }));
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(10_000);
+      expect(ids(store.getState())).toEqual([2, 3]);
+      expect(store.getState().optimistic["a1"]).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("merge_failure_rolls_back_row", () => {
     const removed = run(loaded(), merge);
     expect(ids(removed)).toEqual([2, 3]);

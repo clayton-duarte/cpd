@@ -405,6 +405,7 @@ export function createStore(initial: AppState = initialState): Store {
       const messages = action.type === "server" ? [action.message] : action.type === "serverBatch" ? action.messages : [];
       for (const message of messages) {
         if (message.type !== "action.result" || !message.ok || state.optimistic[message.actionId] === undefined || timers.has(message.actionId)) continue;
+        if (message.output && typeof message.output === "object" && (message.output as Record<string, unknown>).armed === true) continue;
         const id = message.actionId;
         timers.set(id, setTimeout(() => {
           timers.delete(id);
