@@ -234,35 +234,17 @@ pub fn settle(
     })
 }
 
-/// Settle every `revalidating` mutation completed at or before `poll_started_at`, whatever its
-/// target key (a poll that started after the completion has seen the write; no key refetch needed).
-pub fn settle_completed(
-    store: &mut Store,
-    poll_started_at: OffsetDateTime,
-) -> Result<usize, CpdError> {
-    settle_where(store, None, poll_started_at)
-}
-
-/// [`settle_completed`] for one system's mutations: that system's poll proves only its own writes.
-pub fn settle_completed_for(
-    store: &mut Store,
-    system: &str,
-    poll_started_at: OffsetDateTime,
-) -> Result<usize, CpdError> {
-    settle_where(store, Some(system), poll_started_at)
-}
-
-fn settle_where(
-    store: &mut Store,
-    system: Option<&str>,
-    poll_started_at: OffsetDateTime,
-) -> Result<usize, CpdError> {
-    let started = timestamp(poll_started_at);
-    store.write("swr settle completed", |tx| {
-        Ok::<usize, CpdError>(tx.execute(
-            "UPDATE swr_mutations SET status = 'done'
-             WHERE status = 'revalidating' AND completed_at <= ?1 AND (?2 IS NULL OR system = ?2)",
-            params![started, system],
-        )?)
+/// The target keys of `system`'s `revalidating` mutations: each still shows its overlay, and only a fetch of that key
+/// (its `commit`, which settles by key after `completed_at`) proves upstream has the write. A poll of other keys settles none.
+pub fn unsettled_targets(store: &mut Store, system: &str) -> Result<Vec<String>, CpdError> {
+    store.read(|c| {
+        let mut stmt = c.prepare(
+            "SELECT DISTINCT target_key FROM swr_mutations
+             WHERE system = ?1 AND status = 'revalidating' AND target_key IS NOT NULL ORDER BY target_key",
+        )?;
+        let rows = stmt
+            .query_map([system], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     })
 }

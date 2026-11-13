@@ -233,6 +233,22 @@ impl GithubSource {
                 absent.push((true, String::new(), key));
             }
         }
+        // A `revalidating` mutation's target is read each pass until its own commit settles it (swr.md §10): a merged PR is
+        // omitted from open searches, and only its confirmed raw row may drop the overlay. Sorted before every other candidate.
+        for target in cache::unsettled_targets(cx.store, "github")? {
+            let Some((repo, number)) = target
+                .strip_prefix("github:pr:")
+                .and_then(|k| k.rsplit_once('#'))
+                .and_then(|(r, n)| Some((r.to_owned(), n.parse::<i64>().ok()?)))
+            else {
+                continue;
+            };
+            let key = (repo, number);
+            absent.retain(|(_, _, k)| *k != key);
+            if !heavy.contains(&key) && !tombstoned.contains(&key.0) {
+                absent.push((false, String::new(), key));
+            }
+        }
         absent.sort();
         let room = ABSENT_CAP.saturating_sub(heavy.len());
         let absent: Vec<(String, i64)> = absent.into_iter().take(room).map(|(_, _, k)| k).collect();
@@ -317,9 +333,6 @@ impl GithubSource {
         // ok is recorded only after the whole pass commits; a failed commit or deploys read is the endpoint's failure.
         match self.commit(cx, &plan, read, now, poll_started_at) {
             Ok(effects) => {
-                // A mutation whose target this poll never refetched (a PR outside the poll scope) settles here: the poll
-                // started after its completion, so it has seen the write.
-                cache::settle_completed_for(cx.store, "github", poll_started_at)?;
                 endpoint::record_ok(cx.store, "github", now)?;
                 Ok(effects)
             }

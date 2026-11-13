@@ -238,51 +238,58 @@ fn swr_freshness_respects_stale_time_and_infinity() {
     ));
 }
 
-fn mutation(store: &mut Store, target: &str, completed: OffsetDateTime) {
+#[test]
+fn omitted_merge_target_keeps_its_overlay_until_its_own_row_is_confirmed() {
+    let (_dir, mut store) = store();
+    let clock = ManualClock::new();
+    let done = clock.utc();
+    let target = "github:pr:acme/api#1";
     store
-        .write("test mutation", |tx| {
+        .write("seed", |tx| {
             tx.execute(
-                "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, completed_at)
-                 VALUES ('github', ?1, 'describe', '{}', 'revalidating', ?2)",
-                rusqlite::params![target, timestamp(completed)],
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
+                 VALUES ('acme/api', 1, 'u', 't', 0, 'open', 'none', 'none', 't', 't', 1, 0)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, patch_json, status, submitted_at, completed_at)
+                 VALUES ('github', ?1, 'merge', '{}', '{\"state\":\"merging\"}', 'revalidating', ?2, ?2)",
+                rusqlite::params![target, timestamp(done)],
             )?;
             Ok::<(), CpdError>(())
         })
         .unwrap();
-}
+    let state = |store: &mut Store| {
+        crate::swr::github::effective_pr(store, "acme/api", 1)
+            .unwrap()
+            .unwrap()
+            .state
+    };
+    assert_eq!(state(&mut store), "merging");
 
-#[test]
-fn revalidating_mutations_settle_at_poll_started_not_key_refetch() {
-    let (_dir, mut store) = store();
-    let clock = ManualClock::new();
-    let done = clock.utc();
-    // Targets never refetched: invalidated, never committed (a PR outside the poll scope).
-    let (a, b) = ("github:pr:acme/api#1", "github:pr:acme/api#2");
-    mutation(&mut store, a, done);
-    mutation(&mut store, b, done);
-    cache::invalidate(&mut store, a).unwrap();
+    // A later poll of unrelated keys (the merged PR is omitted from open searches) settles nothing.
     let later = after(&clock, 60);
-    mutation(&mut store, "github:pr:acme/api#3", later);
-
-    // A poll that started before every completion settles nothing.
-    let n = cache::settle_completed(&mut store, done - Duration::from_secs(1)).unwrap();
-    assert_eq!(n, 0);
-    // A poll that started after the first two completions settles exactly those, any key.
-    let n = cache::settle_completed(&mut store, done + Duration::from_secs(1)).unwrap();
-    assert_eq!(n, 2);
+    cache::commit(&mut store, REPO, "h", later, later, |_| Ok(())).unwrap();
+    assert_eq!(state(&mut store), "merging", "the raw row still says open");
     assert_eq!(
-        int(
-            &mut store,
-            "SELECT count(*) FROM swr_mutations WHERE status = 'done'"
-        ),
-        2
+        cache::unsettled_targets(&mut store, "github").unwrap(),
+        vec![target.to_string()],
+        "the target is still owed a confirming fetch"
     );
-    assert_eq!(
-        int(
-            &mut store,
-            "SELECT count(*) FROM swr_mutations WHERE status = 'revalidating'"
-        ),
-        1,
-        "a mutation completed after the poll started stays revalidating"
+
+    // The confirming fetch commits the raw row merged, and only then settles.
+    cache::commit(&mut store, target, "m", later, later, |tx| {
+        tx.execute(
+            "UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE number = 1",
+            [],
+        )?;
+        Ok::<(), CpdError>(())
+    })
+    .unwrap();
+    assert_eq!(state(&mut store), "merged");
+    assert!(
+        cache::unsettled_targets(&mut store, "github")
+            .unwrap()
+            .is_empty()
     );
 }
