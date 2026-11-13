@@ -212,11 +212,17 @@ pub struct Inbox {
     pub bot_reviewers: Vec<String>,
 }
 
-/// The `[pr]` table: `rereview_bots` are the bots the engine asks to re-review after a push (pro-d588). STUB.
+/// The `[pr]` table: `rereview_bots` are the bots the engine asks to re-review after a push (pro-d588).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Pr {
     pub rereview_bots: Vec<String>,
 }
+
+/// The bots asked to re-review after a push (pro-d588): separate from `inbox.bot_reviewers`.
+const DEFAULT_REREVIEW_BOTS: [&str; 2] = [
+    "mission-lane-claude-code-assistant",
+    "chatgpt-codex-connector[bot]",
+];
 
 const DEFAULT_BOT_REVIEWERS: [&str; 3] = [
     "mission-lane-claude-code-assistant",
@@ -330,6 +336,7 @@ impl Config {
             "watch",
             "swr",
             "inbox",
+            "pr",
             "events",
             "tmux",
             "presets",
@@ -486,6 +493,19 @@ impl Config {
                 },
             )?,
         };
+        let pr = Pr {
+            rereview_bots: r.get(
+                "pr.rereview_bots",
+                DEFAULT_REREVIEW_BOTS.map(str::to_owned).to_vec(),
+                |v| match v {
+                    Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
+                    other => Err(format!(
+                        "must be an array of text, not {}",
+                        other.type_str()
+                    )),
+                },
+            )?,
+        };
         // The claim and mention rules cannot run without the User's id, nor without the channel.
         if inbox.team_channel.is_empty() != inbox.slack_user_id.is_empty() {
             let (key, other) = if inbox.team_channel.is_empty() {
@@ -541,9 +561,7 @@ impl Config {
             watch,
             swr,
             inbox,
-            pr: Pr {
-                rereview_bots: vec![],
-            },
+            pr,
             events,
             tmux,
             presets,
@@ -729,11 +747,12 @@ impl Reader<'_> {
     }
 }
 
-const KNOWN_SECTIONS: [&str; 8] = [
+const KNOWN_SECTIONS: [&str; 9] = [
     "timeouts",
     "watch",
     "swr",
     "inbox",
+    "pr",
     "events",
     "tmux",
     "presets",
