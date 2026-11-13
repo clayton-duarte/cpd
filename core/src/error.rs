@@ -157,6 +157,8 @@ error_codes! {
     SpecInvalid = "spec_invalid" => Usage,
     // `protocol bug mitigate --issue` that is not https://github.com/<owner>/<repo>/issues/<N> (commands.md §33.2).
     IssueInvalid = "issue_invalid" => Usage,
+    // `workflow add --adopt --bug`: an adopted pull request is not described by cpd, so it gets no closing reference.
+    AdoptBugUnsupported = "adopt_bug_unsupported" => Usage,
     OutlineInvalid = "outline_invalid" => Usage,
     TierInvalid = "tier_invalid" => Usage,
     TierNotAllowed = "tier_not_allowed" => Usage,
@@ -292,6 +294,8 @@ error_codes! {
     // `protocol bug mitigate` without `--issue`; a bug with no issue linked by `workflow add --bug` or closed with a root fix.
     IssueRequired = "issue_required" => Refused,
     BugIssueRequired = "bug_issue_required" => Refused,
+    // `protocol bug mitigate` of a bug that has an issue, with another `--issue`: the linked open PRs would keep the old closing reference.
+    IssueConflict = "issue_conflict" => Refused,
     // Context curation and message bus (contract §5.9).
     NearDuplicate = "near_duplicate" => Refused,
     NotPermitted = "not_permitted" => Refused,

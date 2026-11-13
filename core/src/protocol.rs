@@ -353,6 +353,17 @@ fn mitigate(store: &mut Store, args: MitigateArgs) -> Result<Output, CpdError> {
             .with("id", args.id.as_str())
             .with("status", "closed"));
         }
+        if let Some(old) = bug.issue.as_deref()
+            && old != issue
+        {
+            return Err(CpdError::new(
+                ErrorCode::IssueConflict,
+                format!("Bug {} already has the issue {old}: its linked pull requests close that one, so another --issue is refused.", args.id),
+            )
+            .with("id", args.id.as_str())
+            .with("issue", old)
+            .with("requested", issue));
+        }
         // `--cause` when given, else a recorded cause stands.
         let cause = args
             .cause

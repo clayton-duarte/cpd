@@ -365,3 +365,112 @@ fn workflow_add_bug_unknown_is_refused() {
     // The contract names no exit code for `bug_unknown`: the code is the contract.
     assert_eq!(run.error()["code"], "bug_unknown", "{run:?}");
 }
+
+/// A bug `b1` with the issue `ISSUE`, for the `workflow add --bug` tests.
+fn issue_bug(fx: &Fx) {
+    report(fx, "pr merge refused", "A clean stack was refused.");
+    mitigate(fx, "b1", "A stopgap.", "s-42");
+}
+
+/// A rerun of `workflow add` with another or a new `--bug` is refused `workflow_exists`; the same `--bug` (or none) is `already`.
+#[test]
+fn workflow_add_rerun_compares_the_bug() {
+    let (fx, repo) = workflow_fx();
+    issue_bug(&fx);
+    report(&fx, "second", "two");
+    mitigate_run(
+        &fx,
+        "b2",
+        "Another.",
+        &[
+            "--issue",
+            "https://github.com/clayton-duarte/cpd/issues/1157",
+        ],
+        "s-42",
+    )
+    .ok();
+
+    // A Workflow added with no bug: a rerun naming one differs.
+    let plain = |fx: &Fx| {
+        fx.cpd(&[
+            "workflow", "add", "plain", "--repo", &repo, "--title", "Change", "--shape", "config",
+            "--plan", "pay-1",
+        ])
+    };
+    plain(&fx).ok();
+    workflow_add_bug(&fx, &repo, "b1").ok();
+    let other = workflow_add_bug(&fx, &repo, "b2");
+    common::refused(&other, "workflow_exists", 3);
+    assert_eq!(workflow_add_bug(&fx, &repo, "b1").ok()["already"], true);
+    let named = fx.cpd(&[
+        "workflow", "add", "plain", "--repo", &repo, "--title", "Change", "--shape", "config",
+        "--plan", "pay-1", "--bug", "b1",
+    ]);
+    common::refused(&named, "workflow_exists", 3);
+}
+
+/// `workflow add --adopt <n> --bug <id>` is refused `adopt_bug_unsupported`, exit 2, before anything is read from GitHub.
+#[test]
+fn workflow_add_adopt_with_bug_is_refused() {
+    let (fx, repo) = workflow_fx();
+    issue_bug(&fx);
+    let run = fx.cpd(&[
+        "workflow", "add", "adopted", "--repo", &repo, "--title", "Change", "--plan", "pay-1",
+        "--adopt", "7", "--bug", "b1",
+    ]);
+    common::refused(&run, "adopt_bug_unsupported", 2);
+}
+
+/// Mitigating a bug that has an issue with another `--issue` is refused `issue_conflict`, exit 3; the same issue is a no-op success.
+#[test]
+fn mitigate_with_another_issue_is_refused() {
+    let fx = bug_fx();
+    report(&fx, "first bug", "one");
+    mitigate(&fx, "b1", "A stopgap.", "s-42");
+
+    let run = mitigate_run(
+        &fx,
+        "b1",
+        "A stopgap.",
+        &["--issue", "https://github.com/clayton-duarte/cpd/issues/9"],
+        "s-42",
+    );
+    common::refused(&run, "issue_conflict", 3);
+    assert_eq!(show(&fx, "b1")["issue"], ISSUE);
+
+    let same = mitigate_run(&fx, "b1", "A new stopgap.", &["--issue", ISSUE], "s-42").ok();
+    assert_eq!(same["bug"]["mitigation"], "A new stopgap.", "{same}");
+}
+
+/// `workflow describe` of a bug-linked Workflow with an open pull request queues the body with the `Fixes` line.
+#[test]
+fn describe_keeps_the_fixes_line_in_the_queued_body() {
+    let (fx, repo) = workflow_fx();
+    issue_bug(&fx);
+    workflow_add_bug(&fx, &repo, "b1").ok();
+    fx.env.sql("UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay-1' AND key = 'change'");
+    fx.env.sql(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/pay', 5, 'https://github.com/acme/pay/pull/5', 'Change', 0, 'open', 'none', 'none', 't', NULL, 't');
+         UPDATE workflows SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 5, pr_url = 'https://github.com/acme/pay/pull/5',
+                pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE number = 5) WHERE plan = 'pay-1' AND key = 'change'",
+    );
+    let file = fx.env.root().join("body.md");
+    std::fs::write(&file, "## What and why\n\nWords.\n").unwrap();
+    let out = fx
+        .cpd(&[
+            "workflow",
+            "describe",
+            "change",
+            "--file",
+            file.to_str().unwrap(),
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
+    assert_eq!(out["queued"], true, "{out}");
+    let body: String = fx
+        .env
+        .query("SELECT json_extract(vars_json, '$.body') FROM swr_mutations");
+    assert!(body.ends_with("Fixes clayton-duarte/cpd#1156"), "{body}");
+}

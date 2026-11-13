@@ -19,7 +19,8 @@ fn migrations_fill_issue_for_open_bugs() {
         .write("fixture", |tx| {
             tx.execute_batch(
                 "INSERT INTO bug_records (id, title, symptom, status, reported_at) VALUES
-                   ('b6', 'Six', 's', 'open', 't'), ('b63', 'Sixty-three', 's', 'open', 't');
+                   ('b6', 'WebUI Settings rejects valid Tiers with a long tail', 's', 'open', 't'),
+                   ('b63', 'Stop-for-replacement Attempt resets the clock', 's', 'open', 't');
                  INSERT INTO bug_records (id, title, symptom, root_fix, regression_test, status, reported_at, closed_at)
                    VALUES ('b1', 'One', 's', 'p/w', 't::x', 'closed', 't', 't2');",
             )?;
@@ -52,4 +53,36 @@ fn migrations_fill_issue_for_open_bugs() {
             ),
         ]
     );
+}
+
+/// Ids are allocated per store: a store whose b6 is another bug (another title) keeps NULL.
+#[test]
+fn backfill_skips_a_bug_with_another_title() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let before: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .filter(|m| !m.name.ends_with("-bug-issue") && !m.name.ends_with("-bug-issue-backfill"))
+        .collect();
+    let mut store = crate::store::tests::open_named(&home, &before).unwrap();
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO bug_records (id, title, symptom, status, reported_at) VALUES ('b6', 'Another installation bug', 's', 'open', 't');",
+            )?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&home, 5000).unwrap();
+    let issue: Option<String> = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT issue FROM bug_records WHERE id = 'b6'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
+    assert_eq!(issue, None);
 }

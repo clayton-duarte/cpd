@@ -597,6 +597,14 @@ fn find_cycle(
 
 pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
+    if args.adopt.is_some() && args.bug.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::AdoptBugUnsupported,
+            "--adopt and --bug are exclusive: an adopted pull request keeps its own body, so cpd cannot add the closing reference of the bug's issue.",
+        )
+        .with("plan", plan.as_str())
+        .with("workflow", args.key.as_str()));
+    }
     let needs = if args.no_needs {
         Some(Vec::new())
     } else if args.needs.is_empty() {
@@ -869,13 +877,20 @@ fn decide(
             [plan.as_str(), wanted.key.as_str()],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
         )?;
-        if same(
-            existing,
-            title.as_deref(),
-            wanted,
-            &workflows,
-            &base_branch(conn, &wanted.base)?,
-        ) {
+        let stored_bug: Option<String> = conn.query_row(
+            "SELECT bug_id FROM workflows WHERE plan = ?1 AND key = ?2",
+            [plan.as_str(), wanted.key.as_str()],
+            |r| r.get(0),
+        )?;
+        if (wanted.bug.is_none() || stored_bug == wanted.bug)
+            && same(
+                existing,
+                title.as_deref(),
+                wanted,
+                &workflows,
+                &base_branch(conn, &wanted.base)?,
+            )
+        {
             let base_workflow = derived_base_workflow(
                 &known_workflows(conn, plan)?,
                 &existing.repo,
