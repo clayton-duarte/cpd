@@ -175,9 +175,9 @@ it("plan review card renders the revision header and section nav", () => {
 
 it("plan review card renders the decision bar with three actions", () => {
   const { container, unmount } = plan();
-  const bar = container.querySelector('[data-slot="item-footer"][data-part="decision-bar"]');
+  const bar = container.querySelector('[data-part="decision-bar"]');
   expect(bar).not.toBeNull();
-  const actions = container.querySelector('[data-slot="item-actions"][data-part="actions"]') as HTMLElement;
+  const actions = container.querySelector('[data-part="actions"]') as HTMLElement;
   expect(byText(actions, "button", "Reject plan").getAttribute("data-action")).toBe("reject");
   expect(byText(actions, "button", "Request changes").getAttribute("data-action")).toBe("request-changes");
   expect(byText(actions, "button", "Approve & lock").textContent).toContain("⌘⏎");

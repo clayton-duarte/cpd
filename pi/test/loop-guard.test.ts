@@ -158,7 +158,7 @@ test("loop guard: a message that would start a turn is sent with triggerTurn fal
 
   const first = nextId++;
   const second = nextId++;
-  f.emit(ev(first, "job-failed", { data: {} }), ev(second, "session-message", { session: ID, data: { from: null, text: "hi", wake: false } }));
+  f.emit(ev(first, "job-failed", { data: {} }), ev(second, "session-message", { session: ID, data: { from: "s_other", text: "hi", wake: false } }));
   await waitFor("both delivered", () => f.pi.delivered().length === 2);
   const [a, b] = f.pi.delivered();
   assert.deepEqual([(a!.message.details as any).id, (b!.message.details as any).id], [first, second], "they keep their order");
@@ -608,4 +608,64 @@ test("loop guard intra-turn: a state write resets the turn refusals", async (t) 
   assert.ok(refused(await bash(f, "rg foo")), "the 13th is refused");
   assert.ok(!(await settled(f)).includes(LABEL), "not blocked");
   assert.deepEqual(guardEntries(f), []);
+});
+
+test("loop guard: a clean turn end clears a tripped guard and unblocks", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+  await selfTurn(f, 21);
+  assert.ok((await settled(f)).includes(LABEL), "blocked");
+
+  await f.pi.fire("agent_end", { messages: [] });
+  assert.notEqual((await settled(f)).at(-1), LABEL, "unblocked");
+  assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true, false]);
+  assert.deepEqual(await probe(f), TURNS, "deliveries start turns again");
+});
+
+test("loop guard: a WebUI User message clears the trip and starts a turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+  await selfTurn(f, 21);
+  assert.ok((await settled(f)).includes(LABEL), "blocked");
+
+  const id = nextId++;
+  f.emit(ev(id, "session-message", { session: ID, data: { from: null, text: "hi", wake: false } }));
+  await f.drain();
+  const sent = f.pi.sent.find((s) => (s.message.details as any)?.id === id)!;
+  assert.deepEqual(sent.options, TURNS, "not downgraded to nextTurn");
+  assert.notEqual((await settled(f)).at(-1), LABEL, "unblocked");
+  assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true, false]);
+});
+
+test("loop guard: runs that each end cleanly within the window still trip the guard", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+
+  for (let i = 0; i < 20; i++) {
+    await selfTurn(f);
+    await f.pi.fire("agent_end");
+  }
+  await selfTurn(f); // the 21st run trips; its clean end would clear the trip
+  assert.ok((await settled(f)).includes(LABEL), "blocked");
+  assert.deepEqual(await probe(f), GATED, "the 21st run tripped it");
+  await f.pi.fire("agent_end");
+  assert.notEqual((await settled(f)).at(-1), LABEL, "its clean end clears the trip");
+});
+
+test("loop guard: a tripped run that ends with stopReason error or aborted keeps the trip", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+  await selfTurn(f, 21);
+  assert.ok((await settled(f)).includes(LABEL), "blocked");
+
+  for (const stopReason of ["error", "aborted"]) {
+    await f.pi.fire("agent_end", { messages: [{ role: "assistant", content: [], stopReason }] });
+    assert.ok((await settled(f)).includes(LABEL), `${stopReason}: still blocked`);
+    assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true], `${stopReason}: no clear persisted`);
+    assert.deepEqual(await probe(f), GATED, `${stopReason}: deliveries stay gated`);
+  }
 });

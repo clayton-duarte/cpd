@@ -1288,7 +1288,7 @@ A window is a slice of `transcript.items`:
 
 **Dialogs.** A `ui_request` becomes `session.dialog` via `dialogFromRequest`, a `ui_resolved` becomes `session.dialogResolved`, `respond` answers per 3.8. The plan-review title and summary are read from the cached transcript.
 
-**Failure.** A `protocol_error` from `applyView`, `applyOps` or `applyHistory` is sent as `session.error {sessionId, error}`, and the attachment ends: the handle rejects every method with that error until disposed, and the client is closed (`client.detach()` best effort). A replica that missed a batch cannot be trusted, so the attachment does not continue (Phase 1 choice, fail loud). Socket close (`onClose`/`bye`) before attach readiness settles the first-snapshot wait, cancels its timer and rejects attach with the original disconnect error. A closed connection never publishes session.attached after optional metadata reads. Once attached, socket close → `session.error {sessionId, error: host_disconnected}`; the handle then rejects every method with `host_disconnected` until disposed. `dispose()` detaches (`client.detach()` best effort), closes the client and drops every listener.
+**Failure.** A `protocol_error` from `applyView`, `applyOps` or `applyHistory` is sent as `session.error {sessionId, error}`, and the attachment ends: the handle rejects every method with that error until disposed, and the client is closed (`client.detach()` best effort). A replica that missed a batch cannot be trusted, so the attachment does not continue (Phase 1 choice, fail loud). Socket close (`onClose`/`bye`) before attach readiness settles the first-snapshot wait, cancels its timer and rejects attach with the original disconnect error. A closed connection never publishes session.attached after optional metadata reads. Once attached, socket close → `session.error {sessionId, error: host_disconnected}`; the handle then rejects every method with `host_disconnected` until disposed. `dispose()` immediately suppresses emissions and drops listeners, then detaches (`client.detach()` best effort, at most 5 s) and always closes the client. Terminal client teardown destroys its owned socket; it does not wait for a peer half-close. Mutation RPCs are not automatically retried or given this teardown deadline.
 
 **Behaviours to test.** `attached.mode` `resume` and an `ops` frame before the first `view` each raise `protocol_error`; the attach emits in the order above; a tail window holds the last `windowSize` items with `dur:<id>`; `loadEarlier` answers from the cache first and then from `history` pages (already-held entries skipped), with the cursor of the page; a gap is filled by `history` before the replacement window is emitted, and no append precedes it; a `replaced` ops batch emits a tail window and no append; a rejected `ops` batch ends the attachment with `session.error`; `submit` queues while busy and drops the queued entry when the inbox no longer holds it; `host_state` changes the agent but not busy; the cost and context facts follow 6.4 frames; `configure` tier runs `cpd session retier` and the applied-Tier rule above holds (promotion on a `pi.agent` change; a failed `switch` of the pending Tier is read at busy-to-idle and keeps the footer).
 
@@ -2886,12 +2886,24 @@ This section states the guarantees of the `AskCard` submission (decision pro-d58
 - Typed text is trimmed; this is the only change made to a value. Whitespace-only text is not an answer.
 - Test: `AskCard.test.tsx:132` (custom text submits typed text), `:166` (one answer per index with kinds `option`, `multi` and the `unanswered` index).
 
-### 33.2 Typing in `Type something.` captures the custom answer
+### 33.2 Non-empty custom typed answer alone enables submit; custom answers are delivered verbatim
 
-- Typing non-blank text in the `Type something.` input of a question selects that input as the answer. For a single-select question the chosen option is then cleared, so the one answer is the typed text. No option click is needed.
-- Whitespace-only text does not select the input.
-- Source: the shadcn `Questionnaire.Input` (`web/node_modules/@shadcn/react/dist/questionnaire/index.js`, minified, cited by function `_e`): `onChange` selects the input when `value.trim().length > 0`.
-- Test: `AskCard.test.tsx:132` types after clicking an option, and checks that the option is unchecked. The case with no earlier option click is covered by the source only; no test runs it.
+All four shapes deliver custom typed answers verbatim to the adapter's asking tool when submit is pressed:
+
+| Shape | Behaviour | Delivered answer |
+|---|---|---|
+| Single-question, single-select | Typing non-blank text in the `Type something.` input selects that input as the answer. If an option is also chosen, it is cleared; the one answer is the typed text. No option click is needed. | `{kind: "custom", answer: "<trimmed typed text>"}` |
+| Single-question, multi-select | Typing non-blank text in the `Type something.` input contributes to the answer. Options may also be selected. The answer carries the chosen labels and the typed text (or `""` if none). | `{kind: "multi", selected: ["<labels>"], answer: "<trimmed typed text>"}` or `{kind: "multi", selected: ["<labels>"], answer: ""}` |
+| Multi-question, single-select | Typing non-blank text in the `Type something.` input of any question selects that input as the answer for that question. If an option is also chosen, it is cleared; the one answer is the typed text. | `{kind: "custom", answer: "<trimmed typed text>"}` per question |
+| Multi-question, multi-select | Typing non-blank text in the `Type something.` input of any question contributes to the answer for that question. Options may also be selected for that question. The answer carries the chosen labels and the typed text. | `{kind: "multi", selected: ["<labels>"], answer: "<trimmed typed text>"}` or `{kind: "multi", selected: ["<labels>"], answer: ""}` per question |
+
+- Typed text is trimmed (surrounding whitespace removed); this is the only transformation applied (33.1).
+- Whitespace-only text is not a valid answer; an empty input is not a valid answer unless an option is chosen (for single-select) or options are chosen (for multi-select).
+- **Submit is enabled when a question has an option selected OR non-empty custom text**, and blocked when a question has neither.
+- **Submit is blocked when any question has no answer** (neither option nor custom text) **and is not skipped** (33.4).
+- Delivery to the asking tool (adapter layer): the pi backend calls the tool with the answers as `result.answers` (pi/ask-user-question/tool/response-envelope.ts); the durable backend sends `ui_response {id, value: "<answer>"}` per answer (dialogs.ts). Both deliver the answer verbatim in the shape of `QuestionAnswer` (3.8).
+- Source: the shadcn `Questionnaire` primitive of `web/node_modules/@shadcn/react/dist/questionnaire/index.js` (minified); the primitive validates that an unanswered item is marked as answered by an option selection OR by non-empty custom text.
+- Test: `AskCard.test.tsx:132` types custom text after clicking an option, verifying the option is unchecked and custom text is the answer. `AskCard.test.tsx:166` verifies multi-select answers with custom text. The case with no earlier option click (custom text alone) is covered by the source and primitive validation; a test runs it implicitly when submit succeeds with only custom text.
 
 ### 33.3 Option selection keeps the preview and the option value
 

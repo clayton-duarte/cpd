@@ -569,7 +569,7 @@ it.each(["attach", "models"])("bounds durable startup when %s is never acknowled
   let feed: (chunk: string) => void = () => {};
   const writes: string[] = [];
   let ended = 0;
-  const socket: SocketLike = { write: (line) => { writes.push(line); }, end: () => { ended++; },
+  const socket: SocketLike = { write: (line) => { writes.push(line); }, destroy: () => { ended++; },
     onData: (handler) => { feed = handler; return { dispose() {} }; }, onClose: () => ({ dispose() {} }) };
   const connecting = connectHost("/run/host/s1.sock", { factory: { connect: async () => socket }, scheduler });
   await tick();
@@ -603,10 +603,60 @@ it.each(["attach", "models"])("bounds durable startup when %s is never acknowled
   }
 });
 
+it("disposes a durable attachment even when the host never acknowledges detach", async () => {
+  const scheduler = new FakeScheduler();
+  let feed: (chunk: string) => void = () => {};
+  const writes: string[] = [];
+  let ended = 0;
+  const socket: SocketLike = { write: (line) => { writes.push(line); }, destroy: () => { ended++; },
+    onData: (handler) => { feed = handler; return { dispose() {} }; }, onClose: () => ({ dispose() {} }) };
+  const connecting = connectHost("/run/host/s1.sock", { factory: { connect: async () => socket }, scheduler });
+  await tick();
+  feed(JSON.stringify(new FakeHost([]).client().welcome) + "\n");
+  const client = await connecting;
+  const backend = createDurableBackend({ connect: async () => client, cpd: { json: async () => ({ ok: true }) }, git: { branch: async () => "main" }, scheduler });
+  const attaching = backend.attach(SESSION, () => {});
+  await tick();
+  feed(JSON.stringify({ type: "attached", req: "r1", mode: "view", epoch: "e1", from_seq: 0, head_seq: 1, client_id: "c1" }) + "\n");
+  feed(JSON.stringify(viewFrame([])) + "\n");
+  await tick();
+  feed(JSON.stringify({ type: "result", req: "r2", data: { models: [] } }) + "\n");
+  const handle = await attaching;
+  let settled = false;
+  const disposing = handle.dispose().then(() => { settled = true; });
+  await tick();
+  expect(writes.map((line) => JSON.parse(line).type)).toContain("detach");
+  scheduler.advance(60_000);
+  await tick();
+  const disposedWithoutHost = settled;
+  const endedWithoutHost = ended;
+  client.close();
+  await disposing;
+  expect(disposedWithoutHost).toBe(true);
+  expect(endedWithoutHost).toBe(1);
+});
+
+
+it("disposal is silent and idempotent while detach acknowledgement is pending", async () => {
+  const { host, handle, messages } = await setup([viewFrame([])]);
+  let acknowledge: () => void = () => {};
+  host.detach.mockImplementation(() => new Promise<void>((resolve) => { acknowledge = resolve; }));
+  const disposing = handle.dispose();
+  const count = messages.length;
+  host.deliver({ type: "notice", level: "error", message: "late notice" });
+  host.deliver({ type: "host_state", state: "working", clients: 1, held_ui: 0 });
+  await handle.dispose();
+  expect(messages).toHaveLength(count);
+  expect(host.detach).toHaveBeenCalledTimes(1);
+  acknowledge();
+  await disposing;
+  expect(host.closed).toBe(1);
+});
+
 it.each(["snapshot", "models", "branch"])("rejects initial attach immediately when the host closes during %s", async (phase) => {
   const scheduler = new FakeScheduler();
   let feed: (chunk: string) => void = () => {};
-  const socket: SocketLike = { write: () => {}, end: () => {},
+  const socket: SocketLike = { write: () => {}, destroy: () => {},
     onData: (handler) => { feed = handler; return { dispose() {} }; }, onClose: () => ({ dispose() {} }) };
   const connecting = connectHost("/run/host/s1.sock", { factory: { connect: async () => socket }, scheduler });
   await tick();

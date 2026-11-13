@@ -4,7 +4,7 @@ import { assertSupportedHost } from "./frames.ts";
 
 export interface SocketLike {
   write(line: string): void;
-  end(): void;
+  destroy(): void; // terminal: release the owned transport without waiting for the peer
   onData(handler: (chunk: string) => void): Disposable;
   onClose(handler: (error: Error | null) => void): Disposable;
 }
@@ -89,6 +89,7 @@ export interface HostClient {
 const HELLO_MS = 5000; // LIMITS.helloMs, protocol.ts:6
 // Startup attach and optional model metadata cannot hold the transcript forever.
 const STARTUP_READ_MS = 5000;
+const DETACH_MS = 5000; // Best-effort shutdown must not block local teardown forever.
 
 type Pending = { resolve: (frame: HostFrame) => void; reject: (error: Error) => void };
 type Answer = Parameters<HostClient["respond"]>[1];
@@ -116,6 +117,7 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
     for (const s of subscriptions) s.dispose();
     for (const p of pending.values()) p.reject(error);
     pending.clear();
+    socket.destroy();
   };
   const fail = (error: Error): void => {
     if (closed) return;
@@ -165,7 +167,6 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
           frame = parseHostFrame(line);
         } catch (e) {
           fail(e as Error);
-          socket.end();
           return;
         }
         if (closed) return;
@@ -189,7 +190,6 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
   if (first instanceof Error) {
     if (!closed) {
       teardown(first);
-      socket.end();
     }
     throw first;
   }
@@ -197,7 +197,6 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
     assertSupportedHost(first);
   } catch (e) {
     teardown(e as Error);
-    socket.end();
     throw e;
   }
   welcome = first;
@@ -285,7 +284,7 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
       await data("ui_response", { id, ...answer });
     },
     async detach() {
-      await data("detach", {});
+      await data("detach", {}, DETACH_MS);
     },
     onFrame(handler) {
       frameHandlers.add(handler);
@@ -298,7 +297,6 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
     close() {
       if (closed) return;
       teardown(disconnected());
-      socket.end();
     },
   };
 }

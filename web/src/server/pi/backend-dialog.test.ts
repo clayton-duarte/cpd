@@ -240,3 +240,22 @@ describe("pi backend plan review dialogs", () => {
     expect(s.cpd.calls.some((c) => c[1] === "decide")).toBe(false);
   });
 });
+
+describe("pi backend custom question answers", () => {
+  it("writes a mixed option/custom multi-question answer to the ask file verbatim", async () => {
+    const s = await setup({ text: ASK_TEXT });
+    const response: DialogResponse = { method: "ask_user_question", outcome: "answered", result: {
+      answers: [
+        { questionIndex: 0, question: "Proceed?", kind: "custom", answer: "  my own, verbatim \"text\"  " },
+        { questionIndex: 1, question: "Which?", kind: "multi", selected: ["A"], answer: "plus mine" },
+      ],
+      cancelled: false,
+    } };
+    await s.handle.respond("call:q1", response);
+    expect(s.fs.writes).toHaveLength(1);
+    const write = s.fs.writes[0] as { path: string; bytes: Uint8Array };
+    expect(write.path).toBe("/home/cpd/run/ask/s1.json");
+    expect(JSON.parse(new TextDecoder().decode(write.bytes))).toEqual({ dialogId: "call:q1", result: response.method === "ask_user_question" && response.outcome === "answered" ? response.result : null });
+    await s.handle.dispose();
+  });
+});
