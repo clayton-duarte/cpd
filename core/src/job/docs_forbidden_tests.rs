@@ -508,13 +508,19 @@ fn policy_show_lists_local_docs() {
 #[test]
 fn submit_allows_deleting_docs_markdown_already_deleted_on_lead() {
     let mut rig = Rig::new(OWNER_NO_DOCS, "dispatch");
-    rig.workflow_with_job();
-    rig.start_and_commit(&[("docs/old.md", None)]);
-    // Another Job deleted the same file on the Lead Branch meanwhile.
-    let lead = rig.repo.dir().to_path_buf();
-    rig.git(&lead, &["rm", "-q", "docs/old.md"]);
-    let out = rig.submit();
-    assert!(out.is_ok(), "a deletion is never refused: {out:?}");
+    // The Attempt (a parallel one, on its own branch) deletes docs/old.md ...
+    rig.commit(&[("docs/old.md", None)]);
+    // ... and another Job already deleted it on the Lead Branch (here `main`).
+    std::fs::remove_file(rig.repo.dir().join("docs/old.md")).unwrap();
+    rig.repo.commit("lead deletes docs/old.md");
+    let repo = rig.repo.dir().to_path_buf();
+    let added = rig
+        .scoped(|| crate::job::add::added_docs(&repo, "main", "cpd/pay/api"))
+        .unwrap();
+    assert!(
+        added.is_empty(),
+        "a deletion is never an addition: {added:?}"
+    );
 }
 
 /// `cpd job edit <key> ...` on the draft `d` of Workflow `api`.

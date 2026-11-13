@@ -764,3 +764,42 @@ pub(super) fn check_docs_allowed(
         Err(crate::error::docs_forbidden("A docs Job is refused"))
     }
 }
+
+/// The `docs/**/*.md` paths the diff `compare...sha` adds. An addition is judged against the diff's own baseline, the
+/// merge base of `compare` and `sha`, and only for a path the submitted tree holds: a deletion is never an addition,
+/// whatever the Lead tip holds.
+pub(crate) fn added_docs(
+    root: &std::path::Path,
+    compare: &str,
+    sha: &str,
+) -> Result<Vec<String>, CpdError> {
+    let mut added = Vec::new();
+    let baseline = crate::git::run::run(root, &["merge-base", compare, sha])?;
+    let baseline = baseline.stdout.trim().to_owned();
+    for path in crate::git::tamper::changed_paths(root, compare, sha)? {
+        if !(path.starts_with("docs/") && path.ends_with(".md")) {
+            continue;
+        }
+        let in_sha = crate::git::run::run(
+            root,
+            &["rev-parse", "--verify", "--quiet", &format!("{sha}:{path}")],
+        )?
+        .code
+            == 0;
+        let in_base = crate::git::run::run(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{baseline}:{path}"),
+            ],
+        )?
+        .code
+            == 0;
+        if in_sha && !in_base {
+            added.push(path);
+        }
+    }
+    Ok(added)
+}
