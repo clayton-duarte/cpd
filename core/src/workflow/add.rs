@@ -50,7 +50,7 @@ struct Stub {
 /// The stub drafts a Workflow of `shape` starts with (commands.md §9.4): `tdd` docs, red tests (needs docs) and
 /// implementation (needs the tests); `docs` its docs; `config` one `work` Job. The opener is no stub: `workflow start` creates the
 /// `open` Job queued, so a waiting Workflow has none.
-fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
+fn template(shape: &str, local_docs: bool, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
     let stub = |suffix: &'static str, kind: &'static str, prefix: &str, needs: Option<&str>| Stub {
         key: format!("{workflow}-{suffix}"),
         suffix,
@@ -59,6 +59,10 @@ fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
         needs: needs.map(|n| format!("{workflow}-{n}")),
     };
     match shape {
+        "tdd" if !local_docs => vec![
+            stub("tests", "test", "Red tests", None),
+            stub("impl", "impl", "Implement", Some("tests")),
+        ],
         "tdd" => vec![
             stub("docs", "docs", "Docs", None),
             stub("tests", "test", "Red tests", Some("docs")),
@@ -89,6 +93,8 @@ struct Wanted {
     adopt: Option<Adopt>,
     /// `--jobs`: the template's non-open Jobs as decided work (§9.4), by suffix; read and checked once, at the flag.
     jobs: Option<BTreeMap<&'static str, (Tier, Spec)>>,
+    /// The policy's `workflow.local_docs`: false drops the `docs` stub of the template.
+    local_docs: bool,
 }
 
 /// `--jobs <file.json>` (§9.4): one object keyed by the suffixes of `shape`'s template (every one, no other), each
@@ -96,6 +102,7 @@ struct Wanted {
 fn read_jobs(
     path: &Path,
     shape: &str,
+    local_docs: bool,
     workflow: &WorkflowKey,
     title: &str,
 ) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
@@ -113,7 +120,7 @@ fn read_jobs(
     let serde_json::Value::Object(mut object) = value else {
         return Err(invalid("$", "expected an object".to_owned()));
     };
-    let stubs: Vec<Stub> = template(shape, workflow, title)
+    let stubs: Vec<Stub> = template(shape, local_docs, workflow, title)
         .into_iter()
         .filter(|s| s.kind != "open")
         .collect();
@@ -612,11 +619,6 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     } else {
         Some(needs_refs(&plan, &args.needs)?)
     };
-    let jobs = args
-        .jobs
-        .as_deref()
-        .map(|file| read_jobs(file, &args.shape, &args.key, args.title.as_str()))
-        .transpose()?;
     let mut env = Env::open()?;
     let home = env.home.clone();
     env.store.read(|conn| check_plan(conn, &plan))?;
@@ -626,6 +628,23 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     }
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
+    if !policy.workflow.local_docs && args.shape == "docs" {
+        return Err(crate::error::docs_forbidden("--shape docs is refused"));
+    }
+    let local_docs = policy.workflow.local_docs;
+    let jobs = args
+        .jobs
+        .as_deref()
+        .map(|file| {
+            read_jobs(
+                file,
+                &args.shape,
+                local_docs,
+                &args.key,
+                args.title.as_str(),
+            )
+        })
+        .transpose()?;
     let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none())
         .then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
     let adopt = args
@@ -676,6 +695,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         key: args.key,
         needs,
         jobs,
+        local_docs,
     };
 
     let head_ref = wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str());
@@ -769,7 +789,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let mut out = json!({"workflow": {
         "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_workflow": base_workflow, "title": wanted.title, "jira": jira, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
-        "jobs": template(&wanted.shape, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),
+        "jobs": template(&wanted.shape, wanted.local_docs, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),
     }});
     if already {
         out["already"] = json!(true);
@@ -1073,7 +1093,7 @@ fn check_template_keys_free(
     wanted: &Wanted,
 ) -> Result<(), CpdError> {
     let mut taken: Vec<String> = Vec::new();
-    for stub in template(&wanted.shape, &wanted.key, &wanted.title) {
+    for stub in template(&wanted.shape, wanted.local_docs, &wanted.key, &wanted.title) {
         let exists: bool = conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2)",
             [plan.as_str(), stub.key.as_str()],
@@ -1198,7 +1218,7 @@ fn insert_stubs(
     wanted: &Wanted,
     appended: bool,
 ) -> Result<Vec<Stub>, CpdError> {
-    let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
+    let stubs = template(&wanted.shape, wanted.local_docs, &wanted.key, &wanted.title);
     // After the lock every Workflow lays its template out as decided work, never as unscoped stubs (pro-d404): without `--jobs`
     // it is refused, waiting ones included; the error rolls the transaction back, nothing stays written.
     if appended && wanted.jobs.is_none() {

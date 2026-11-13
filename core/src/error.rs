@@ -344,6 +344,7 @@ error_codes! {
     SessionRunning = "session_running" => Refused,
     DescriptionRequired = "description_required" => Refused,
     JiraRequired = "jira_required" => Refused,
+    DocsForbidden = "docs_forbidden" => Refused,
     JiraTitleInvalid = "jira_title_invalid" => Refused,
     DescriptionInvalid = "description_invalid" => Refused,
     AdoptNotOpen = "adopt_not_open" => Refused,
@@ -515,6 +516,16 @@ impl Serialize for ErrorObject<'_> {
         map.serialize_entry("details", &self.0.details)?;
         map.end()
     }
+}
+
+/// `docs_forbidden` (exit 3): the owner's policy sets `workflow.local_docs = false`, so no docs Job, docs shape or new `docs/**/*.md` file.
+pub fn docs_forbidden(what: &str) -> CpdError {
+    CpdError::new(
+        ErrorCode::DocsForbidden,
+        format!(
+            "{what}: the policy sets workflow.local_docs = false, so this repo keeps no local markdown docs. Record decisions in the Context (cpd context decide), as missionlane-style repos do."
+        ),
+    )
 }
 
 #[cfg(test)]
