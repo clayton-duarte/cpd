@@ -6,7 +6,7 @@ Migration tracking: [#1152](https://github.com/clayton-duarte/cpd/issues/1152).
 CPD's `tools/repo-qa` is a pinned, unmodified consumer snapshot, not another
 source of truth. [tools/repo-qa.upstream.json](../tools/repo-qa.upstream.json) records
 the immutable upstream commit, package path and SHA-256 of every package file.
-The pin is `9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859`. CPD tests reject changed, added, removed or
+The pin is `8709cc91732954dd8f3388e87fef95a2a1abf889`. CPD tests reject changed, added, removed or
 non-file entries that differ from that snapshot.
 
 The User asked for a standalone source repository. Keeping a pinned copy preserves
@@ -16,7 +16,7 @@ or release machinery; none is needed for this small dependency-free skill.
 
 CPD continues to own `qa.config.json`, this project profile/decisions, pilot records
 and `scripts/qa.mjs` compatibility entry. Existing attribution/batch markers and
-20/10 limits remain. The related skills repo is included in the same allowance,
+attribution remains. The User replaced cardinal caps with the live weekly gate in #1187. The related skills repo is included in the same allowance,
 so this source migration does not manufacture a fresh budget. CPD is still the
 product priority; unrelated future consumers establish explicit owner-approved
 budget groups. One serialized operator owns a shared group.

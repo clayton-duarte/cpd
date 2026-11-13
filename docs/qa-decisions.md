@@ -201,3 +201,18 @@ Sources consulted 2026-11-13. The dependency-free copy-based adoption method is
 retained; no new updater service, registry or credential is required. The local
 copy is deliberately a consumer, with upstream revision/file hashes verified in
 CPD tests. Changes go upstream first, then consumers update through reviewed PRs.
+
+
+## 2026-11-13 — continuous weekly allowance gate
+
+Supersedes20 issues/10 PRs and the completed10/5 pilot for the newly authorized
+run. The User said: “lift the cardinal limits” and “run loops continuously until
+weekly allowance is under50%,” then authorized keeping the authenticated reader
+for unattended checks. Config uses null count caps and a50% threshold with a
+maximum60-second sample age. Scope/attribution remains shared across CPD,
+dotfiles and skills. No new reset, paid/reset credits, merge or live-access
+permissions. Official Codex account telemetry is the gate; unverified usage
+pauses work. Research, alternatives and the canonical run descriptor live in
+[#1187](https://github.com/clayton-duarte/cpd/issues/1187). Source PR precedes
+consumer merge; both require User review. The reader is telemetry, not a scheduler,
+and does not make an inactive agent session persistent.

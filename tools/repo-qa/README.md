@@ -105,8 +105,50 @@ This is a guard for one trusted, serialized operator. It cannot authenticate the
 text of a User authorization reference, prevent a writer bypassing it or changing
 config/markers, coordinate overlapping workers, or recover deleted resources.
 Run/scope changes and quota resets are governance decisions, not ways around a
-refusal. Weekly account usage is a different resource; report it only from an
-available meter or a dated User reading, with uncertainty.
+refusal. Weekly account usage is a different resource; optional enforcement is described below.
+
+## Optional continuous weekly allowance mode
+
+Only an explicit User instruction can replace cardinal limits. Set config
+`"limits": null` and add
+`"weekly_allowance": {"min_remaining_percent": 50, "max_age_seconds": 60}`
+to allow continuous iterations while **at least** 50% remains. Run descriptors
+may also use `"limits": null`; any finite daily or run cap still applies. Existing
+finite configurations need no changes. Counts and markers remain auditable;
+`null` remaining means no cardinal ceiling, never zero or a fabricated large cap.
+Record the User decision and immutable run descriptor in the adopter's handoff.
+
+This mode requires a live official Codex account reader, not a dashboard estimate.
+The optional helper requires Python >=3.9 and a Codex CLI supporting the account
+app-server API and ephemeral credential store (tested with 0.167.0-alpha.4):
+
+```sh
+python3 tools/repo-qa/scripts/codex-usage-reader.py --output /tmp/qa-weekly-usage.json --min-remaining 50
+# In the QA session, after completing the displayed official device login:
+export QA_USAGE_FILE=/tmp/qa-weekly-usage.json
+node tools/repo-qa/scripts/qa.mjs --config qa.config.json --run qa-run.json status
+```
+
+Keep the reader process alive; it holds the expressly authorized login in memory,
+polls every 30 seconds and publishes only sanitized usage via atomic mode-0600
+files. It performs no inference, account reset or credit purchase, reads no auth
+file, and does not persist a login. Termination/errors remove its snapshot. A lost
+process/login needs a new explicit device sign-in; do not promise that a cloud
+session survives disconnects or that a reader can keep an inactive agent running.
+The helper is telemetry, not an autonomous agent scheduler. Use a private local
+output directory; a writable forged snapshot is outside this trusted-operator guard.
+
+The guard requires the Codex 10,080-minute window, a valid upcoming reset, a
+sample no older than the configured 1..60 seconds, and explicit availability/
+spend-control booleans. Missing, malformed, future, stale or reset telemetry fails
+closed. Under-threshold/unavailable accounts refuse creation. Check status before
+every iteration and significant stage, and before/after lengthy checks; creation
+also checks again after GitHub pagination immediately before writing. Stop active
+work when below threshold or unverifiable; preserve a handoff. Exactly 50% allows
+continuation. Never automatically spend reset credits or restart after a reset.
+Polling and rounded account percentages cannot reserve the cost of the final
+response or exclude concurrent consumers; this is a sampled stop policy, not an
+exact usage ceiling. The reader alone cannot interrupt a running model response.
 
 ## Verify the kit
 
@@ -114,6 +156,8 @@ No npm dependencies or repository services are needed:
 
 ```sh
 node --check tools/repo-qa/scripts/qa.mjs
+# Optional reader tests (Python >=3.9):
+PYTHONDONTWRITEBYTECODE=1 python3 tools/repo-qa/scripts/codex-usage-reader.test.py
 node --test tools/repo-qa/scripts/qa.test.mjs tools/repo-qa/scripts/portability.test.mjs
 ```
 
@@ -132,7 +176,7 @@ the blocked test and run it in an authorized environment; do not silently skip i
 > issues and PR feedback. This User instruction starts/resumes run `<ID>` under
 > the attached/referenced descriptor and authorized repository scope. Recheck
 > live budgets, follow the QA Protocol, document decisions, and leave a durable
-> handoff. Stop at the run/day caps or an explicit stop. User reviews and merges.
+> handoff. Stop at the configured count/weekly limits, unavailable telemetry or an explicit stop. User reviews and merges.
 
 Fill the placeholders and point to concrete records before starting. Unknown
 scope, permissions or intended product behavior must not be guessed.

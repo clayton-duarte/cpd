@@ -46,3 +46,20 @@ automatic resets, distributed orchestration and token-cost estimation.
 These mechanisms are reviewed software, not proof that an arbitrary agent will
 follow every prose rule. Tests establish accounting/portability behavior; User
 review and evidence-backed issues establish the judgment-dependent parts.
+
+
+Weekly allowance mode (2026-11-13): the official
+[Codex app-server](https://github.com/openai/codex/tree/main/codex-rs/app-server)
+and [protocol](https://github.com/openai/codex/tree/main/codex-rs/app-server-protocol)
+expose account login and rate-limit reads. Installed CLI 0.167.0-alpha.4 generated
+schemas and an authorized device-login experiment confirmed the 10,080-minute
+window may be primary or secondary, with usedPercent/reset and account/spend
+availability. Use those semantics rather than guessing cost from GitHub counts.
+An optional stdlib Python telemetry helper uses the official CLI with ephemeral
+credentials, leaving the Node/GitHub core unchanged for other agents/providers.
+No suitable generic account meter is assumed; unsupported CLI/provider data fails
+closed. Null cardinal caps require an explicit weekly policy, with a maximum
+60-second age, strict under-threshold stop, and a fresh check before writes.
+These are User policy choices and conservative implementation decisions, not
+claims of universal community consensus. Polling is not a cost reservation or a
+scheduler and cannot guarantee an exact final percentage.
