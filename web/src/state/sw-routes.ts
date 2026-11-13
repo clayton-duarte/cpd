@@ -6,7 +6,13 @@ export interface SwRequest {
 }
 export type SwRoute = "precache" | "navigation-fallback" | "network";
 
-// Stub: implemented by a later Job.
-export function routeRequest(_req: SwRequest): SwRoute {
+const NETWORK_PATHS = ["/cpd-ws", "/api/"];
+
+export function routeRequest(req: SwRequest): SwRoute {
+  if (req.method !== "GET") return "network";
+  const url = new URL(req.url);
+  if (url.origin !== req.origin) return "network";
+  if (NETWORK_PATHS.some((p) => url.pathname === p || url.pathname.startsWith(p))) return "network";
+  if (req.mode === "navigate") return "navigation-fallback";
   return "precache";
 }
