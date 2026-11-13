@@ -343,6 +343,32 @@ mod tests {
         );
     }
 
+    /// Renaming an instrumented file while lowering its coverage is refused: the new path inherits the old path's baseline.
+    #[test]
+    fn renaming_an_instrumented_file_below_its_baseline_fails_gate() {
+        let fx = fixture("grounding");
+        fx.commit_file(
+            &fx.repo,
+            "src/old.rs",
+            "implementation\nline two\nline three\n",
+            "add old",
+        );
+        fx.green_coverage("cov");
+        fx.measure_with_mock(&[
+            r#"{"line": 90.0, "branch": 80.0, "files": {"src/old.rs": {"line": 90.0, "branch": 80.0}}}"#,
+            r#"{"line": 90.0, "branch": 80.0, "files": {"src/new.rs": {"line": 50.0, "branch": 80.0}}}"#,
+        ]);
+        fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
+            .ok();
+        fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay-1'; UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'pay-1'; UPDATE workflows SET status = 'dispatch', lead_worktree = '/tmp/lead', started_at = 't' WHERE plan = 'pay-1';");
+
+        fx.git(&fx.repo, &["checkout", "-b", "pay-1/refact"]);
+        fx.git(&fx.repo, &["mv", "src/old.rs", "src/new.rs"]);
+        fx.git(&fx.repo, &["commit", "-q", "-m", "rename"]);
+        let run = fx.cpd(&["pr", "push", "--workflow", "refact", "--plan", "pay-1"]);
+        common::refused(&run, "coverage_below_baseline", 3);
+    }
+
     /// Decision pro-d579 / pro-d581, commands.md §34.1 rule 4, §34.4:
     /// Mid-refactor failing test causes job to be blocked on coverage workflow;
     /// amending coverage and rebasing clears the block.

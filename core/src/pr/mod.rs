@@ -458,7 +458,8 @@ pub(crate) fn coverage_check(
     let current = crate::workflow::measure_coverage(repo, plan, &workflow.key, sha, command)?;
     let touched = crate::git::tamper::changed_paths(repo, &base, sha)?;
     let removed = crate::workflow::absent_paths(repo, sha, &touched)?;
-    baseline.check(&current, &touched, &removed)
+    let renamed = crate::workflow::renamed_paths(repo, &base, sha)?;
+    baseline.check(&current, &touched, &removed, &renamed)
 }
 
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.

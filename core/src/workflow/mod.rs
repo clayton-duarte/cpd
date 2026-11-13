@@ -229,6 +229,43 @@ pub(crate) fn absent_paths(
         .collect())
 }
 
+/// The `(old, new)` path pairs `base...head` renames (`git diff -M --diff-filter=R --name-status -z`).
+pub(crate) fn renamed_paths(
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<(String, String)>, CpdError> {
+    let range = format!("{base}...{head}");
+    let out = crate::git::run::run(
+        root,
+        &[
+            "diff",
+            "-M",
+            "--diff-filter=R",
+            "--name-status",
+            "-z",
+            &range,
+        ],
+    )?;
+    if out.code != 0 {
+        return Err(CpdError::new(
+            crate::error::ErrorCode::GitFailed,
+            format!("Could not list the renames of {range}: {}", out.stderr),
+        ));
+    }
+    // Entries are `R<score>\0old\0new\0`.
+    let mut fields = out.stdout.split('\0').filter(|f| !f.is_empty());
+    let mut pairs = Vec::new();
+    while let Some(status) = fields.next() {
+        if let (true, Some(old), Some(new)) =
+            (status.starts_with('R'), fields.next(), fields.next())
+        {
+            pairs.push((old.to_owned(), new.to_owned()));
+        }
+    }
+    Ok(pairs)
+}
+
 /// Enforce test immutability on refactor diffs, including declared test-file globs.
 pub(crate) fn guard_refactor_tests(
     conn: &rusqlite::Connection,
@@ -381,12 +418,14 @@ impl CoverageReport {
         }
         Ok(())
     }
+    /// `renamed`: `(old, new)` pairs; the new path must keep the old path's baseline, and the aggregate must hold.
     /// `removed`: the paths `touched` that no longer exist (deleted or renamed away): their coverage left with them, it did not go missing.
     pub(crate) fn check(
         &self,
         current: &Self,
         touched: &[String],
         removed: &[String],
+        renamed: &[(String, String)],
     ) -> Result<(), CpdError> {
         let below = if let Some(base_files) = &self.files {
             let current_files = current.files.as_ref().ok_or_else(|| {
@@ -395,13 +434,23 @@ impl CoverageReport {
                     "Coverage report omitted per-file data.",
                 )
             })?;
-            touched.iter().any(
-                |path| match (base_files.get(path), current_files.get(path)) {
-                    (Some(base), Some(now)) => now.line < base.line || now.branch < base.branch,
-                    (Some(_), None) => !removed.contains(path),
-                    _ => false,
-                },
-            )
+            let lowered = |base: &CoverageMetrics, now: &CoverageMetrics| {
+                now.line < base.line || now.branch < base.branch
+            };
+            let renamed_below = renamed.iter().any(|(old, new)| {
+                base_files
+                    .get(old)
+                    .is_some_and(|base| current_files.get(new).is_none_or(|now| lowered(base, now)))
+            }) || (!renamed.is_empty()
+                && (current.line < self.line || current.branch < self.branch));
+            renamed_below
+                || touched.iter().any(|path| {
+                    match (base_files.get(path), current_files.get(path)) {
+                        (Some(base), Some(now)) => lowered(base, now),
+                        (Some(_), None) => !removed.contains(path),
+                        _ => false,
+                    }
+                })
         } else {
             current.line < self.line || current.branch < self.branch
         };
