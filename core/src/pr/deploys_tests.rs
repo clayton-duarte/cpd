@@ -573,6 +573,7 @@ fn the_rows_come_back_sorted_by_created_at_then_run_id() {
 
 /// b57: `gh api --include -H 'If-None-Match: ...'` answers HTTP 304 and `gh` exits 1. A 304 to a conditional request means
 /// unchanged, not failure.
+/// Answers only the conditional call, with the 304.
 struct NotModified;
 
 impl Handler for NotModified {
