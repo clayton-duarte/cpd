@@ -71,7 +71,14 @@ const isBusy = (f: JsonlFacts): boolean =>
   f.lastRole === "toolResult" ||
   (f.lastRole === "assistant" && (f.lastStopReason === "toolUse" || f.lastStopReason === "pending"));
 
+/** One diagnostic line of an ask answer (never carries answer text). */
+export type AskDiagRecord = { readonly at: string; readonly side: "web"; readonly event: string; readonly session: string; readonly dialogId?: string } & Readonly<Record<string, unknown>>;
+/** Receives each diagnostic record; the default appends it to `<cpdHome>/run/ask-diag.log`. */
+export type AskDiagSink = (record: AskDiagRecord) => void;
+
 export function createPiBackend(deps: {
+  /** Injectable diagnostics sink (stub: not yet used). */
+  diag?: AskDiagSink;
   cpd: Cpd;
   fs: FileBoundary;
   watch: WatchBoundary;

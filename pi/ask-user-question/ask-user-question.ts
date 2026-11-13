@@ -269,6 +269,9 @@ const INERT_COMPONENT: QuestionnaireSessionComponent = {
  * overlay's `component.handleInput`). Inline has no handle to hide and keeps focus while
  * collapsed, so it needs no listener.
  */
+/** Diagnostic-log seam: appends one line to the log file. Tests replace `append`. (stub: not yet used) */
+export const askDiagIo: { append(file: string, line: string): void } = { append: () => undefined };
+
 async function mountQuestionnaire(config: {
 	ctx: ExtensionContext;
 	typed: QuestionParams;
