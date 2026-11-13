@@ -2048,9 +2048,33 @@ The sole recovery for a locked `test` Job whose selector or file ownership is wr
 
 A refused replacement is refused whole: nothing is written, and the source keeps its status.
 
-Effects, in two phases. First the operation commits a durable replacement intent (source, requested fields, requester, reason) and fences the source from starting another Attempt. A running source Attempt is stopped through `attempt abort` (contract §3.4); the command waits until that Attempt is terminal and its runner has acknowledged teardown. If teardown fails, times out, or cpd exits first, the intent remains and no replacement or redirect is visible; re-running the same command with the same arguments resumes the intent, and a different request is refused until the Lead resumes or abandons it. Second, once the source is quiescent, one write transaction re-reads the intent, source, Attempts and dependency graph and: appends the replacement `test` Job, queued, with the source's title, Tier, resources and incoming Dependencies and a fresh Locked-Job fingerprint; redirects every dependency edge of each eligible downstream Job from the source's key to the new key; marks the source `cancelled` with a replacement reason; completes the intent; and appends the replacement history and Events (the selector correction and the old-to-new key mapping are recorded there). The transaction is all-or-nothing. Downstream Jobs are not failed or cancelled by it. The source, its Attempts and their branch and commit refs stay addressable as superseded history; the replacement's starting commit includes the source Attempt's red-test commit(s) by ancestry, without recreating or cherry-picking them.
+Effects, in two phases. First the operation commits a durable replacement intent (source, requested fields, requester, reason) and fences the source from starting another Attempt. A running source Attempt is stopped through `attempt abort` (contract §3.4); the command waits until that Attempt is terminal and its runner has acknowledged teardown. If teardown fails, times out, or cpd exits first, the intent remains and no replacement or redirect is visible; re-running the same command with the same arguments resumes the intent, and a different request is refused until the Lead resumes or abandons it. Second, once the source is quiescent, one write transaction re-reads the intent, source, Attempts and dependency graph and: appends the replacement `test` Job, queued, with the source's title, Tier, resources and incoming Dependencies and a fresh Locked-Job fingerprint; redirects every dependency edge of each eligible downstream Job from the source's key to the new key, and recomputes and stores the Locked-Job fingerprint of each downstream Job whose need is redirected (§2.3: the fingerprint inputs include needs), in the same transaction; marks the source `cancelled` with a replacement reason; completes the intent; and appends the replacement history and Events (the selector correction and the old-to-new key mapping are recorded there). The transaction is all-or-nothing. Downstream Jobs are not failed or cancelled by it. The source, its Attempts and their branch and commit refs stay addressable as superseded history; the replacement's starting commit includes the source Attempt's red-test commit(s) by ancestry, without recreating or cherry-picking them.
 
 Idempotent: yes, as stated above. An abandoned or failed operation never removes a commit or restores a stopped process.
+
+### 5.4b `job reseal`
+
+```
+cpd job reseal <key> [--plan <id>]
+```
+
+Recomputes and stores the Locked-Job fingerprint of a Job when its stored fingerprint does not match the current inputs (§2.3), but only when every unexplained difference can be attributed to a recorded redirect of one of its needs by a `job replace-test` operation. Use this to repair a Job that `doctor` reports as tampered due to replaced test dependencies (§14.1; contract §3.7 "The window", bug b62). A Job whose fingerprint mismatch has any other cause (a specification field changed without a recorded redirect, or changes made outside cpd) is refused `reseal_unexplained` (exit 3) and is not rewritten. **The Lead only**: a Worker (`CPD_ATTEMPT` set) is refused `not_a_lead` (exit 3), and nothing is written.
+
+When it applies: the Job is `queued` or `running`, its stored `fingerprint` does not match the Locked-Job fingerprint computed from its current Locked fields and needs, and the `jobs_history` rows of all prior `job-edited` Events linked to `job-replaced` Events document that every need change is a redirect from a `replace-test` operation (the old and new test Job keys are recorded in the redirect Event).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the caller is a Worker (`CPD_ATTEMPT` set) | `not_a_lead` | 3 |
+| the Job's stored fingerprint matches the Locked-Job fingerprint of its current inputs (the Job is not tampered) | `already` | 0 |
+| the Job's stored fingerprint does not match, but the mismatch cannot be fully explained by recorded `job replace-test` redirects of its needs (some difference is unexplained, meaning a field was changed outside of a replace-test, or a replace-test Event is missing, or the Spec or other Locked fields are not as sealed) | `reseal_unexplained` | 3 |
+
+Effects: **rows**, one transaction: `jobs.fingerprint` is recomputed and stored, matching the current Locked-Job fingerprint. **Event** `job-edited` `{fields: ["fingerprint"]}`, its `text` describing the reseal as a restore from replaced-test redirects. And, when the Plan's working Lead runs it, it names the Job's Workflow as the Lead's Workflow (§1.3).
+
+```json
+{"ok": true, "job": {"key": "api-test", "workflow": "api", "status": "queued"}, "fields": ["fingerprint"]}
+```
+
+Idempotent: yes; a Job whose stored fingerprint already matches its inputs returns `"already": true` and writes nothing.
 
 ### 5.5 `job dispatch`
 
