@@ -87,6 +87,8 @@ export interface HostClient {
   close(): void;
 }
 const HELLO_MS = 5000; // LIMITS.helloMs, protocol.ts:6
+// Startup attach and optional model metadata cannot hold the transcript forever.
+const STARTUP_READ_MS = 5000;
 
 type Pending = { resolve: (frame: HostFrame) => void; reject: (error: Error) => void };
 type Answer = Parameters<HostClient["respond"]>[1];
@@ -200,16 +202,30 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
   }
   welcome = first;
 
-  const request = (type: string, fields: Record<string, unknown>): Promise<HostFrame> => {
+  const request = (type: string, fields: Record<string, unknown>, timeoutMs?: number): Promise<HostFrame> => {
     if (closed) return Promise.reject(disconnected());
     const req = `r${++nextReq}`;
     return new Promise<HostFrame>((resolve, reject) => {
-      pending.set(req, { resolve, reject });
-      socket.write(`${JSON.stringify({ type, req, ...fields })}\n`);
+      let timer: Disposable | null = null;
+      pending.set(req, {
+        resolve: (frame) => { timer?.dispose(); resolve(frame); },
+        reject: (error) => { timer?.dispose(); reject(error); },
+      });
+      if (timeoutMs !== undefined) timer = deps.scheduler.after(timeoutMs, () => {
+        pending.delete(req);
+        reject(new WebError("host_unreachable", `${type}: no reply within ${timeoutMs} ms`, { reason: "request_timeout", method: type }));
+      });
+      try {
+        socket.write(`${JSON.stringify({ type, req, ...fields })}\n`);
+      } catch (error) {
+        pending.delete(req);
+        timer?.dispose();
+        reject(error);
+      }
     });
   };
-  const data = async (type: string, fields: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const frame = await request(type, fields);
+  const data = async (type: string, fields: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> => {
+    const frame = await request(type, fields, timeoutMs);
     if (frame.type !== "result") throw new WebError("protocol_error", `${type}: expected result, got ${frame.type}`);
     return frame.data;
   };
@@ -220,7 +236,7 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
   return {
     welcome,
     async attach(cursor) {
-      const frame = await request("attach", { conversation: "root", ...(cursor === undefined ? {} : { cursor }) });
+      const frame = await request("attach", { conversation: "root", ...(cursor === undefined ? {} : { cursor }) }, STARTUP_READ_MS);
       if (frame.type !== "attached") throw new WebError("protocol_error", `attach: expected attached, got ${frame.type}`);
       return frame;
     },
@@ -247,7 +263,7 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
       return data("configure", "model" in change ? { model: change.model } : { thinking_level: change.thinkingLevel });
     },
     async listModels() {
-      const { models } = await data("list_models", {});
+      const { models } = await data("list_models", {}, STARTUP_READ_MS);
       if (!Array.isArray(models)) return bad("list_models", "models");
       return models as Awaited<ReturnType<HostClient["listModels"]>>;
     },

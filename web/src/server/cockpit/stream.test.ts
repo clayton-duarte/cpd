@@ -191,7 +191,7 @@ describe("cockpit stream", () => {
     children[0]!.feed(tooNew);
     expect(children[0]!.killed).toBe(true);
     expect(children).toHaveLength(2);
-    expect(scheduler.pending()).toBe(0);
+    expect(scheduler.pending()).toBe(1); // replacement watchdog, no retry delay
     children[0]!.exit(1);
     expect(children).toHaveLength(2);
     expect(errors).toEqual([]);
@@ -206,7 +206,7 @@ describe("cockpit stream", () => {
     children[0]!.feed({ t: "error", id, error: { code: "store_too_new", message: "store is newer than this cpd" } });
     expect(children[0]!.killed).toBe(true);
     expect(children).toHaveLength(2);
-    expect(scheduler.pending()).toBe(0);
+    expect(scheduler.pending()).toBe(1); // the replacement is probed before hello
     expect(await outcome).toBe("down");
     expect(errors).toEqual([]);
   });
@@ -240,4 +240,43 @@ describe("cockpit stream", () => {
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]!.panes.status).toEqual(status);
   });
+});
+
+it.each(["exit", "heal"])("watches a silent replacement child after %s before its first hello", (reason) => {
+  const { stream, scheduler, children, errors } = setup();
+  stream.start();
+  children[0]!.feed(hello);
+  if (reason === "exit") {
+    children[0]!.exit(1);
+    scheduler.advance(500);
+  } else children[0]!.feed({ t: "error", error: { code: "store_too_new", message: "new schema" } });
+  expect(children).toHaveLength(2);
+  const replacement = children[1]!;
+  errors.length = 0;
+  scheduler.advance(30_000);
+  expect(replacement.writes.map((s) => JSON.parse(s).t)).toContain("refresh");
+  scheduler.advance(10_000);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toMatchObject({ details: { cpdCode: "stalled" } });
+  scheduler.advance(10_000);
+  expect(replacement.killed).toBe(true);
+  stream.stop();
+});
+
+
+it("stopping a silent replacement cancels its watchdog and ignores stale child frames", () => {
+  const { stream, scheduler, children, errors } = setup();
+  stream.start();
+  children[0]!.exit(1);
+  scheduler.advance(500);
+  expect(scheduler.pending()).toBe(1);
+  children[0]!.feed(hello);
+  expect(stream.ready()).toBe(false);
+  errors.length = 0;
+  stream.stop();
+  scheduler.advance(100_000);
+  expect(scheduler.pending()).toBe(0);
+  expect(children).toHaveLength(2);
+  expect(children[1]!.writes).toEqual([]);
+  expect(errors).toEqual([]);
 });
