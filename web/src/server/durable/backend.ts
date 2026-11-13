@@ -57,6 +57,8 @@ export function createDurableBackend(deps: {
   cpd: Cpd;
   git: GitBoundary;
   scheduler: Scheduler;
+  fs?: { write(path: string, data: Uint8Array): Promise<void> };
+  cpdHome?: string;
   windowSize?: number;
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
@@ -511,8 +513,14 @@ export function createDurableBackend(deps: {
             } else if (response.outcome === "reject") {
               await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
             } else if (response.outcome === "changes") {
-              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
-              await client.submit({ text: response.feedback, whenBusy: "followUp", requestId: `feedback:${dialogId}` });
+              if (deps.fs !== undefined && deps.cpdHome !== undefined) {
+                const feedbackFile = `${deps.cpdHome}/run/${plan}/feedback-${review}.md`;
+                await deps.fs.write(feedbackFile, new TextEncoder().encode(response.feedback));
+                await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan, feedbackFile }));
+              } else {
+                await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
+                await client.submit({ text: response.feedback, whenBusy: "followUp", requestId: `feedback:${dialogId}` });
+              }
             }
             dialogs.delete(dialogId);
             send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });

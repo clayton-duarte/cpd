@@ -16,6 +16,7 @@ args=()
 for arg in "$@"; do
     case "$arg" in
         engine::*) args+=("${arg#engine::}") ;;
+        core::*) args+=("${arg#core::}") ;;
         *) args+=("$arg") ;;
     esac
 done

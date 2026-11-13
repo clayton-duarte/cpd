@@ -106,6 +106,11 @@ fn run_with(runner: &dyn Runner, args: &[&str], stdin: Option<&str>) -> Result<S
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Verify that the configured account has an active session.
+pub fn check() -> Result<(), CpdError> {
+    run(&["whoami"], None).map(|_| ())
+}
+
 fn io_failed(e: std::io::Error) -> CpdError {
     CpdError::new(
         ErrorCode::SecretOpFailed,

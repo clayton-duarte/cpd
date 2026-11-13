@@ -248,11 +248,12 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261110T1305-protocol-breach",
             "20261110T2200-draft-waiting-on",
             "20261112T0400-swr-deploys-etags",
+            "20261112T1600-workflow-prereqs",
         ]
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261112T0400-swr-deploys-etags")
+        Some("20261112T1600-workflow-prereqs")
     );
 }
 

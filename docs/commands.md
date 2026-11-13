@@ -22,7 +22,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 10. [`session`](#10-session)
 10a. [`board`](#10a-board)
 11. [`events`](#11-events)
-11a. [`cockpit serve` (removed)](#11a-cockpit-serve)
+11a. [`cockpit serve`](#11a-cockpit-serve)
 12. [`watch`](#12-watch)
 13. [`tui` (removed)](#13-tui)
 14. [`doctor`, `config`, `tiers`, `models`, `preset`](#14-doctor-config-tiers-models-preset)
@@ -290,6 +290,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd session switch-failed` (§10.18a, internal) | none | no | yes |
 | `cpd session switched` (§10.18b, internal) | none | no | yes |
 | `cpd serve` (§12a) | none | no | no |
+| `cpd cockpit serve` (§11a) | none | no | yes |
 | `cpd upgrade` (§14.4c) | none | yes | no |
 | `cpd tag` (§26.1) | Lead | no | no |
 | `cpd version sync` (§26.2) | Lead | no | no |
@@ -305,6 +306,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd protocol bug close` (§33.3) | Lead, Manager | no | no |
 | `cpd protocol bug list` (§33.4) | Manager, Lead, Worker | no | no |
 | `cpd protocol bug show` (§33.5) | Manager, Lead, Worker | no | no |
+| `cpd workflow prereq add` (§9.5b) | Lead | no | no |
+| `cpd workflow prereq confirm` (§9.5b) | none | yes | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -316,7 +319,6 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | bare `cpd` (§13.3) | open the cockpit | none. `tmux -u -L cpd attach -t cpd` attaches to the tmux server (contract §6.2) |
 | `cpd tui view` and its views (§13.2, internal) | the cockpit's panes and dialogs | none |
 | `cpd tui action` (§9.12, §9.13, §13.2, internal) | the StatusBar's and the popups' clicks | none |
-| `cpd cockpit serve` (§11a) | the NDJSON stream for the WebUI backend | the WebUI's direct WebSocket to the core engine (contract §5.8) |
 | `cpd desktop`, `cpd desktop release` (§14.4a, §14.4b) | the Electron shell: launch, preview, release | the browser (pro-d567; docs/architecture/client.md) |
 | `cpd argv-check` (contract §5.6, hidden) | the parse-only check of the WebUI's argv bridge | none; it goes with the bridge that Plan 4 `webui-core-ws` deletes |
 
@@ -2830,6 +2832,47 @@ Effects: **rows**, one transaction: the Workflow's stored `description` column (
 
 Idempotent: yes; when the description is unchanged it returns `"already": true` and writes nothing.
 
+### 9.5b `workflow prereq`
+
+```
+cpd workflow prereq add --workflow <key> --kind ld-flag --project <p> --key <flag> [--env <e>] [--plan <id>]
+cpd workflow prereq add --workflow <key> --kind manual --text "<what>" [--plan <id>]
+cpd workflow prereq confirm --workflow <key> --id <id> [--plan <id>]
+```
+
+An **external prerequisite** is something outside the Workflow's repo that must exist before its change reaches production: a LaunchDarkly flag the change reads, or a manual setup task. An unmet prerequisite refuses `pr merge-green`, `pr merge`, `pr post` and deploy approvals (`cpd inbox approve`) with `prereq_unmet`, until it is met (their rows in §9.8b, §9.10, §9.10a and §21.13; the refusal is in [refusals.md](refusals.md)).
+
+**Callers.** The Lead declares every prerequisite when it creates the Workflow (its skill, `cpd-lead` Scoping). `confirm` is the User's: a manual prerequisite is confirmed at a shell or from the PR's Inbox item, never by an agent.
+
+**Kinds.** `--kind` is required. Each kind takes only its own flags; a flag of the other kind is `usage`.
+
+| Kind | Flags | Met when |
+|---|---|---|
+| `ld-flag` | `--project <p>` the LaunchDarkly project key; `--key <flag>` the flag key; `--env <e>` optional | the flag exists in the project. Checked live through the LaunchDarkly API at each gated command, with the token from the secret `launchdarkly/api-token` (vault `cpd`, §24). A flag deleted later is unmet again. |
+| `manual` | `--text "<what>"`, one line: the task | the User confirms it with `confirm`. Once confirmed it stays met. |
+
+`--env` is stored with the prerequisite; the check does not yet read it.
+
+Preconditions of `add` and `confirm`, in this order:
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Workflow is a Workflow of the Plan | `workflow_not_found` | 4 |
+| the Workflow is not `merged` or `cancelled` | `workflow_ended` | 3 |
+| `--kind` is `ld-flag` or `manual`; the flags of that kind are all given; no flag of the other kind is given | `usage` | 2 |
+| `confirm`: `--id` names a `manual` prerequisite of the Workflow; an `ld-flag` is checked, never confirmed, and an unknown `--id` is refused | `usage` | 2 |
+
+Effects: **rows**, one transaction. `add` stores one prerequisite of the Workflow under a new `id`; `confirm` records when and by whom it was met. The Workflow's status and the Plan's phase do not change.
+
+```json
+{"ok": true, "workflow": "api", "prereq": {"id": 1, "kind": "ld-flag", "project": "missionlane", "key": "opportunity-tiles-takeover", "env": null}}
+{"ok": true, "workflow": "api", "prereq": {"id": 2, "kind": "manual", "text": "Create the flag in staging"}}
+```
+
+Idempotent: yes. `add` of a declaration the Workflow already has returns `"already": true` and writes nothing; `confirm` of a met prerequisite returns `"already": true` and writes nothing.
+
+**Refusal on merge, post and deploy.** `pr merge-green`, `pr merge`, `pr post` and `inbox approve` read the unmet prerequisites before their first write and refuse `prereq_unmet` (exit 3) while any is unmet. The refusal names every unmet prerequisite, not only the first. A prerequisite that cannot be checked (LaunchDarkly unreachable, no token) is not met: the refusal is the same `prereq_unmet`, with the cause in its `details`, so a broken check never lets a change through.
+
 ### 9.6 `workflow cancel`
 
 ```
@@ -2996,6 +3039,7 @@ Check order; the first failure refuses and then nothing is sent and nothing is w
 6. the channel is `policy.pr.post.channel` when not empty, else the machine config's `inbox.team_channel` when not empty, else (`details` `{keys: ["pr.post.channel", "inbox.team_channel"]}`) → `post_unconfigured` (exit 3)
 7. `postable::unready(&row)` (contract §2.2, §8.3, the eight Unready reasons: `not_open`, `draft`, `conflicting`, `changes_requested`, `checks_failed`, `checks_pending`, `comments_unread`, `bot_comments`) is not empty (`details` `{workflow, number, url, reasons: [<as_str of each>]}`) → `pr_not_ready` (exit 3)
 8. ONE `gh api graphql` read of the repository and the pull request (the auto-merge read query: `autoMergeAllowed`, the pull request's `id`, `autoMergeRequest { enabledAt }`, `squashMergeAllowed`, `mergeCommitAllowed`, `rebaseMergeAllowed`): all three methods false (`details` `{repo, number, squash, merge, rebase}`) → `no_merge_method` (exit 3); a read that fails or cannot be parsed → `gh_failed` (exit 1, `details` `{argv, exit, stderr}`). Both refuse before the Slack send: nothing is sent and nothing is written
+9. the Workflow has an unmet external prerequisite (§9.5b) → `prereq_unmet` (exit 3), `details` as in [refusals.md](refusals.md). Refused before the Slack send: nothing is sent and nothing is written
 
 | Refusal | Exit | Details |
 |---|---|---|
@@ -3011,6 +3055,7 @@ Check order; the first failure refuses and then nothing is sent and nothing is w
 | `pr_not_ready` | 3 | `{workflow, number, url, reasons: ["draft", "changes_requested", …]}` |
 | `no_merge_method` | 3 | `{repo, number, squash, merge, rebase}`: the repo allows no merge method (check 8) |
 | `gh_failed` | 1 | the read of check 8 failed or was unparseable; `{argv, exit, stderr}` |
+| `prereq_unmet` | 3 | check 9: an external prerequisite of the Workflow is unmet (§9.5b); `details` as in [refusals.md](refusals.md) |
 | `slack_auth` | 3 | the Slack sign-in in pi's MCP credentials is missing or invalid (§21.7); run `pi mcp login slack`; nothing was sent and nothing is written |
 | `slack_not_configured` | 3 | no `slack` server in `~/.pi/agent/mcp.json` (§21.7); run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden`; nothing was sent and nothing is written |
 | `slack_failed` | 1 | the helper could not send the message (timeout, network, Slack service failure) (§21.7); the outcome is unknown: nothing is written, the message may have reached the channel, and the engine's Slack poll records it if it did (Order and unknown outcomes); the post is retryable |
@@ -3219,6 +3264,7 @@ Steps:
 | with a non-empty repo policy `pr.required_checks`, when the stored required-check evaluation (the poll's live-read one, read by the pr-ready readiness too; no cache gates here) says any required name is missing, pending or failed; `details` is `{repo, number, missing: [names], pending: [names], failed: [names]}`, the real names of that evaluation | `required_check_not_passed` | 3 |
 | the up-to-date gate finds the head behind: the current default-branch head, read fresh at merge time (the stored `default_branch`'s head, from GitHub), is neither the pull request's head nor an ancestor of it; a stacked pull request is never checked; `details` is `{repo, number, head, main}`, the head oid and the default branch; the message is `behind main, updated, waiting for gate`; the refusal queues no `update` Job (pro-d519) and arms an automatic merge (the up-to-date gate, above) | `head_behind_main` | 3 |
 | the repo allows no method: `squash`, `merge` and `rebase` are all false in the read of step 2a (only reached when the pull request is `OPEN` and `CLEAN`); `details` is `{repo, number, squash, merge, rebase}`; the message is `<owner/repo> allows no merge method: squash, merge commit and rebase are all off in its settings, so cpd cannot merge #<n>. Allow one in the repo's settings.` | `no_merge_method` | 3 |
+| an external prerequisite of the pull request's Workflow (§9.5b) is unmet; `details` as in [refusals.md](refusals.md), nothing is written | `prereq_unmet` | 3 |
 | each `gh` call succeeds (also when `--match-head-commit` makes GitHub refuse, and the methods read of step 2a: a non-zero exit or an unparseable answer; the fallback `gh api` call of step 3 is one of these calls, and its failure's `details` are that call's `{argv, exit, stderr}`); `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
 The setting read of step 4 is never a `gh_failed`: a failed read is the `auto_delete_unread` warning, and the exit status does not change.
@@ -3249,6 +3295,8 @@ Runs the Manager's merge protocol for a green pull request the User names (air-d
 
 **Refusal:** when the cached `checks` of the pull request is not `passed`, the command is refused `checks_not_green` (exit 3) before any `gh` write (no `update-branch`, no `merge`).
 
+**Prerequisites:** when a Workflow owns the pull request (§9.5b), an unmet external prerequisite of that Workflow is refused `prereq_unmet` (exit 3) before any `gh` write, with `details` as in [refusals.md](refusals.md). A pull request no Workflow owns has none.
+
 The command takes the pull-request argument `<owner>/<repo>#<n>`; it does not select a Plan or Workflow. `gh` failures use `gh_failed` (exit 1; §1.3). The command's success output is one JSON value, as for every non-streaming command (§1.2).
 
 ### 9.11 `host approve` and `host repair`
@@ -3264,17 +3312,17 @@ cpd host repair [-y | --yes]
 
 **`cpd host repair`** (Manager only; contract §3.7 `host-alert`): repairs the skipped cpd install by resetting the checkout's main branch to origin/main, saving the diff and old HEAD. Needs an approval of the calling Session. Steps, all `git -C $HOME/projects/cpd`: (a) `rev-parse HEAD` (old head); (b) `diff HEAD` and, when non-empty, write to `$CPD_HOME/run/cpd-install-backups/<ts>.patch` (0600; <ts> = UTC `YYYYMMDDTHHMMSSZ`); (c) `update-ref refs/cpd-host/<ts> <old head>`; (d) `checkout --force -B main origin/main`; (e) `rev-parse HEAD` (new sha). Untracked files, other branches and stashes are never touched; no fetch (the script fetched). The approval is consumed only after step (e) succeeds. A failing git step stops it with `git_failed` naming the argv. Output JSON: `{"ok":true,"saved":{"ref":"refs/cpd-host/<ts>","patch":"<path or null>"},"head":"<new sha>"}`. The pill clears at the next sync tick after a repair (contract §3.7 `host-alert`).
 
-**Store repair.** `cpd host repair` also reconciles the store `cpd.db` (decision pro-d568; architecture in [store-repair.md](architecture/store-repair.md)). A **diverged migration** is an applied migration whose recorded checksum differs from the checksum this cpd embeds and that has no matching row in `schema_migration_repairs`. When the store has one, the command runs these steps before the checkout steps above, in this order. A store with none is left alone, and the output has no store keys. Run from a terminal (no `CPD_SESSION`), neither the store repair nor the checkout repair needs a Session approval.
+**Store repair.** `cpd host repair` also reconciles the store `cpd.db`, in addition to checksums (decisions pro-d562, pro-d568 and pro-d576; architecture in [store-repair.md](architecture/store-repair.md)). It reconciles drifted schemas: a table whose definition differs from main's expected schema in its table definition, its constraints (`CHECK`, `FOREIGN KEY`, `UNIQUE`) or its column order. Each such table is rebuilt in main's form with SQLite's 12-step table rebuild. A **diverged migration** is an applied migration whose recorded checksum differs from the checksum this cpd embeds and that has no matching row in `schema_migration_repairs`. A **drifted table** is one the schema comparison finds different from main. When the store has a diverged migration or a drifted table, the command runs these steps before the checkout steps above, in this order. A store with neither is left alone, and the output has no store keys. The schema comparison does not count `schema_migration_repairs` (its own table and triggers) as drift. Pending migrations are not diverged migrations; how they enter the comparison is not yet decided (store-repair.md, Open points). **Status:** designed, not built on this commit; the "Current limit" below still holds. Run from a terminal (no `CPD_SESSION`), neither the store repair nor the checkout repair needs a Session approval.
 
-1. **Detect.** Without `-y` or `--yes`, the command lists each diverged migration on stderr: its name, and its `recorded=` and `embedded=` checksums.
-2. **Copy dry run (automatic).** `cpd.db`, `-wal` and `-shm` are copied to `run/scratch-repair-<pid>/`, the repair is applied to that copy, and the copy must open. The scratch directory is removed on both paths. A failure stops here and the live store is untouched. The dry run runs before the confirmation, so it runs on every repair, confirmed or not.
+1. **Detect.** Without `-y` or `--yes`, the command lists each diverged migration on stderr: its name, and its `recorded=` and `embedded=` checksums. It also lists each drifted table.
+2. **Copy dry run (automatic).** `cpd.db`, `-wal` and `-shm` are copied to `run/scratch-repair-<pid>/`. The reconciliation runs on that copy: each drifted table is rebuilt with the 12-step rebuild (foreign keys off before the transaction, `BEGIN IMMEDIATE`, create `<t>_new`, copy, drop, rename, recreate indexes, triggers and views, `PRAGMA foreign_key_check`, commit, foreign keys back on), the repair is applied to that copy, and the copy must open, with an empty `foreign_key_check` and a schema that matches main's. The scratch directory is removed on both paths. A failure stops here and the live store is untouched. The dry run runs before the confirmation, so it runs on every repair, confirmed or not.
 3. **Confirmation.** `-y` or `--yes` confirms without asking. Otherwise the command prints `Apply store repair? [y/N]: ` on stderr and reads one line from stdin: `y` or `yes` (any case) confirms, and any other answer, an empty line included, refuses. **Answering N refuses** with `host_approval_required` (exit 3, message `Store repair requires user confirmation [y/N].`). The store is untouched, no backup is written, and the checkout is not reset either, because the command stops at the refusal. The error code names a Session approval; the message names the confirmation.
 4. **Backup.** The three store files that exist are copied to `$CPD_HOME/run/backups/<ts>/`, with `<ts>` as above. The backup is `run/backups/<ts>/cpd.db`, with its `-wal` and `-shm` beside it. It is not `run/cpd-install-backups/`.
-5. **Record.** One transaction inserts a `txns` row (`command` `cpd host repair`; the calling Session when `CPD_SESSION` is set) and one `schema_migration_repairs` row per diverged migration (`name`, the recorded and the accepted checksum, `reason` `cpd host repair`). The table is append-only. A failure before the commit leaves the live store unchanged.
+5. **Apply and record.** One `BEGIN IMMEDIATE` transaction on the live store runs the same rebuilds as the dry run, inserts a `txns` row (`command` `cpd host repair`; the calling Session when `CPD_SESSION` is set) and one `schema_migration_repairs` row per diverged migration (`name`, the recorded and the accepted checksum, `reason` `cpd host repair`), and then runs the checks of step 2 before it commits. The table is append-only. A failure before the commit rolls the transaction back and leaves the live store unchanged.
 
 The store repair runs before the checkout steps. If a checkout step then fails, the store repair stays and its backup remains. On success the JSON output gains two keys: `"store_repaired": true` and `"store_backup": "<path of run/backups/<ts>/cpd.db>"`. Neither key appears when no store repair ran.
 
-**Current limit (tracked in Plan `repair-open`).** Before any step above, `cpd host repair` opens the store with `Env::open`. An open of a store with a diverged migration is refused with `migration_changed` (exit 1; `details` `name`, `recorded`, `embedded`). On the current build the command therefore stops there: no dry run, no prompt, no backup, no record and no checkout reset. `cpd host approve` opens the store the same way and is refused the same way, so a Manager cannot obtain the approval while the store is diverged. Until that is fixed, `cpd host repair` does not repair a diverged store.
+**Current limit (tracked in Plan `repair-open`).** The reconciliation of drifted tables is not built yet: today `cpd host repair` sees only diverged migrations, and a store with a drifted table and no diverged migration is left alone. Before any step above, `cpd host repair` opens the store with `Env::open`. An open of a store with a diverged migration is refused with `migration_changed` (exit 1; `details` `name`, `recorded`, `embedded`). On the current build the command therefore stops there: no dry run, no prompt, no backup, no record and no checkout reset. `cpd host approve` opens the store the same way and is refused the same way, so a Manager cannot obtain the approval while the store is diverged. Until that is fixed, `cpd host repair` does not repair a diverged store.
 
 ### 9.12 `cpd tui action host`
 
@@ -4090,7 +4138,7 @@ Idempotent: read-only; the same `--since` replays the same lines.
 
 ## 11a. `cockpit serve`
 
-**Removed** (decision pro-d529, Plan `drop-cli-tui`). `cpd cockpit serve` is no longer a command: the WebUI connects to the core engine directly over its WebSocket (contract §5.8; pi-native-core.md §5.1). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
+**Restored** (decision pro-d577, bug b37; it supersedes the removal of decision pro-d529, Plan `drop-cli-tui`). The WebUI backend gets its live snapshot and event stream from this command again. The body below is the command as specified; §2 lists it among the commands the binary does not have yet, until the Job that implements it lands.
 
 The WebUI backend's state and event stream (Plan `cpd-realtime-engine`; its invariants are contract §5.5). One process replaces the backend's spawns: the four list commands and `plan show` that it ran on every refresh, and the `events follow` child whose lines triggered them. A committed change reaches the stream without a spawn.
 
@@ -4307,10 +4355,10 @@ Status: decided by pro-d566, pro-d567, pro-d570, pro-d541 and pro-d542. As of th
 
 ### 13.1 `tui`
 
-**Removed** (pro-d529). `cpd tui [--attach] [--respawn]` is no longer a command. The engine is restarted by `cpd watch --ensure` (§12); only tmux keep-alive stays (pi-native-core.md §3.3). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
+**Removed** (pro-d529). `cpd tui [--respawn]` is no longer a command. The engine is restarted by `cpd watch --ensure` (§12); only tmux keep-alive stays (pi-native-core.md §3.3). The body below is the command as the binary still has it; it stays until the code removal lands and the cross-references are rewritten (§2, "Removed").
 
 ```
-cpd tui [--attach] [--respawn]
+cpd tui [--respawn]
 ```
 
 Builds the cockpit (§6.1, §6.2) unless it exists and starts the engine.
@@ -4320,20 +4368,16 @@ Effects, each only when missing:
 - **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` it adds every pane of the layout that is missing (the `tree`, `plan`, `widgets` or `chat` placeholder, each running its view with `@cpd_view` set; the User killed it, or a build stopped half-way) where it goes in the layout above and then runs reset-layout, so the added panes are taken from the layout and the other panes get their sizes back (amendment 15, §19; tui-W5). A chat slot that holds a Lead is not missing, so no placeholder is added beside it; a placeholder added opens the last chat Lead as a new `main` does. On an existing `main` that still has a `statusbar` pane (a cockpit built before the StatusBar moved to the status line) it kills that pane once (`kill-pane`) and then runs reset-layout, so the other panes take the freed row and get their sizes back (amendment 15, §19). The same for a `worker` pane left by a cockpit built before the Worker pane was removed (pro-d63): `cpd tui` kills it once, then runs reset-layout and listing panes skips it quietly, as for the StatusBar.
 - **tmux options:** every option, the border format, the root `MouseDown1Status` binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd tui` sets them again on a running server (rerunning is safe). It also restores tmux's default `MouseDown1Pane` binding (`select-pane -t = ; send-keys -M`), which replaces cpd's earlier override.
 - **The status line:** `status on` (hs-d567; hs-d561 had `2`), `status-style default` and `status-format[0]` (the `─` line, the StatusBar, §13.2), set with `-t <cockpit session>` once the session exists, never `-g`, so `cpd-work` has no status row (contract §6.1).
-- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views and the chat placeholder), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.) Bare `cpd` does it too when it finds a view on an older binary (§13.3). While a preview is on (`@cpd_preview` is set on the server, §13.2), the views keep the preview build, so `--respawn` prints one line on stderr: `a preview is on (<value>); its views keep the preview build until 'preview-tui.sh off'` (hs-n264). Nothing is printed when it is unset and the value's JSON is unchanged.
+- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views and the chat placeholder), so each runs the installed binary again; a Lead or engine pane is never touched. The install no longer runs it: it is retired from the install's follow-ups (pro-d567, #1070, #1092; contract §3.7 step 2). (Why it existed: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.) Bare `cpd` does it too when it finds a view on an older binary (§13.3). While a preview is on (`@cpd_preview` is set on the server, §13.2), the views keep the preview build, so `--respawn` prints one line on stderr: `a preview is on (<value>); its views keep the preview build until 'preview-tui.sh off'` (hs-n264). Nothing is printed when it is unset and the value's JSON is unchanged.
 - `watch --ensure` (§12).
 - **tmux version** (hs-d294): when the server runs an older tmux than the installed one, marks a restart pending (`run/tmux-restart.pending`, §13.3) and says so on stderr; it never restarts the server itself, since it may run inside it. The engine does it once nothing is in the way.
 - No rows of its own; moving a Lead appends `session-moved`.
 
-| Precondition | Code | Exit |
-|---|---|---|
-| with `--attach`: stdin and stdout are a terminal | `not_a_terminal` | 3 |
-
 ```json
-{"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
+{"ok": true, "built": true, "socket": "cpd", "session": "cpd", "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2); bare `cpd` is the same attach with the follow-ups of §13.3. Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died is respawned (`respawn-pane`, amendment 9, §19), never duplicated and one that is gone is added again, so a second run adds nothing; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died is respawned (`respawn-pane`, amendment 9, §19), never duplicated and one that is gone is added again, so a second run adds nothing; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
@@ -4365,7 +4409,7 @@ A view in a pane never exits on a key: the `pane-died` hook (§6.1) starts a vie
 
 | `dialog` | the **dialog kit's** popup (below; hs-d295, hs-d297), of one kind: `confirm` (a question, two buttons), `input` (a labelled text box, contract §6.1.1), `text` (scrollable read-only text), `checklist` (tickable rows, hs-d549), `select` (radio list, a cursor row picked with Enter or [OK]; hs-d-tui-docs) or `form` (a labelled text box and a labelled radio list, pro-d114); its colours are contract §6.1.1's (title pill, body 7, the first button the blue block, the others 15, an input's refusal yellow, its border focused blue 12 and unfocused white 15, its cursor the blue block) | Enter or `y`, or a click on the first button, confirms; Esc, `n`, `q` or a click on the second cancels; `input`: Enter accepts, Esc cancels; `select` and `form`: ↑↓ and j/k move the cursor, Enter or a click on [OK] confirms, Esc or [Cancel] cancels; `checklist`, `select` and `form`: the cursor row is styled like checklist's, PgUp/PgDn and the wheel scroll; mouse capture on |
 
-**`plan`: the scroll offsets file** (User, hs-d254). The `plan` view keeps each Plan's scroll offset in `$CPD_HOME/run/tui/plan-scroll.json` (contract §1.4), a JSON object `{"<plan id>": [x, y]}`, so that the offsets survive a restart of the view (every install restarts the views, `cpd tui --respawn`). This is a deliberate exception to "the views make no writes of their own" (the `tree` view's folds file is the other, below): the file is the view's own state, not Ledger state, as the Worker pane is the view's own layout (§17 "Actions"). Nothing else reads it.
+**`plan`: the scroll offsets file** (User, hs-d254). The `plan` view keeps each Plan's scroll offset in `$CPD_HOME/run/tui/plan-scroll.json` (contract §1.4), a JSON object `{"<plan id>": [x, y]}`, so that the offsets survive a restart of the view (the install restarted the views with `cpd tui --respawn` until pro-d567 retired that from its follow-ups, contract §3.7 step 2). This is a deliberate exception to "the views make no writes of their own" (the `tree` view's folds file is the other, below): the file is the view's own state, not Ledger state, as the Worker pane is the view's own layout (§17 "Actions"). Nothing else reads it.
 - **Read** once, at the view's start. A missing file is an empty map. A file that cannot be read or is not that object (invalid JSON, an id that is not a Plan id, an offset that is not two non-negative integers) is not an error: the view starts with an empty map, logs `scroll positions reset: <reason>` (no note, §17 "No notes") and replaces the file at its next write. The view never exits because of this file.
 - **Written** atomically (a temporary file in the same directory, then a rename; the directory and its parents are created) whenever an offset has changed, at most once per second and again as soon as the chat slot's Plan changes. A failed write is logged (§17 "No notes") and retried at the next write; it never ends the view.
 - **Not cleaned up**: archived or unknown Plans stay in the file, harmlessly. Offsets are stored as left, not clamped: clamping stays at draw.
@@ -4912,7 +4956,7 @@ User decision hs-d259 (2026-10-19), Plan pi-pin, PR `bare`. **Bare `cpd` opens t
 4. **tmux version:** when the cockpit's tmux server runs an older tmux than the installed client (`tmux -L <socket> display -p '#{version}'` against `tmux -V`; hs-d166), restart the server onto the installed tmux **when it is safe**, reopen every Lead and Manager Session that had a pane (same pi session file, same place: the chat slot, its parked window, a Context's window), then attach. When it is not safe, **hold, drain, restart** (User, hs-d294):
    - **Safe** means: no Attempt `starting`, `running` or `merging` and no Lead or Manager Session mid-turn (state `working`; a `blocked` Session has a dialog open, so it is also not safe). Restarting stops every pi in the server; Leads and Managers resume from their session files.
    - **Safe now:** bare `cpd` restarts the server itself, in its own process (it runs in a terminal outside the server): it records every Lead and Manager Session with a live pane and its place (`chat`, or parked: its `park-<label>` window, or a Manager's `ctx-<context>` window); `kill-server`; `cpd tui` (the cockpit on the installed tmux, which also runs `watch --ensure`; the last chat Lead is back in the chat slot); then each Session in the same place: the one of the chat slot as `session open` does, the others in a new window running `cpd session run <id>`, which resumes the Session's pi file, each with `session-moved`. It then attaches with the installed tmux and says in one line how many Sessions it reopened.
-   - **Not safe:** it **marks a restart pending** (the file `$CPD_HOME/run/tmux-restart.pending`, JSON `{"at", "server", "installed", "failed"}`; no store change), attaches at once with the **server's own tmux binary** (its path from the server pid: on Linux `/proc/<pid>/exe`, on macOS read with `libproc`), because a newer client cannot attach to an older server (`open terminal failed: not a terminal`, hs-n224) and prints one line saying so and that the restart happens once nothing is in the way. `cpd tui` does the same marking when it finds the server older (it never restarts the server itself, since it may run inside it) and `tui --attach` attaches with the server's own binary then as well.
+   - **Not safe:** it **marks a restart pending** (the file `$CPD_HOME/run/tmux-restart.pending`, JSON `{"at", "server", "installed", "failed"}`; no store change), attaches at once with the **server's own tmux binary** (its path from the server pid: on Linux `/proc/<pid>/exe`, on macOS read with `libproc`), because a newer client cannot attach to an older server (`open terminal failed: not a terminal`, hs-n224) and prints one line saying so and that the restart happens once nothing is in the way. `cpd tui` does the same marking when it finds the server older (it never restarts the server itself, since it may run inside it).
    - **While a restart is pending, the engine starts no new Attempt** (`scheduling`'s hold, contract §3.7); running Attempts finish normally. It is a planned hold, not an error: `cpd doctor` shows it as the `tmux_restart` check ("tmux restart pending", §14.1). Once none runs (no Attempt `starting`, `running` or `merging`) and no Lead or Manager Session is `working` or `blocked`, the engine starts the restart **detached** (`cpd watch --restart-tmux`, internal; `setsid`, its log `run/tmux-restart.log`), because the restart kills the server the engine itself runs in. The detached process takes `locks/tmux-restart.lock`, checks again that it is safe, does what "safe now" does, clears the pending file and logs the result. Then the engine, started again by `cpd tui`, schedules as usual. The User reconnects with bare `cpd`.
    - **A failed restart** keeps the pending file with `failed` (`at`, `code`, `reason`) and the engine that runs again appends one `error` Event (`source: "watch"`, `code` of the failure, `details: {at, server, installed, log}`); a failed restart holds nothing. The next bare `cpd` finding the server still older tries again (a failed file is marked afresh); finding it as new as the installed tmux, it says the failure in one line and removes the file. Never from inside the cockpit's own server.
 
@@ -5169,7 +5213,7 @@ The `efforts` above are an illustration, not verified values. `G` reads like the
 cpd install --root <checkout> [--no-follow-up]
 ```
 
-Installs the cpd built from `<checkout>`: the binary and the pi adapter, then restarts what runs the old binary, then refreshes the WebUI payload from the checkout and signals the running app (step 7a). With `--no-follow-up`, step 7 is skipped: no follow-up runs (steps 7a and 8 are unchanged), so the binary and the adapter are installed and nothing that runs them is disturbed. The Electron app uses it to install at once while attempts run, and runs the follow-ups later by a second install without the flag, when no attempt runs (web/ELECTRON.md, "Auto-update and CLI bootstrap"). The User's command at a shell, run by `scripts/install-cpd.sh` and, through it, by dotfiles' install and sync; no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). `scripts/install-cpd.sh` is the bootstrap: `CPD_COMMIT=$(git rev-parse --short=7 HEAD) scripts/cargo.sh build --release --locked -p cpd`, then `exec target/release/cpd install --root <checkout>`. `--root` is the checkout (a git worktree with `pi/`, `scripts/` and `core/src/store/migrations/`); the release binary is `<target>/release/cpd` (`$CARGO_TARGET_DIR` or `<root>/target`). The home is `$CPD_HOME` (default `~/.cpd`), the destination `~/.local/bin/cpd` and the adapter `~/.local/share/cpd/pi`.
+Installs the cpd built from `<checkout>`: the binary and the pi adapter, then restarts what runs the old binary, then refreshes the WebUI payload from the checkout and signals the running app (step 7a). With `--no-follow-up`, step 7 is skipped: no follow-up runs (steps 7a, 7b and 8 are unchanged), so the binary and the adapter are installed and nothing that runs them is disturbed. The Electron app uses it to install at once while attempts run, and runs the follow-ups later by a second install without the flag, when no attempt runs (web/ELECTRON.md, "Auto-update and CLI bootstrap"). The User's command at a shell, run by `scripts/install-cpd.sh` and, through it, by dotfiles' install and sync; no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). `scripts/install-cpd.sh` is the bootstrap: `CPD_COMMIT=$(git rev-parse --short=7 HEAD) scripts/cargo.sh build --release --locked -p cpd`, then `exec target/release/cpd install --root <checkout>`. `--root` is the checkout (a git worktree with `pi/`, `scripts/` and `core/src/store/migrations/`); the release binary is `<target>/release/cpd` (`$CARGO_TARGET_DIR` or `<root>/target`). The home is `$CPD_HOME` (default `~/.cpd`), the destination `~/.local/bin/cpd` and the adapter `~/.local/share/cpd/pi`.
 
 **CPD.app is retired, and `cpd install` neither packages, copies nor installs it** (decided by pro-d567; it supersedes the shell packaging of pro-d90, pro-d91, pro-d504 and pro-d505). The shell release (§14.4b) and the shell install into `/Applications` (§14.4a) are removed from this document. The browser is the interface (docs/architecture/client.md). Nothing is written to `~/.local/share/cpd/app`, which is retired.
 
@@ -5186,7 +5230,7 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 
 5. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
 6. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced, are not protected by a live pin (`pi.pin.<pid>` of a live pid, whose target is a version name; contract §3.7 "The pin") and are older than 60 minutes and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids and the pins of dead or unparseable pids, are removed (a failure only warns); the cleanup never touches `<share>/node_modules`, `<share>/package.json`, `<share>/pnpm-lock.yaml`, `<share>/pnpm-workspace.yaml` or `<share>/patches`. Prints `installed <bin> and <link>` on stderr.
-7. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure` and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
+7. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure` and then the check that the engine is up: `locks/watch.lock` is held and the window `<work>:watch` has a pane that is not dead (contract §3.7 step 3). A failure of `config` or `watch --check` leaves the engine alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7). **`cpd tui --respawn` is not a follow-up** (retired by pro-d567, #1070, #1092; contract §3.7 step 2), so the install respawns no view. Status: the code still runs `cpd tui --respawn` after `watch --check` until the implementing change lands (`core/src/install/follow_up.rs`, `run`), and checks the lock but not the pane (`restart_engine`).
 7a. **The Electron step** (Plan cpd-app-launch, decision pro-d431; `cpd desktop`, §14.4a, removed by pro-d529: this step goes with it in the code removal, and until then the binary still runs it). Retired by pro-d567 with CPD.app: the implementing change removes it. It runs after the follow-ups and before the tag, with `<root>` the checkout, in this order. Each pnpm run is bounded at 10 minutes and captured, like step 4a. When `<root>/web/package.json` does not exist the step does nothing and prints `no web client in the checkout: electron step skipped` on stderr.
    - a. `pnpm --dir <root> install --frozen-lockfile`.
    - b. `pnpm --dir <root> --filter cpd-web-client run build:electron`, always, so that the bundle is the new code. Then the ensure steps of `cpd desktop` (§14.4a, step 1): when the Electron binary is missing (web/node_modules/electron/dist/Electron.app or path.txt absent), run `node web/node_modules/electron/install.js` through the Runner; if it fails, stop before plutil; when the binary is present, no extra install command runs. Then always `chmod +x` on `<root>/web/node_modules/node-pty/prebuilds/*/spawn-helper`, and on macOS `plutil -replace` of `CFBundleName` and `CFBundleDisplayName` to `CPD` in `<root>/web/node_modules/electron/dist/Electron.app/Contents/Info.plist`.
@@ -5194,6 +5238,14 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
    - d. When `<preview_dir>/web-state` exists (`<preview_dir>` = `$CPD_PREVIEW_DIR`, else `~/.cache/cpd-preview`), a web preview is on: Electron is left alone and stderr says `cpd install: web preview is on; Electron was not signalled`. Otherwise SIGUSR1 goes to the pid in `<cpd_home>/run/preview-health.json` (field `pid`) when that pid is alive and its `shell_abi` is 2 or more (the guard in §14.4a, "The `shell_abi` guard"). With no live Electron, nothing is signalled and nothing is started.
 
    A failed step a, b, c or d prints one line `cpd install follow-up failed: electron <a|b|c|d>: <text>` on stderr, skips the steps after it, and the install goes on to the tag. The binary and the adapter are installed already, and the install exits 1 at the end (step 10 above).
+7b. **The preview worktree** (bug b30; contract §3.7 "The preview worktree on install"; `core/src/install/worktree.rs`, `ensure_preview_worktree`). Runs after step 7a, also with `--no-follow-up`, and only when `<root>/web/package.json` exists. Its path is `$CPD_WEB_PREVIEW_WORKTREE`, else `<repo parent>/cpd.preview.web`. **When the path does not exist:** `git worktree add -B preview/web <path> origin/main`, then `pnpm install --frozen-lockfile` in it. **When it exists**, it is synced to `origin/main`, in this order:
+   - a. **Save, only when there are edits.** The edits (the tracked edits and the untracked files) are saved as a patch, `<worktree>/.cpd-preview-wip.patch`, written atomically. **An empty diff writes no patch file.**
+   - b. **Reset.** `git reset --hard origin/main`, always.
+   - c. **Re-apply, only when step a saved a patch.** `git apply -3 <patch>`. **An empty diff runs no `git apply` and reports no conflict.** A patch that does not apply is a conflict: the patch is kept, the line `cpd install: preview sync conflict while re-applying patch; patch preserved at <patch>` is printed on stderr, and the sync stops before `pnpm install`. Nothing is discarded. A patch file left by an earlier conflict is not read by a run whose diff is empty; it stays where it is.
+   - d. **Install.** After a clean apply the patch file is removed, then `pnpm install` runs in the worktree (a failure prints `cpd install: preview sync pnpm install failed: <message>`).
+
+   The step's messages go to stderr and do not change the install's exit code. Status: the code does not follow the empty-diff rule yet. `sync_existing_worktree` saves `git diff HEAD`, the tracked edits only, so the untracked files are not saved; and it runs `git apply -3` on the patch path even when step a wrote no file, so an empty diff fails the apply and prints the conflict line with `patch preserved at …`, which is a phantom conflict. With a stale patch file left by an earlier conflict, it applies that one. Read from the source; unverified in a running install. The implementing change makes the rule above true.
+
 8. **The tag.** `scripts/tag-version.sh` (docs/versioning.md): a failure warns with `tag-version:` and does not change the exit.
 
 | Precondition | Code | Exit |
@@ -5205,7 +5257,7 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 
 Every refusal (steps 1 to 4b, nothing replaced), failure (steps 5 and 6) and failed follow-up (steps 7 and 7a) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
 
-Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`), the scratch home of step 4b (removed before the install ends), the checkout's `web/node_modules` and `web/dist-electron` (step 7a) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
+Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` (the adapter, `app-root`), the scratch home of step 4b (removed before the install ends), the checkout's `web/node_modules` and `web/dist-electron` (step 7a), the preview worktree (step 7b) and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
 
 ### 14.4c `upgrade`
 
@@ -6732,7 +6784,7 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 7 | §5.3 and §5.4, `--session` selection | "a Lead of Plan P" is the Session that is `plans.lead_session`; any other Session, side forks included, follows only Events addressed to itself | §10.3, §11 |
 
 | 9 | §6.3, tmux commands | `respawn-pane`, for a dead pane of the cockpit's layout | §13.1 |
-| 10 | §1.2, output | `session run`, `tui view` and `tui --attach` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
+| 10 | §1.2, output | `session run` and `tui view` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
 | 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
 | 12 | §6.1, global options | the options `focus-events on`, `pane-active-border-style fg=blue` and `pane-border-format` (titles, Title Case, unpadded, a grey pill with black text and a blue one with black text when focused, hs-d475, hs-d534 (replacing hs-d530's): a Session pane's `@cpd_title` and another pane's command, `Worker · <job> (Read-Only)`; none for the tree's CPD mark, the plan and widgets panes, a Session pane without a `@cpd_title`, the chat placeholder and the StatusBar), the root `MouseDown1Pane` binding and the `pane-died` hook that respawns only a pane with `@cpd_view`: all set at every server start, not only by `cpd tui` | §13.1 |
 | 13 | §6.2, §6.3 | a Worker view pane carries `@cpd_view worker`, `@cpd_job` and `@cpd_attempt`, opens with `split-window -h -d -l 50%` and retargets with `respawn-pane -k`; tmux commands `respawn-pane -k`, `set-hook` and `display-popup` | §13.2 |
@@ -7126,6 +7178,7 @@ Approves the pending deployments of a `deploy` item (contract §2.2 "The deploy 
 | the item is open | `item_closed` | 3 |
 | the item is `deploy` (a snoozed or dismissed one too); `details` `{item, kind}` | `not_approvable` | 3 |
 | its subject is `deploy:<owner>/<repo>#<run_id>` with `<run_id>` a u64; else the database holds an invalid row and nothing else is done | `store_failed` (a bad row) | 1 |
+| an external prerequisite of the deploy's Workflow (§9.5b) is unmet; `details` as in [refusals.md](refusals.md). Checked at enqueue, before the enqueue | `prereq_unmet` | 3 |
 | READ: `gh api` answers within 15 s with a JSON array of `{"environment": {"id": <u64>, "name": "<str>"}, "current_user_can_approve": <bool>, …}` (other members ignored); a failed call, a timeout or JSON of another shape | `gh_failed` | 1 |
 | WRITE (only when some entry is approvable): the POST answers within 15 s; a failed call | `gh_failed` | 1 |
 
@@ -7541,6 +7594,8 @@ cpd secret approve --action <get|list|create|edit|delete> --vault <v> [--item <i
 ```
 
 Records the User's approval for a Lead or Manager to use another vault. Called by the pi adapter after the User chooses Allow in the `cpd_secret_approve` tool. Internal; not for manual use.
+
+**Fail fast before the dialog** (decision pro-d580; status: decided, not yet built at base commit `b9b4aaec6`). The `cpd_secret_approve` tool checks 1Password before it opens any dialog. When `op whoami` fails, or `op account list` is empty, the tool refuses at once with the error `sign in to 1Password on this host`. No dialog opens, so the User is not asked, and no approval is recorded or spent. The caller sees the error at once, not after the User has answered.
 
 | Argument | Meaning |
 |---|---|

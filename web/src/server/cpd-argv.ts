@@ -29,7 +29,6 @@ export type CpdCommand =
   | { readonly kind: "plan.unarchive"; readonly planId: string }
   | { readonly kind: "plan.delete"; readonly planId: string }
   | { readonly kind: "plan.decide"; readonly review: string; readonly decision: "approve" | "reject"; readonly planId: string; readonly feedbackFile?: string }
-  | { readonly kind: "tui.attach" }
   | { readonly kind: "session.list"; readonly archived?: boolean }
   | { readonly kind: "session.show"; readonly sessionId: string }
   | { readonly kind: "session.send"; readonly sessionId: string; readonly text: string; readonly unblocks: string; readonly origin?: string; readonly webuiToken?: string }
@@ -108,7 +107,6 @@ export function toArgv(cmd: CpdCommand): string[] {
       argv.push("--plan", cmd.planId);
       return argv;
     }
-    case "tui.attach": return ["tui", "--attach"];
     case "session.list": return cmd.archived === true ? ["session", "list", "--archived"] : ["session", "list"];
     case "session.show": return ["session", "show", cmd.sessionId];
     case "session.send": {
@@ -156,15 +154,14 @@ export function toArgv(cmd: CpdCommand): string[] {
       if (cmd.others !== undefined && cmd.others !== "") argv.push("--others", cmd.others);
       return argv;
     }
+    default: {
+      const exhaustive: never = cmd;
+      throw new Error(`unhandled command kind: ${String((exhaustive as { kind?: unknown }).kind)}`);
+    }
   }
 }
 
-/** One TUI tab (pty.ts, pty-tabs.ts): `cpd tui --attach`, or `ssh -t <alias> cpd tui --attach` for a
- * remote tab. The cpd argv comes from `toArgv`, so no call site builds it. */
-export function tuiAttachCommand(sshAlias?: string): { file: string; args: string[] } {
-  const cpd = toArgv({ kind: "tui.attach" });
-  return sshAlias === undefined ? { file: "cpd", args: cpd } : { file: "ssh", args: ["-t", sshAlias, "cpd", ...cpd] };
-}
+
 
 const TIERS: TiersArgv = { decide: "JX", auxiliar: "GX", worker: "H2", lead: "S2", manager: "O2" };
 
@@ -201,7 +198,6 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "plan.decide", review: "r1", decision: "approve", planId: "p1" },
     { kind: "plan.decide", review: "r1", decision: "reject", planId: "p1" },
     { kind: "plan.decide", review: "r1", decision: "reject", planId: "p1", feedbackFile: "/tmp/f.md" },
-    { kind: "tui.attach" },
     { kind: "session.list" },
     { kind: "session.list", archived: true },
     { kind: "session.show", sessionId: "s1" },

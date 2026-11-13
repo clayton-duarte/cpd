@@ -491,10 +491,12 @@ fn poll_pass(
     for (repo, number, base, default, head, stored) in rows {
         let value = match (base.as_deref(), default.as_deref(), head.as_deref()) {
             // A compare that fails (a head GitHub no longer has answers 404) leaves the flag unknown and never fails the pass.
+            // A transient or failed compare keeps the stored value rather than writing NULL over a known value (Q5, b34).
             (Some(base), Some(default), Some(head)) if base == default => {
-                gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head)
-                    .ok()
-                    .map(i64::from)
+                match gh::head_contains_base(&*env.ports.runner, &root, &repo, default, head) {
+                    Ok(val) => Some(i64::from(val)),
+                    Err(_) => stored,
+                }
             }
             _ => None,
         };
@@ -1526,7 +1528,8 @@ fn stored_thread_closed(row: &pulls::PullRequest, open_threads: &[String]) -> bo
         .any(|item| item.kind == super::comments::Kind::Thread && !open_threads.contains(&item.id))
 }
 
-/// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or
+/// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved,
+/// whose stored feedback is NULL (a first read, so feedback is populated and Lead is woken), or
 /// whose stored feedback holds a review thread that is no longer open (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
 fn due_reads(
     owned: &[(PlanId, WorkflowKey, pulls::PullRequest)],
@@ -1538,7 +1541,8 @@ fn due_reads(
             l.pr.repo == row.repo
                 && l.pr.number == row.number
                 && l.pr.state == PrState::Open
-                && (row.updated_at.as_deref() != Some(l.pr.updated_at.as_str())
+                && (row.feedback.is_none()
+                    || row.updated_at.as_deref() != Some(l.pr.updated_at.as_str())
                     || stored_thread_closed(row, &l.pr.open_threads))
         });
         if is_due && !due.contains(&(row.repo.clone(), row.number)) {
@@ -1802,8 +1806,11 @@ mod due_reads_tests {
     }
 
     #[test]
-    fn null_feedback_with_an_unmoved_updated_at_is_not_due() {
-        assert!(due_reads(&[row("1", None)], &[listed("1", PrState::Open)]).is_empty());
+    fn null_feedback_on_an_owned_open_pr_is_due() {
+        assert_eq!(
+            due_reads(&[row("1", None)], &[listed("1", PrState::Open)]),
+            key()
+        );
     }
 
     #[test]

@@ -1094,7 +1094,7 @@ export function dialogFromRequest(
     }
     return { id: req.id, method: "cpd_plan_review", title, summary, interactive: true };
   }
-  if (req.method === "select" && (req.purpose === "secret_approve" || req.purpose === "host_approve")) {
+  if (req.method === "select" && (req.purpose === "secret_approve" || req.purpose === "host_approve" || req.purpose === "external_approve")) {
     const title = typeof req.title === "string" ? req.title : "Approval";
     return {
       id: req.id,

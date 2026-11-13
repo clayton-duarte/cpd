@@ -135,11 +135,8 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     for (const l of [...listeners]) l(u);
   };
   const emitError = (e: unknown): void => emit({ kind: "error", error: toWireError(e) });
-  // D4 (air-d44): a pane update whose cursor is lower than the held one is dropped, but never silently — every
-  // error is a toast, so the drop is raised on the existing cockpit error channel (the store's `cockpit.error`).
-  const dropLowerCursor = (pane: string, held: number, next: number): void => {
-    emitError(new WebError("cpd_failed", `dropped a stale ${pane} snapshot: cursor ${next} is lower than the held ${held}`, { pane, held, cursor: next }));
-  };
+  // Dropping a lower-cursor update when a newer snapshot is held is harmless (b45).
+  const dropLowerCursor = (_pane: string, _held: number, _next: number): void => {};
   const apply = (u: PaneUpdate): void => {
     if (stopped) return;
     // 14.1 (air-n13, air-n15): the tree cursor is the minimum of four cursors, so a newer tree can carry a lower cursor. The monotonic guard never applies to the tree: a tree update is applied and emitted in every case.

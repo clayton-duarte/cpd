@@ -213,9 +213,12 @@ export function syncOptimisticInbox(incoming: InboxModel, optimistic: AppState["
 
 function rebase(incoming: InboxModel, optimistic: AppState["optimistic"]): { inbox: InboxModel; optimistic: AppState["optimistic"] } {
   if (Object.keys(optimistic).length === 0) return { inbox: incoming, optimistic };
-  const inbox = syncOptimisticInbox(incoming, optimistic);
   const next: Record<string, AppState["optimistic"][string]> = {};
-  for (const [id, o] of Object.entries(optimistic)) next[id] = { ...o, before: incoming, after: inbox };
+  for (const [id, o] of Object.entries(optimistic)) {
+    if (incoming.rows.some((row) => row.kind === "pr-ready" && row.subject === o.subject)) next[id] = o;
+  }
+  const inbox = syncOptimisticInbox(incoming, next);
+  for (const [id, o] of Object.entries(next)) next[id] = { ...o, before: incoming, after: inbox };
   return { inbox, optimistic: next };
 }
 
@@ -259,6 +262,7 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
       if (message.ok) {
         return {
           ...settled,
+          optimistic: state.optimistic,
           completedActionIds: settled.completedActionIds.includes(message.actionId)
             ? settled.completedActionIds
             : [...settled.completedActionIds, message.actionId],
@@ -382,7 +386,8 @@ export interface Store {
 export function createStore(initial: AppState = initialState): Store {
   let state = initial;
   const listeners = new Set<() => void>();
-  return {
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const store: Store = {
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
@@ -394,9 +399,22 @@ export function createStore(initial: AppState = initialState): Store {
       const next = reduce(state, action);
       if (next === state) return;
       state = next;
+      for (const [id, timer] of timers) {
+        if (state.optimistic[id] === undefined) { clearTimeout(timer); timers.delete(id); }
+      }
+      const messages = action.type === "server" ? [action.message] : action.type === "serverBatch" ? action.messages : [];
+      for (const message of messages) {
+        if (message.type !== "action.result" || !message.ok || state.optimistic[message.actionId] === undefined || timers.has(message.actionId)) continue;
+        const id = message.actionId;
+        timers.set(id, setTimeout(() => {
+          timers.delete(id);
+          store.dispatch({ type: "server", message: { type: "action.result", actionId: id, ok: false, error: toWireError(new Error("Inbox did not confirm the action within 10 seconds")) } });
+        }, 10_000));
+      }
       for (const l of [...listeners]) l();
     },
   };
+  return store;
 }
 export function useStore<T>(store: Store, select: (s: AppState) => T): T {
   return useSyncExternalStore(store.subscribe, () => select(store.getState()));

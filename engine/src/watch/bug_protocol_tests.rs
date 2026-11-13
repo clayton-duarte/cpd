@@ -175,8 +175,8 @@ fn stays_silent_below_the_bound() {
 }
 
 /// A new bug record wakes its sleeping owner: one waking `session-message` whose text begins
-/// `Bug <id> is open`, and the visible part of the wake, the bug's Inbox item, opens with E8 and
-/// closes when the bug is mitigated.
+/// `Bug <id> is open`. Under pro-d578 (b40), reporting opens NO Inbox item; the item opens only
+/// once past the 900 s window or on explicit ask.
 #[test]
 fn wakes_a_sleeping_owner_on_a_new_bug_record() {
     let mut fx = fx();
@@ -195,20 +195,11 @@ fn wakes_a_sleeping_owner_on_a_new_bug_record() {
     );
     assert!(sent[0].2, "a new bug record wakes its owner");
 
-    // The wake's visible part: E8 opens the bug's Inbox item, linked to the owner.
-    inbox::run(&mut fx.engine);
-    let item = bug_item(&mut fx).expect("the bug's Inbox item is open");
-    assert_eq!(item.0, "bug:b1");
-    assert_eq!(item.1.as_deref(), Some("lead1"));
-
-    // It closes when the bug is mitigated.
-    fx.fixture(
-        "UPDATE bug_records SET mitigation = 'Restarted the worker', mitigated_at = 't' WHERE id = 'b1';",
-    );
+    // Under pro-d578, reporting opens no Inbox item at once.
     inbox::run(&mut fx.engine);
     assert!(
         bug_item(&mut fx).is_none(),
-        "the item closes when the bug is mitigated"
+        "a new bug report inside the window opens no Inbox item"
     );
 }
 

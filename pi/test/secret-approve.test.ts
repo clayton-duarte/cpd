@@ -1,3 +1,4 @@
+import { Facts } from "../lib/state.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { createHost, type Host } from "../lib/host.ts";
@@ -16,13 +17,15 @@ function setup(t: TestContext, role: string | undefined, ui = true) {
   const f = new Fixture();
   t.after(() => f.close());
   const host: Host = createHost(f.pi, { env: process.env });
-  if (role !== undefined) host.run = { info: { role, name: NAME, plan: "p1", planLead: role === "lead" }, facts: { ownPrompt: <T>(show: () => Promise<T>) => show() } } as unknown as Run;
+  const call = host.call;
+  host.call = (args) => args[0] === "secret" && args[1] === "check" ? Promise.resolve({ ok: true }) : call(args);
+  if (role !== undefined) host.run = { info: { role, name: NAME, plan: "p1", planLead: role === "lead" }, facts: new Facts() } as unknown as Run;
   host.ctx = (ui ? f.pi.ctx() : { ...f.pi.ctx(), ui: undefined }) as Host["ctx"];
   registerSecretTool(host);
   const tool = f.pi.tools.find((x) => x.name === "cpd_secret_approve");
   assert.ok(tool, "the tool cpd_secret_approve is registered");
   const secretCalls = () => f.argvs().filter((a) => a[0] === "secret");
-  return { f, tool, secretCalls };
+  return { f, tool, secretCalls, host };
 }
 
 test("cpd_secret_approve is refused for a Worker and for no run", async (t) => {
@@ -36,13 +39,15 @@ test("cpd_secret_approve is refused for a Worker and for no run", async (t) => {
 
 test("cpd_secret_approve shows the User the action, vault, item and field", async (t) => {
   for (const role of ["lead", "manager"]) {
-    const { f, tool } = setup(t, role);
+    const { f, tool, host } = setup(t, role);
     const running = f.pi.runTool(tool, ARGS);
     const d = await waitFor("the dialog", () => f.pi.openDialog("select"));
+    assert.equal(host.run!.facts.wanted().state, "blocked");
     assert.equal(d.title, TITLE, role);
     assert.deepEqual(d.options, ["Allow once", "Deny"], role);
     d.answer("Deny");
     await running;
+    assert.notEqual(host.run!.facts.wanted().state, "blocked");
   }
 });
 
@@ -82,5 +87,19 @@ test("cpd_secret_approve refuses cpd and homeserver", async (t) => {
 test("cpd_secret_approve with no dialog is an error", async (t) => {
   const { f, tool, secretCalls } = setup(t, "lead", false);
   await assert.rejects(f.pi.runTool(tool, ARGS), (e: any) => e.code === "no_ui");
+  assert.deepEqual(secretCalls(), []);
+});
+
+ test("cpd_secret_approve fails fast when op is not signed in", async (t) => {
+  const { f, tool, host, secretCalls } = setup(t, "lead");
+  host.call = async () => { throw Object.assign(new Error("sign in with op signin"), { code: "secret_not_signed_in" }); };
+  const running = f.pi.runTool(tool, ARGS);
+  // Give the async tool a turn, then release any incorrectly opened prompt before asserting.
+  await Promise.resolve();
+  const dialog = f.pi.openDialog("select");
+  if (dialog) dialog.answer("Deny");
+  const outcome = await running.then(() => null, (e: unknown) => e);
+  assert.equal(dialog, undefined, "no approval prompt should open without a signed-in op");
+  assert.equal((outcome as { code?: string } | null)?.code, "secret_not_signed_in");
   assert.deepEqual(secretCalls(), []);
 });

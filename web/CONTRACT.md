@@ -875,9 +875,9 @@ export function useStore<T>(store: Store, select: (s: AppState) => T): T; // Rea
 Reducer behaviours (every ServerMessage is `{type:"server"}`):
 
 - `cockpit.snapshot` sets the three panes and clears `cockpit.error`; `cockpit.patch` replaces exactly the named pane; `cockpit.error` sets `cockpit.error` and keeps the panes. (A failed attach is retried on a tree update by `connection.ts`, 6.2 below.)
-- Optimistic Inbox removal (pro-d426): each `state.optimistic[actionId]` entry is `{before, after, subject}`, where `subject?: string` is the removed row's subject (e.g. `pr:clayton-duarte/cpd#891`). A `cockpit.snapshot`, and a `cockpit.patch` with `pane: "inbox"`, while any optimistic action is in flight, sets `cockpit.inbox` to `syncOptimisticInbox(incoming, state.optimistic)`: every in-flight optimistic subject is filtered out of `incoming`, and each in-flight entry gets `before = incoming` and `after = filtered`. So every in-flight removal is re-applied across a refresh and stays hidden.
+- Optimistic Inbox removal (pro-d426): each `state.optimistic[actionId]` entry is `{before, after, subject}`, where `subject?: string` is the removed row's subject (e.g. `pr:clayton-duarte/cpd#891`). A `cockpit.snapshot`, and a `cockpit.patch` with `pane: "inbox"`, while any optimistic action is in flight, sets `cockpit.inbox` to `syncOptimisticInbox(incoming, state.optimistic)`: every in-flight optimistic subject is filtered out of `incoming`, and each in-flight entry gets `before = incoming` and `after = filtered`. So every in-flight removal is re-applied across a refresh and stays hidden. **Amended by pro-d583:** on an inbox action's `action.result` with `ok: true` (including merge), do not immediately drop its optimistic hide. Retain it until an inbox snapshot/patch no longer contains that subject, an `inbox-closed` event arrives for that item, or the timeout fallback expires; timeout rollback is loud.
 - A `cockpit.patch` with `pane: "inbox"` whose `data.cursor < state.cockpit.inbox.cursor` is ignored (state unchanged): a newer Inbox is never replaced by an older one.
-- `selectSession` with an id: `selectedSessionId = id`, `session = { id, attached:false, completion: state.completions[id] ?? null, everything else empty/null, transcript: emptyTranscript }`; the same id again is a no-op only while `session.attached` is true, and when it is not attached the session is reset to this same empty state; `null` clears both. (The detach/attach messages are sent by `connection.ts`, 6.2 below, not by the reducer.)
+- `selectSession` with an id: `selectedSessionId = id`, `session = { id, attached:false, completion: state.completions[id] ?? null, everything else empty/null, transcript: emptyTranscript }`; the same id again is a no-op only while `session.attached` is true, and when it is not attached the session is reset to this same empty state; `null` clears both. (The detach/attach messages are sent by `connection.ts`, 6.2 below, not by the reducer.) **Amended by pro-d585:** selecting a session, whether through `selectedSessionId` or an Inbox row click, immediately hides and dismisses its unread Inbox item in the client and dispatches `inbox.dismiss`; this does not wait for the server session snapshot, transcript load, or `activeSessionId`.
 - A server `session.*` message whose `sessionId` is not `selectedSessionId` is ignored (a late message of a detached session never lands).
 - `session.attached` sets `attached:true`, `capabilities`, `title`, `ref`, `footer` from `meta`, and clears `error`. `session.window` mode `tail` -> `setTail`; mode `earlier` -> `prependEarlier`. `session.append` / `session.update` / `session.delta` -> the matching `transcript.ts` function (a thrown `WebError` is caught by `reduce`, stored in `lastError`, and leaves the state otherwise unchanged).
 - `session.status` sets `busy` and `queued`. `session.footer` sets `footer`; `session.title` sets `title` (the header shows `title`; the footer and title also come from `session.attached.meta`).
@@ -2848,3 +2848,63 @@ Escape never submits, never clears the draft and never changes the Tier, model o
 - **Notice surface.** The accepted decision requires a short notice for rule 3 of 32.1 but does not say where it appears or how long it stays.
 - **Other platforms.** The shortcut for line deletion on Windows, and the cross-platform combinations listed in 32.3, are not decided.
 - **Failed abort is not shown.** A `session.abort` that the hub reports as session-scoped is stored in `SessionView.error`, which no UI component renders (`scout-abort.md` §3 and `scout.md` §2). Read from source, unverified by running. A failed Escape abort may therefore be invisible to the User.
+
+## 33. WebUI dialog answers and plan review feedback (Plan `dialog-answers`; Job `answers-docs`; decisions pro-d582, pro-d584)
+
+This section states the guarantees of the `AskCard` submission (decision pro-d582, b41) and of the plan review feedback file (decision pro-d584, b43). Where the code does not yet meet a decided guarantee, the gap is named in the text and in 33.4; it is not described as working.
+
+### 33.1 `AskCard` submits every answer verbatim
+
+`web/src/ui/dialogs/AskCard.tsx` (`extractAnswer`, `:32-72`; submit, `:161-184`). On submit the card sends one `QuestionAnswer` per answered question, in question order, each with its `questionIndex`, `question` and `kind`:
+
+| `kind` | Fields | Source of the value |
+|---|---|---|
+| `option` | `answer` = the chosen option's `label`; `preview` when the option has one | the option label, exactly as the option defines it |
+| `custom` | `answer` = the text typed in `Type something.` | the typed text, with surrounding whitespace trimmed; nothing else changed |
+| `multi` | `selected` = the chosen labels, `answer` = the typed text (`""` when none) | the checked labels; the typed text, trimmed |
+
+- Typed text is trimmed; this is the only change made to a value. Whitespace-only text is not an answer.
+- Test: `AskCard.test.tsx:132` (custom text submits typed text), `:166` (one answer per index with kinds `option`, `multi` and the `unanswered` index).
+
+### 33.2 Typing in `Type something.` captures the custom answer
+
+- Typing non-blank text in the `Type something.` input of a question selects that input as the answer. For a single-select question the chosen option is then cleared, so the one answer is the typed text. No option click is needed.
+- Whitespace-only text does not select the input.
+- Source: the shadcn `Questionnaire.Input` (`web/node_modules/@shadcn/react/dist/questionnaire/index.js`, minified, cited by function `_e`): `onChange` selects the input when `value.trim().length > 0`.
+- Test: `AskCard.test.tsx:132` types after clicking an option, and checks that the option is unchecked. The case with no earlier option click is covered by the source only; no test runs it.
+
+### 33.3 Option selection keeps the preview and the option value
+
+- Selecting an option that has a `preview` (single-select only, `QuestionOption.preview`, 3.8) gives an `option` answer whose `answer` is the option label and whose `preview` is that option's preview text, unchanged.
+- The preview pane shows the preview of the focused option; the submitted answer carries the preview of the selected option.
+- Multi-select answers carry no `preview`: the card does not send one for `multi`.
+- Test: `AskCard.test.tsx:166` (`{kind: "option", answer: "A0", preview: "pv"}`).
+
+### 33.4 Incomplete submission is blocked unless the question is skipped
+
+- A question with no answer blocks the submit. The Questionnaire validates every item when the form is submitted; an unanswered item that is not skipped fails validation, takes the focus and the form is not submitted. The card's submit then sends nothing.
+- `Skip` marks a question as skipped. A skipped question is sent with no answer and its index in `result.unanswered` (`QuestionnaireResult.unanswered`, 3.8). The pi tool result reports these as unanswered (`pi/ask-user-question/tool/response-envelope.ts`).
+- `Cancel` and `Escape` are not submissions: they send `outcome: "cancelled"` with no answers.
+- Source: the shadcn Questionnaire root submit and item `validate` (minified, `index.js`, by function). The card sets `required: false` on every item, so the primitive's own required check does not run. The block is the primitive's validation of an unanswered item that is not skipped.
+- Test: `AskCard.test.tsx:166` (the helper clicks `Skip` on the unanswered step before it submits, and the result has `unanswered: [2]`). No test asserts that a submit with an unanswered step is refused; that behaviour is from source, not from a test.
+
+### 33.5 Plan review feedback is recorded with the verdict
+
+Decision pro-d584: for a review verdict of `changes` or `reject`, the feedback is written to a file and the file is passed to `cpd plan decide` as `--feedback-file`, when the feedback is non-empty. The feedback then is recorded with the verdict (`cpd plan decide` reads the file, `core/src/plan/review.rs` `decide`, `read_text_file`, and stores it on the review).
+
+| Path | `changes` with non-empty feedback | `reject` | Status |
+|---|---|---|---|
+| pi backend (`web/src/server/pi/backend.ts:404-416`) | writes `<cpdHome>/run/<plan>/feedback-<n>.md`; runs `cpd plan decide <n> --reject --feedback-file <path> --plan <plan>` | `cpd plan decide <n> --reject --plan <plan>`; no feedback | `changes`: met. `reject`: no feedback exists to pass (33.6) |
+| durable, transcript review (`web/src/server/durable/backend.ts:500-516`) | runs `cpd plan decide <n> --reject --plan <plan>` with **no** `--feedback-file`; then posts the feedback as a follow-up message | `cpd plan decide <n> --reject --plan <plan>`; no feedback | **Not met.** The feedback reaches the Lead but is not recorded with the verdict. |
+| durable, host-held review (`ui_request` select `plan_review`, 3.8) | the host's `decide` (`pi/durable-host/plan-review.ts:67-76`) passes `--feedback-file feedback-<review>.md` (a relative path) | no reject outcome on this path (3.8: no Reject on the wire) | Passed, but the file is not written in that module. Whether `cpd` finds it depends on its working directory. Unverified. |
+
+### 33.6 Reject carries no feedback today
+
+- The `reject` outcome of `DialogResponse` (3.8, `web/src/protocol/domain.ts`) has no `feedback` field. So neither backend can receive feedback with a reject, and the "reject passes `feedbackFile` when feedback is non-empty" clause of pro-d584 cannot take effect yet.
+- Making `reject` carry feedback changes the wire type (3.8, 4.1 `dialog.respond`) and is not made here. It is open item 33.7.
+
+### 33.7 Open items (not decided here)
+
+- **Durable transcript `changes` and `feedbackFile`** (33.5): the code at `backend.ts:513-515` must write the feedback file and pass `--feedback-file` for pro-d584 to hold. Not changed by this section.
+- **`reject` with feedback** (33.6): whether the wire `reject` carries `feedback`, and how the WebUI collects it. Not decided.
+- **Host-held feedback file location** (33.5): whether the relative `feedback-<review>.md` resolves in `cpd`. Unverified.

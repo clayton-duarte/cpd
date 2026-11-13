@@ -210,3 +210,64 @@ function submit(c: HTMLElement) {
     expect(responses).toEqual([]);
     unmount();
   });
+
+  it("typing_in_custom_text_without_selecting_an_option_submits_typed_answer", () => {
+    const { container, responses, unmount } = setup([q(0)]);
+    const text = field(container, 0).querySelector<HTMLInputElement>('input[type="text"][aria-label="Type something."]');
+    expect(text).not.toBeNull();
+    act(() => {
+      text!.focus();
+      text!.value = "my custom answer";
+      text!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    submit(container);
+    expect(responses).toEqual([
+      {
+        method: "ask_user_question",
+        outcome: "answered",
+        result: {
+          answers: [{ questionIndex: 0, question: "Question 0?", kind: "custom", answer: "my custom answer" }],
+          cancelled: false,
+        },
+      },
+    ]);
+    unmount();
+  });
+
+  it("multi_question_dialog_with_all_questions_answered_submits_all_answers_verbatim", () => {
+    const { container, responses, unmount } = setup([q(0), q(1)]);
+    click(input(container, 0, "A0"));
+    click(shown(container, "questionnaire-next") as HTMLElement);
+    const text1 = field(container, 1).querySelector<HTMLInputElement>('input[type="text"][aria-label="Type something."]');
+    expect(text1).not.toBeNull();
+    act(() => {
+      text1!.focus();
+      text1!.value = "custom answer 1";
+      text1!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    submit(container);
+    expect(responses).toEqual([
+      {
+        method: "ask_user_question",
+        outcome: "answered",
+        result: {
+          answers: [
+            { questionIndex: 0, question: "Question 0?", kind: "option", answer: "A0" },
+            { questionIndex: 1, question: "Question 1?", kind: "custom", answer: "custom answer 1" },
+          ],
+          cancelled: false,
+        },
+      },
+    ]);
+    unmount();
+  });
+
+  it("dialog_submission_is_blocked_when_questions_remain_unanswered_without_explicit_skip", () => {
+    const { container, responses, unmount } = setup([q(0), q(1)]);
+    click(input(container, 0, "A0"));
+    act(() => {
+      container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(responses).toEqual([]);
+    unmount();
+  });

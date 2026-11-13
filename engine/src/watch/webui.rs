@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 
 use super::SOURCE;
 use super::engine::Engine;
+use cpd_core::app::read_root;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{NewEvent, append};
 use cpd_core::home::CpdHome;
@@ -199,6 +200,19 @@ pub fn run(engine: &mut Engine) {
     }
 }
 
+pub fn resolve_checkout_path(home: &CpdHome) -> Option<PathBuf> {
+    if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from)
+        && let Ok(checkout) = read_root(&user_home)
+        && checkout.join("web/src/server/serve.ts").exists()
+    {
+        return Some(checkout);
+    }
+    if home.root().join("web/src/server/serve.ts").exists() {
+        return Some(home.root().to_path_buf());
+    }
+    None
+}
+
 pub fn run_inner(engine: &mut Engine) -> Result<(), CpdError> {
     let home = engine.home.clone();
 
@@ -207,7 +221,7 @@ pub fn run_inner(engine: &mut Engine) -> Result<(), CpdError> {
     let has_restart_marker = install_restart_marker.exists();
 
     let mut services_to_supervise = Vec::new();
-    if home.root().join("web/src/server/serve.ts").exists() {
+    if resolve_checkout_path(&home).is_some() {
         services_to_supervise.push(ServiceKind::Prod);
     }
     if preview_worktree_exists(&home) {
@@ -249,6 +263,14 @@ pub fn run_inner(engine: &mut Engine) -> Result<(), CpdError> {
 pub fn preview_worktree_path(home: &CpdHome) -> Option<PathBuf> {
     if let Some(env_path) = std::env::var_os("CPD_WEB_PREVIEW_WORKTREE") {
         let p = PathBuf::from(env_path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Some(checkout) = resolve_checkout_path(home)
+        && let Some(parent) = checkout.parent()
+    {
+        let p = parent.join("cpd.preview.web");
         if p.exists() {
             return Some(p);
         }
@@ -467,7 +489,7 @@ fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError>
         ServiceKind::Prod => (
             "node".to_owned(),
             vec!["web/src/server/serve.ts".to_owned()],
-            Some(engine.home.root().to_owned()),
+            resolve_checkout_path(&engine.home).or_else(|| Some(engine.home.root().to_owned())),
         ),
         ServiceKind::Preview => (
             "pnpm".to_owned(),

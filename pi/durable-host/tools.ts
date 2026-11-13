@@ -87,6 +87,7 @@ export function registerHostTools(where: RegisterHostToolsWhere): Extension {
           if (a === undefined || !(ACTIONS as readonly string[]).includes(a)) return piResult(`action must be one of ${ACTIONS.join(", ")}`);
           if (v === undefined) return piResult("vault is required");
           if (OPEN.includes(v)) return piResult("these vaults need no approval; use cpd secret get|list|create|edit|delete (commands.md §24)");
+          await where.cpd(["secret", "check"]);
           const choice = await where.dialogs.select(`${where.name} asks to ${a} in vault ${v}: item ${i ?? ""}, field ${f ?? ""}. Reason: ${why}`, ["Allow once", "Deny"], { purpose: "secret_approve" });
           if (choice !== "Allow once") return piResult("The User denied it. Do not try again.");
           const argv = ["secret", "approve", "--action", a, "--vault", v];

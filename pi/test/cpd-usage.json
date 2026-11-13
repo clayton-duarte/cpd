@@ -137,6 +137,16 @@
     },
     "required": []
   },
+  "cockpit serve": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "config": {
     "flags": {
       "--help": false,
@@ -1460,6 +1470,16 @@
     },
     "required": []
   },
+  "secret check": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "secret create": {
     "flags": {
       "--field": true,
@@ -2033,6 +2053,42 @@
       "min": 1
     },
     "required": []
+  },
+  "workflow prereq add": {
+    "flags": {
+      "--env": true,
+      "--help": false,
+      "--key": true,
+      "--kind": true,
+      "--plan": true,
+      "--project": true,
+      "--text": true,
+      "--workflow": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--kind",
+      "--workflow"
+    ]
+  },
+  "workflow prereq confirm": {
+    "flags": {
+      "--help": false,
+      "--id": true,
+      "--plan": true,
+      "--workflow": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": [
+      "--id",
+      "--workflow"
+    ]
   },
   "workflow start": {
     "flags": {

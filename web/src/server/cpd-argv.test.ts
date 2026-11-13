@@ -18,4 +18,10 @@ describe("toArgv", () => {
     expect(toArgv(send)).toEqual(["session", "send", "s1", "--origin", "webui", "--unblocks", "u", "--", "hi"]);
     expect(toArgv({ ...send, webuiToken: "tok" })).toEqual(["session", "send", "s1", "--origin", "webui", "--webui-token", "tok", "--unblocks", "u", "--", "hi"]);
   });
+
+  it("toArgv omits tui.attach", () => {
+    // When tui.attach is omitted/removed from CpdCommand and toArgv, passing it must not produce ["tui", "--attach"]
+    // (tui subcommand was removed in #1070 and commands.md §13.1).
+    expect(() => toArgv({ kind: "tui.attach" } as any)).toThrow();
+  });
 });

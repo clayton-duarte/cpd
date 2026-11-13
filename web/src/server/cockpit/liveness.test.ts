@@ -137,7 +137,7 @@ function fakeCpd(panes: StreamSnapshot["panes"]): Cpd {
 const flush = async (): Promise<void> => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 
 describe("cockpit service lower-cursor toast", () => {
-  it("raises a toast for a lower cursor snapshot", async () => {
+  it("does not raise a toast for a lower cursor snapshot", async () => {
     const scheduler = new FakeScheduler();
     const stream = new FakeStream();
     const follow: FollowBoundary = { start: () => new FakeFollow() };
@@ -154,20 +154,18 @@ describe("cockpit service lower-cursor toast", () => {
     expect(service.snapshot().inbox?.cursor).toBe(9);
     updates.length = 0;
 
-    // A later snapshot carries a lower inbox cursor: it must not be dropped silently.
+    // A later snapshot carries a lower inbox cursor: it is harmlessly dropped (b45).
     stream.snapshot(rawPanes(5), 2);
     scheduler.advance(COALESCE_MS);
     await flush();
 
-    // The pane keeps its held rows, and the drop is surfaced as one visible cockpit error (the toast).
+    // The pane keeps its held rows, and no error update or toast is emitted.
     expect(service.snapshot().inbox?.cursor).toBe(9);
     const errors = updates.filter((u) => u.kind === "error");
-    expect(errors).toHaveLength(1);
+    expect(errors).toHaveLength(0);
 
-    // The error travels the existing cockpit error channel: the store's cockpit.error is set, so the toast shows.
     const store = createStore();
-    store.dispatch({ type: "server", message: { type: "cockpit.error", error: errors[0]!.error } as ServerMessage });
-    expect(store.getState().cockpit.error).not.toBeNull();
+    expect(store.getState().cockpit.error).toBeNull();
     service.stop();
   });
 });

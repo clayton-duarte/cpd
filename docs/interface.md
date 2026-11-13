@@ -77,6 +77,9 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd workflow describe` | Store the Workflow's description, which becomes the pull request body (§9.5a) | Lead | |
 | `cpd workflow cancel` | Remove a Workflow from the Plan before the lock; after it, end a Workflow with nothing to open, or whose work another Workflow carried (`--superseded-by`) (§9.6) | Lead | |
 | `cpd workflow start` | Start a waiting Workflow whose needs are merged, after a failed start (§9.7) | Lead | |
+| `cpd workflow prereq` | External prerequisites of a Workflow (§9.8) | | |
+| `cpd workflow prereq add` | Add an external prerequisite to a workflow | Lead | |
+| `cpd workflow prereq confirm` | Confirm a manual prerequisite | | yes |
 | `cpd pr` | Pull requests, through gh (commands.md §9) | | |
 | `cpd pr open` | Push the Lead Branch and open the Workflow, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |
 | `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |
@@ -175,6 +178,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd secret delete` | Archive an item (§24.5) | Lead, Manager | |
 | `cpd secret allow` | Let a Worker's Attempt read one field of one item (§24.6) | Lead | |
 | `cpd secret approve` | Record the User's approval for another vault (adapter) (§24.7) | internal | |
+| `cpd secret check` | Check the 1Password session before asking for approval | internal | |
 | `cpd gate` | The Gate's leak check, after the command of `scripts/gate-run.sh` (commands.md §26) | | |
 | `cpd gate finish` | Check what the run left behind, stop and remove it, report it (the Gate's leak check) | | |
 | `cpd host` | Repair the cpd checkout after a skipped install (commands.md §9.11) | | |
@@ -190,6 +194,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd resource run` | Take a resource and run a command holding it (§30.2) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
 | `cpd janitor` | Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29) | | |
+| `cpd cockpit` | The WebUI backend's state and event stream (commands.md §11a) | | |
+| `cpd cockpit serve` | Serve snapshots and Events as NDJSON on stdout until stdin ends (commands.md §11a) | | |
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |

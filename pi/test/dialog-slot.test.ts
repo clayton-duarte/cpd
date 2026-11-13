@@ -84,7 +84,7 @@ test("a held tool dialog defers the cpd_secret_approve select; it opens when the
   const d = await select(f);
   d.answer("Allow once");
   const out = await running;
-  assert.deepEqual(secretCalls(f), [["secret", "approve", "--action", "get", "--vault", "other", "--item", "db", "--field", "password"]], "the approval ran after the select opened");
+  assert.deepEqual(secretCalls(f), [["secret", "check"], ["secret", "approve", "--action", "get", "--vault", "other", "--item", "db", "--field", "password"]], "the approval ran after the select opened");
   assert.equal(out.text, "Approved for one command in the next 10 minutes: run it now.");
 });
 

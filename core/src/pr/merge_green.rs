@@ -45,6 +45,31 @@ pub(super) fn merge_green(ports: &Ports, args: MergeArgs) -> Result<Output, CpdE
         .with("number", number)
         .with("checks", e.row.checks.as_str()));
     }
+    // Prerequisites gate (§9.5b): unmet external prerequisites refuse before any gh call
+    let owning_workflow: Option<(String, String)> = store.read(|conn| {
+        use rusqlite::OptionalExtension;
+        Ok(conn
+            .query_row(
+                "SELECT plan, key FROM workflows WHERE repo = ?1 AND pr_number = ?2 AND status = 'open'
+                 UNION
+                 SELECT plan, key FROM workflows WHERE pull_request = ?3 AND status = 'open'
+                 LIMIT 1",
+                rusqlite::params![repo.as_str(), number, e.row.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    })?;
+    if let Some((plan, key)) = owning_workflow {
+        store.read(|conn| {
+            crate::workflow::prereq::ensure_prereqs_met(
+                conn,
+                &*ports.runner,
+                &plan,
+                &key,
+                "pr merge-green",
+            )
+        })?;
+    }
     let runner = &*ports.runner;
     gh::update_branch(runner, home.root(), &repo, number)?;
     let start = Instant::now();
