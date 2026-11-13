@@ -250,30 +250,124 @@ pub fn check_over(
     .with("paths", json!(paths)))
 }
 
-/// A test case of a test file: its name and how many assertions it holds.
+/// One test case found in a test file: its name and how many assertions its body holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestCase {
     pub name: String,
     pub assertions: usize,
 }
 
-/// The test cases of one test file's source (Rust `#[test]`, node:test/vitest/jest `it`/`test`). Stub.
-pub fn test_cases(_src: &str) -> Vec<TestCase> {
-    Vec::new()
+/// The name in `src` after a leading `fn ` or a quoted `it("…"`/`test("…"` title.
+fn case_name(line: &str) -> Option<String> {
+    let t = line.trim_start();
+    if let Some(rest) = t
+        .strip_prefix("fn ")
+        .or_else(|| t.strip_prefix("async fn "))
+    {
+        let n: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        return (!n.is_empty()).then_some(n);
+    }
+    for open in ["it(", "test(", "it.only(", "test.only("] {
+        if let Some(rest) = t.strip_prefix(open) {
+            let q = rest
+                .chars()
+                .next()
+                .filter(|c| matches!(c, '"' | '\'' | '`'))?;
+            let body = &rest[1..];
+            return body.find(q).map(|end| body[..end].to_owned());
+        }
+    }
+    None
 }
 
-/// Refuses `tests_removed` when `head` lacks a test case of `base` or holds fewer assertions in it,
-/// except the names in `approved`. Stub.
-pub fn check_tests_kept(_base: &str, _head: &str, _approved: &[String]) -> Result<(), CpdError> {
-    Ok(())
+fn is_assertion(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("assert") || t.starts_with("expect(") || t.contains("assert.")
 }
 
-/// `job approve-test-removal --test <name> --reason <why>`: adds `test` to `approved` and returns the
-/// text of the event the User sees. A blank reason is a `usage` error. Stub.
+/// The test cases in `src`, in order: Rust `#[test]` fns and `it`/`test` calls (node:test, vitest, jest), each with
+/// its assertion count (lines until the next case start).
+pub fn test_cases(src: &str) -> Vec<TestCase> {
+    let mut cases: Vec<TestCase> = Vec::new();
+    let mut rust_pending = false;
+    let mut open = false;
+    for line in src.lines() {
+        let t = line.trim();
+        if t.starts_with("#[test]") || t.starts_with("#[tokio::test") {
+            rust_pending = true;
+            open = false;
+            continue;
+        }
+        let js = ["it(", "test(", "it.only(", "test.only("]
+            .iter()
+            .any(|p| t.starts_with(p));
+        if (rust_pending || js)
+            && let Some(name) = case_name(line)
+        {
+            cases.push(TestCase {
+                name,
+                assertions: 0,
+            });
+            open = true;
+            rust_pending = false;
+            continue;
+        }
+        if open
+            && is_assertion(line)
+            && let Some(c) = cases.last_mut()
+        {
+            c.assertions += 1;
+        }
+    }
+    cases
+}
+
+/// `Ok` when `head` keeps every test case of `base` with no fewer assertions, or the case is in `approved`;
+/// otherwise `tests_removed`.
+pub fn check_tests_kept(base: &str, head: &str, approved: &[String]) -> Result<(), CpdError> {
+    let head_cases = test_cases(head);
+    let mut lost = Vec::new();
+    for b in test_cases(base) {
+        if approved.contains(&b.name) {
+            continue;
+        }
+        match head_cases.iter().find(|h| h.name == b.name) {
+            Some(h) if h.assertions >= b.assertions => {}
+            _ => lost.push(b.name),
+        }
+    }
+    if lost.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::TestsRemoved,
+        format!(
+            "The diff removes or weakens existing tests: {}.",
+            lost.join(", ")
+        ),
+    )
+    .with("tests", json!(lost)))
+}
+
+/// Record the Lead's excuse for removing test `name`: adds it to `approved` and returns the event text the User
+/// sees. A blank `reason` is a usage error and records nothing.
 pub fn approve_test_removal(
-    _approved: &mut Vec<String>,
-    _test: &str,
-    _reason: &str,
+    approved: &mut Vec<String>,
+    name: &str,
+    reason: &str,
 ) -> Result<String, CpdError> {
-    Ok(String::new())
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "A test-removal approval needs a --reason.",
+        ));
+    }
+    if !approved.iter().any(|a| a == name) {
+        approved.push(name.to_owned());
+    }
+    Ok(format!("Test removal approved: {name} — {reason}"))
 }
