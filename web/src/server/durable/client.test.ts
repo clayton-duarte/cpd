@@ -62,7 +62,7 @@ async function tick(): Promise<void> {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
-async function open(): Promise<{ socket: FakeSocket; client: HostClient; paths: string[] }> {
+async function open(scheduler = new FakeScheduler()): Promise<{ socket: FakeSocket; client: HostClient; paths: string[] }> {
   const socket = new FakeSocket();
   const paths: string[] = [];
   const factory: SocketFactory = {
@@ -71,7 +71,7 @@ async function open(): Promise<{ socket: FakeSocket; client: HostClient; paths: 
       return socket;
     },
   };
-  const pending = connectHost("/run/host/s1.sock", { factory, scheduler: new FakeScheduler() });
+  const pending = connectHost("/run/host/s1.sock", { factory, scheduler });
   await tick();
   socket.emitFrame(WELCOME);
   const client = await pending;
@@ -219,4 +219,58 @@ describe("durable client", () => {
     for (const f of [view, ops, snapshot, events]) socket.emitFrame(f);
     expect(frames).toEqual([view, ops, snapshot, events]);
   });
+});
+
+
+it("retires timed-out model requests and ignores their late replies", async () => {
+  const scheduler = new FakeScheduler();
+  const { client, socket } = await open(scheduler);
+  const first = client.listModels().then(() => null, (e: unknown) => e);
+  const firstReq = socket.last().req;
+  scheduler.advance(5000);
+  expect(await first).toMatchObject({ code: "host_unreachable", details: { reason: "request_timeout", method: "list_models" } });
+  expect(scheduler.pending()).toBe(0);
+  let resolved = false;
+  const second = client.listModels().then((models) => { resolved = true; return models; });
+  const secondReq = socket.last().req;
+  socket.emitFrame({ type: "result", req: firstReq, data: { models: [] } });
+  await tick();
+  expect(resolved).toBe(false);
+  socket.emitFrame({ type: "result", req: secondReq, data: { models: [] } });
+  expect(await second).toEqual([]);
+  expect(scheduler.pending()).toBe(0);
+  client.close();
+});
+
+it("closing a pending startup read disposes its deadline", async () => {
+  const scheduler = new FakeScheduler();
+  const { client } = await open(scheduler);
+  const request = codeOf(client.attach());
+  expect(scheduler.pending()).toBe(1);
+  client.close();
+  expect(await request).toBe("host_disconnected");
+  expect(scheduler.pending()).toBe(0);
+});
+
+it("startup read deadlines do not impose a timeout on mutations", async () => {
+  const scheduler = new FakeScheduler();
+  const { client, socket } = await open(scheduler);
+  let settled = false;
+  const compacting = client.compact().then((v) => { settled = true; return v; });
+  scheduler.advance(10_000);
+  await tick();
+  expect(settled).toBe(false);
+  socket.reply({ task_id: 1 });
+  expect(await compacting).toEqual({ taskId: 1 });
+  client.close();
+});
+
+
+it("a synchronous startup write failure retires its deadline", async () => {
+  const scheduler = new FakeScheduler();
+  const { client, socket } = await open(scheduler);
+  socket.write = () => { throw new Error("write failed"); };
+  await expect(client.listModels()).rejects.toThrow("write failed");
+  expect(scheduler.pending()).toBe(0);
+  client.close();
 });

@@ -1,6 +1,7 @@
 import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
 import { createAskDiagSink } from "../ask-diag.ts";
+import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, PI_SEND_TEXT_MAX, WINDOW_SIZE, WebError, toWireError } from "../../protocol/domain.ts";
@@ -264,6 +265,7 @@ export function createPiBackend(deps: {
         out(m);
       },
       (ts) => committed.has(ts),
+      (callId) => tail.normalizer.completedTools.has(callId),
     );
 
     const POLL_MS = 250;
@@ -311,7 +313,7 @@ export function createPiBackend(deps: {
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
         const files = input.files ?? [];
         if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
-        const stamp = deps.now();
+        const stamp = `${deps.now()}-${randomUUID()}`;
         const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
         const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
         const markers: string[] = [];
