@@ -216,3 +216,21 @@ pauses work. Research, alternatives and the canonical run descriptor live in
 [#1187](https://github.com/clayton-duarte/cpd/issues/1187). Source PR precedes
 consumer merge; both require User review. The reader is telemetry, not a scheduler,
 and does not make an inactive agent session persistent.
+
+
+## 2026-11-13 — reusable allowance authentication
+
+The User rejected recurring logins for an OpenAI-hosted unattended agent. This
+supersedes treating ephemeral login as the only reader mode. Official
+[Codex auth documentation](https://developers.openai.com/codex/auth) documents
+cached login and automatic refresh. Use private persistent CLI state outside Git,
+isolated from managed cloud credentials, and one-shot fresh readings. The helper
+refuses the managed home and Git directories; Unix permissions are0700/0600.
+It never prints credential contents. No new sign-in is started without explicit
+`--login`. Live reuse was verified by starting a separate reader after bootstrap.
+Token-expiry refresh is documented CLI behavior, not a forced live experiment.
+A read-only platform-native allowance tool would be preferable, but none is
+exposed here. Process persistence is no longer a prerequisite for authentication;
+a destroyed credential volume or revocation remains a real reauthentication case.
+Research/code/restart regressions: source PR3, linked from #1187 and consumer #1188.
+The weekly threshold and User-review/merge policy remain in force.

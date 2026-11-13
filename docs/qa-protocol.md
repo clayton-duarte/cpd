@@ -3,15 +3,15 @@
 The QA Protocol was adopted through [#1116](https://github.com/clayton-duarte/cpd/pull/1116)
 and its permanent 20/10 limits through [#1132](https://github.com/clayton-duarte/cpd/pull/1132).
 The portable implementation was adopted through [#1149](https://github.com/clayton-duarte/cpd/pull/1149).
-Canonical ownership is moving to [`clayton-duarte/skills`](https://github.com/clayton-duarte/skills)
+Canonical ownership moved to [`clayton-duarte/skills`](https://github.com/clayton-duarte/skills)
 in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pinned consumer](qa-source.md).
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
 
-Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/SKILL.md) and
-[adoption guide](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/SKILL.md) and
+[adoption guide](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -99,7 +99,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers. The current run has null cardinal caps, fresh live usage (maximum60 seconds), and no reset batch.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [canonical kit README](https://github.com/clayton-duarte/skills/blob/21937426e984fdd7fa3bab00739d20453eec49d9/skills/repo-qa/README.md) defines fields, exit codes and limits.
+The [canonical kit README](https://github.com/clayton-duarte/skills/blob/d8a3b4bf5e7b9af4db3e77c63a094e8b18ce030f/skills/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 
@@ -150,10 +150,26 @@ weekly allowance is under50%; exactly50% permits continuation. Source research,
 decisions and immutable run descriptor are recorded in
 [#1187](https://github.com/clayton-duarte/cpd/issues/1187#issuecomment-6860759090).
 Use that same descriptor and `QA_USAGE_FILE` with every status/creation command.
-Keep the explicitly authenticated official reader alive; refresh at each
-iteration/significant stage, before/after lengthy tests, and before every write.
+Reuse the explicitly authorized private CLI credential cache and obtain a fresh
+one-shot reading at each iteration/significant stage, before/after lengthy tests,
+and before every write. Process loss alone must not require a new login.
 Missing/stale/invalid telemetry pauses all further work. Never consume reset
 credits, infer usage from issue counts, automatically restart after reset, or
 claim an inactive cloud session can run unattended. The final model response and
 other consumers can change the sampled percentage; this is no cost reservation.
 The User still reviews and merges every PR. No live host writes are authorized.
+
+
+## Reusable allowance authentication
+
+The original memory-only reader lost its login when its process ended. The User
+rejected repeated sign-ins. [Source PR3](https://github.com/clayton-duarte/skills/pull/3)
+adds an explicit private credential directory outside Git and one-shot reads.
+Use the kit README's persistent-auth commands; ordinary checks omit `--login`.
+The official CLI owns refresh. Never overwrite the cloud-managed login or commit
+credentials. Initial device authorization is only needed when the private cache
+has no usable login; revocation or loss of that volume can require authorization.
+This authenticates allowance reads and does not start a new QA run or reset limits.
+The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fresh
+reading was66% remaining; that historical number is not a gate for later work.
+Source PR3 must merge before this updated consumer pin; User alone merges.

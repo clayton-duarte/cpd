@@ -129,14 +129,45 @@ export QA_USAGE_FILE=/tmp/qa-weekly-usage.json
 node tools/repo-qa/scripts/qa.mjs --config qa.config.json --run qa-run.json status
 ```
 
-Keep the reader process alive; it holds the expressly authorized login in memory,
-polls every 30 seconds and publishes only sanitized usage via atomic mode-0600
-files. It performs no inference, account reset or credit purchase, reads no auth
-file, and does not persist a login. Orderly termination/errors remove its snapshot; an uncatchable kill leaves a file that expires within60 seconds. A lost
-process/login needs a new explicit device sign-in; do not promise that a cloud
-session survives disconnects or that a reader can keep an inactive agent running.
-The helper is telemetry, not an autonomous agent scheduler. Use a private local
-output directory; a writable forged snapshot is outside this trusted-operator guard.
+The command above selects disposable, memory-only authentication. It requires a
+new device sign-in after losing its process and is unsuitable for unattended work
+that must survive restarts. It remains available for Users who require that mode.
+
+For explicitly authorized reusable authentication, choose a **private persistent
+directory outside every Git repository**, then sign in once:
+
+```sh
+QA_USAGE_AUTH_DIR=/private/persistent/location/qa-codex-auth
+python3 tools/repo-qa/scripts/codex-usage-reader.py --auth-dir "$QA_USAGE_AUTH_DIR" --login --once --output /tmp/qa-weekly-usage.json --min-remaining 50
+# Subsequent checks, including after a reader/process restart, do not sign in:
+python3 tools/repo-qa/scripts/codex-usage-reader.py --auth-dir "$QA_USAGE_AUTH_DIR" --once --output /tmp/qa-weekly-usage.json --min-remaining 50
+```
+
+This uses the official CLI's `file` credential store and documented child-process
+home selector. It never changes the parent environment or managed Codex login;
+choosing that managed directory, a Git directory, or a credential symlink is
+refused. On Unix the directory is mode0700 and cached credentials mode0600.
+No credential content is read or printed by this helper. Codex owns token refresh.
+Treat the directory as account credentials: keep it out of commits, logs and
+shared artifacts. A missing login fails without prompting unless `--login` was
+explicitly supplied. `--once` leaves only a sanitized sample valid for the guard's
+short freshness window; invoke it before each iteration/significant stage/write.
+Without `--once` the reader polls every30 seconds. No model calls, quota resets,
+credit purchases or agent scheduler are involved.
+
+[Official authentication documentation](https://developers.openai.com/codex/auth)
+confirms cached login and automatic token refresh. This avoids repeated login
+on normal process restarts; revocation, a lost credential volume or account
+policy can still require sign-in. The helper cannot keep an inactive agent
+running or make a destroyed cloud workspace persistent. An already-lost
+memory-only login cannot be converted into a saved one. The supported permanent
+platform improvement would be a read-only native allowance tool; no such tool
+is exposed to this agent. Cloud model access and a separate workspace CLI login
+must not be assumed to share quota-read authorization.
+
+A continuous reader removes its sample on orderly exit/errors; an uncatchable
+kill leaves a file that expires within60 seconds. Use a private local output
+directory; a writable forged snapshot is outside this trusted-operator guard.
 
 The guard requires the Codex 10,080-minute window, a valid upcoming reset, a
 sample no older than the configured 1..60 seconds, and explicit availability/

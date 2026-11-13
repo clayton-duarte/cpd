@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Keep an explicit device login in memory and publish sanitized weekly telemetry.
+"""Read sanitized weekly telemetry using explicit ephemeral or reusable CLI auth.
 
 Requires Python >=3.9 and a Codex CLI supporting app-server's account APIs and
-cli_auth_credentials_store="ephemeral". No inference, credit reset or auth-file reads.
+credential stores. No inference, credit reset or credential-content reads.
 """
 import argparse
 import datetime as dt
@@ -48,7 +48,34 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--min-remaining", required=True, type=float)
+    parser.add_argument("--auth-dir", type=Path, help="Private persistent Codex credential directory outside Git")
+    parser.add_argument("--login", action="store_true", help="Explicitly allow initial device sign-in with --auth-dir")
+    parser.add_argument("--once", action="store_true", help="Publish one reading and exit; saved CLI auth survives")
     args = parser.parse_args()
+    if args.login and args.auth_dir is None:
+        parser.error("--login requires --auth-dir")
+    child_environment = os.environ.copy()
+    if args.auth_dir is not None:
+        auth_dir = args.auth_dir.absolute()
+        if auth_dir.is_symlink():
+            parser.error("Credential directory must not be a symlink")
+        parent_codex_state = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()
+        if auth_dir.resolve() == parent_codex_state:
+            parser.error("Use a separate credential directory; managed Codex auth must remain untouched")
+        if (auth_dir / "auth.json").is_symlink():
+            parser.error("Credential file must not be a symlink")
+        auth_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        auth_dir = auth_dir.resolve()
+        inside_git = subprocess.run(["git", "-C", str(auth_dir), "rev-parse", "--show-toplevel"],
+                                    capture_output=True).returncode == 0
+        if inside_git:
+            parser.error("Credential directory must be outside Git repositories")
+        os.chmod(auth_dir, 0o700)
+        # Documented CLI home selector, scoped only to this child process.
+        # The parent/managed Codex environment and its credentials are untouched.
+        child_environment["CODEX_HOME"] = str(auth_dir)
+    else:
+        auth_dir = None
     if not 0 < args.min_remaining <= 100:
         parser.error("--min-remaining must be in (0,100]")
     def terminate(*_):
@@ -60,8 +87,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="qa-usage-") as work:
         with open(Path(work) / "diagnostics.log", "w") as log:
             proc = subprocess.Popen(["codex", "app-server", "--stdio", "-c", 'sqlite_home='+json.dumps(work),
-                                     "-c", 'cli_auth_credentials_store="ephemeral"'],
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
+                                     "-c", 'cli_auth_credentials_store='+json.dumps("file" if auth_dir else "ephemeral")],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True,
+                                    env=child_environment)
             lines = queue.Queue()
 
             def receive():
@@ -76,7 +104,7 @@ def main():
                 proc.stdin.flush()
 
             send(dict(id=1, method="initialize", params=dict(clientInfo=dict(name="repo-qa-usage", version="1"))))
-            ready, pending = False, False
+            ready, pending, keep_snapshot = False, False, False
             deadline, next_poll = time.monotonic()+720, float("inf")
             try:
                 while True:
@@ -96,17 +124,35 @@ def main():
                     if line is None:
                         raise RuntimeError("Codex app-server closed")
                     message = json.loads(line)
-                    if "error" in message and message.get("id") in (1, 2, 3):
+                    if "error" in message and message.get("id") in (1, 2, 3, 4):
                         raise RuntimeError("Codex account API failed; stop QA and reauthenticate")
                     if message.get("id") == 1:
                         send(dict(method="initialized", params={}))
-                        send(dict(id=2, method="account/login/start", params=dict(type="chatgptDeviceCode")))
+                        if auth_dir is None:
+                            send(dict(id=2, method="account/login/start", params=dict(type="chatgptDeviceCode")))
+                        else:
+                            send(dict(id=4, method="account/read", params={}))
+                    elif message.get("id") == 4:
+                        account = (message.get("result") or {}).get("account")
+                        if account is not None:
+                            if account.get("type") != "chatgpt":
+                                raise RuntimeError("A saved ChatGPT subscription login is required")
+                            ready, next_poll, deadline = True, 0, float("inf")
+                        elif args.login:
+                            send(dict(id=2, method="account/login/start", params=dict(type="chatgptDeviceCode")))
+                        else:
+                            raise RuntimeError("No saved login; run once with --auth-dir and --login")
                     elif message.get("id") == 2:
                         result = message.get("result") or {}
                         print(json.dumps(dict(verification_url=result.get("verificationUrl"), user_code=result.get("userCode"))), flush=True)
                     elif message.get("method") == "account/login/completed":
                         if not (message.get("params") or {}).get("success"):
                             raise RuntimeError("Device login failed")
+                        if auth_dir is not None:
+                            credential_file = auth_dir / "auth.json"
+                            if not credential_file.is_file():
+                                raise RuntimeError("Login completed without saving reusable CLI credentials")
+                            os.chmod(credential_file, 0o600)
                         ready, next_poll, deadline = True, 0, float("inf")
                     elif message.get("id") == 3:
                         sample = normalize(message.get("result") or {})
@@ -121,9 +167,15 @@ def main():
                             os.replace(name, output)
                         finally:
                             Path(name).unlink(missing_ok=True)
+                        if auth_dir is not None and (auth_dir / "auth.json").is_file():
+                            os.chmod(auth_dir / "auth.json", 0o600)
+                        if args.once:
+                            keep_snapshot = True
+                            return
                         pending, next_poll, deadline = False, time.monotonic()+30, float("inf")
             finally:
-                output.unlink(missing_ok=True)
+                if not keep_snapshot:
+                    output.unlink(missing_ok=True)
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)

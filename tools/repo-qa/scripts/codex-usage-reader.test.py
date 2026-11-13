@@ -79,5 +79,75 @@ for line in sys.stdin:
             self.assertFalse(snapshot.exists())
 
 
+    def test_saved_login_survives_reader_restart_without_another_device_flow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "codex"
+            fake.write_text("#!/usr/bin/env python3\n" + r'''
+import json, os, sys, time
+from pathlib import Path
+assert 'cli_auth_credentials_store="file"' in sys.argv
+state = Path(os.environ["CODEX_HOME"]) / "auth.json"
+def send(value):
+    print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        send({"id":1,"result":{}})
+    elif method == "account/read":
+        send({"id":4,"result":{"account":{"type":"chatgpt","email":"must-not-leak"} if state.exists() else None}})
+    elif method == "account/login/start":
+        assert not state.exists(), "must reuse saved login"
+        # Fake credentials only: verify lifecycle, never contact an account.
+        state.write_text(json.dumps({"fake_auth":True}))
+        send({"id":2,"result":{"verificationUrl":"https://example.invalid/activate","userCode":"fake-code"}})
+        send({"method":"account/login/completed","params":{"success":True}})
+    elif method == "account/rateLimits/read":
+        send({"id":3,"result":{"ordinaryUsageAllowed":True,"rateLimitsByLimitId":{"codex":{"limitId":"codex","spendControlReached":False,"secondary":{"usedPercent":32,"windowDurationMins":10080,"resetsAt":int(time.time()+86400)}}}}})
+''')
+            fake.chmod(0o700)
+            auth = root / "private-cli-state"
+            output = root / "usage.json"
+            original_selector = os.environ.get("CODEX_HOME")
+            command = [sys.executable, str(Path(__file__).with_name("codex-usage-reader.py")),
+                       "--output", str(output), "--min-remaining", "50", "--auth-dir", str(auth), "--once"]
+            environment = {**os.environ, "PATH":str(root)+os.pathsep+os.environ["PATH"]}
+            first = subprocess.run(command+["--login"], env=environment, capture_output=True, text=True, timeout=10)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertIn("verification_url", first.stdout)
+            second = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertNotIn("verification_url", second.stdout)
+            self.assertNotIn("must-not-leak", first.stdout+second.stdout)
+            self.assertEqual(json.loads(output.read_text())["remaining_percent"], 68)
+            self.assertEqual(auth.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((auth / "auth.json").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(os.environ.get("CODEX_HOME"), original_selector)
+
+    def test_persistent_mode_without_saved_login_fails_without_prompting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "codex"
+            fake.write_text("#!/usr/bin/env python3\n" + r'''
+import json,sys
+for line in sys.stdin:
+    request=json.loads(line)
+    if request.get("method")=="initialize":print(json.dumps({"id":1,"result":{}}),flush=True)
+    elif request.get("method")=="account/read":print(json.dumps({"id":4,"result":{"account":None}}),flush=True)
+    elif request.get("method")=="account/login/start":raise AssertionError("Unexpected repeated sign-in")
+''')
+            fake.chmod(0o700)
+            output = root / "usage.json"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("codex-usage-reader.py")),
+                                     "--output", str(output), "--min-remaining", "50", "--auth-dir", str(root / "private"), "--once"],
+                                    env={**os.environ, "PATH":str(root)+os.pathsep+os.environ["PATH"]},
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("No saved login", result.stderr)
+            self.assertNotIn("verification_url", result.stdout)
+            self.assertFalse(output.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

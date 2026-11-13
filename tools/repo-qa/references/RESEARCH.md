@@ -63,3 +63,22 @@ closed. Null cardinal caps require an explicit weekly policy, with a maximum
 These are User policy choices and conservative implementation decisions, not
 claims of universal community consensus. Polling is not a cost reservation or a
 scheduler and cannot guarantee an exact final percentage.
+
+
+Reusable authentication correction (2026-11-13): official
+[Codex authentication](https://developers.openai.com/codex/auth) and
+[configuration reference](https://developers.openai.com/codex/config-reference)
+document `file`, `keyring`, `auto` and `ephemeral` stores. Cached ChatGPT tokens
+refresh automatically during use; `ephemeral` deliberately loses login when its
+process ends. The original memory-only experiment therefore cannot satisfy an
+unattended workflow across restarts. Add opt-in private reusable CLI state and
+one-shot reads, keeping the managed cloud login separate and refusing credentials
+inside Git. Prefer the OS credential store where the environment provides it;
+this headless cloud environment exposes no user secret-service bus. File storage
+is the official headless option, with private directory/file permissions. Tests
+restart the fake app-server in separate reader processes and verify no second
+device flow. They establish lifecycle behavior, not live token-refresh success.
+The cloud subscription's native model connection supplies no exposed account-meter
+tool; do not claim that being an OpenAI-hosted agent grants the workspace billing
+credentials. This correction follows the User's explicit demand to avoid repeated
+sign-ins; it supersedes treating ephemeral auth as the only supported reader mode.
