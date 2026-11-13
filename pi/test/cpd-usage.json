@@ -1363,6 +1363,7 @@
     "flags": {
       "--cause": true,
       "--help": false,
+      "--issue": true,
       "--mitigation": true
     },
     "positionals": {
@@ -1991,6 +1992,7 @@
     "flags": {
       "--adopt": true,
       "--base": true,
+      "--bug": true,
       "--confirm-author": true,
       "--help": false,
       "--jira": true,

@@ -2705,7 +2705,7 @@ Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the 
 ### 9.4 `workflow add`
 
 ```
-cpd workflow add <key> --repo <path> --title <text> [--jira <KEY>] [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--jobs <file.json>] [--base <branch> | --base <key> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
+cpd workflow add <key> --repo <path> --title <text> [--jira <KEY>] [--bug <id>] [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--jobs <file.json>] [--base <branch> | --base <key> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
 ```
 
 Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an unlocked `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done`, and in a re-planned `plan` (`locked_at` set, A1), it is **appended**, like `job add` and engine `workflow-start` starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy`, `done` and a re-planned `plan` it also **moves the Plan back to `dispatch`** (A3, pro-d429; hs-d87: a merged Workflow can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the Workflow itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up Workflow is registered at once, even when it cannot run yet: `workflow add <key> --repo … --needs …`. Before the lock its template's stub drafts follow (§9.4); after the lock it takes `--jobs <file.json>`, which queues the template's Jobs (pro-d404: a Job that waits is queued with its needs, never a draft; contract §2.2 "A parked draft", rule 2). With `--adopt` it adopts an existing pull request whose head branch does not equal the stored `lead_branch` of any Workflow of that repo: cpd works it like a Plan (Jobs that address review comments and failing CI checks) and pushes to the pull request's own head branch, never a second pull request (pro-n8).
@@ -2722,6 +2722,7 @@ Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an 
 | `--no-needs` | no needs, the way a Workflow with no needs is stated in `dispatch` when the default does not apply; exclusive with `--needs` (`usage`); in `grounding`, `plan`, `deploy` or `done` it changes the default to explicitly none |
 | `--title <text>` | required (hs-d285): the Workflow's own title, which names its change and becomes the pull request's title and then, when the repo squash-merges, the squash commit's subject on `main`. 1–72 characters, one line, no control characters, else `usage` (§1.5). `workflow add` is the only place a Workflow is created. Under `--adopt` it is a local label (it names the stub Jobs): cpd never sends it to GitHub, the pull request keeps its own title, and an adopted Workflow is exempt from the Jira title rule (`jira_title_invalid`) |
 | `--jira <KEY>` | optional (pro-d127, B1): the Workflow's own Jira ticket, a key matching `^[A-Z][A-Z0-9]+-[0-9]+$` (else `usage`, exit 2, as `context new --jira`). One ticket per Workflow: the Plan's `jira` never fills it. Set here or by `workflow edit <key> --jira <KEY>` (§9.5); needed before the Workflow opens when its owner's policy sets `workflow.jira_required` (§9.1, §5.5); under that policy the title must compose with it (`--title` above, §9.5) |
+| `--bug <id>` | optional: a bug id (`b<k>`), linking the Workflow to a bug record. The bug must have an issue URL recorded (checked before the Workflow starts). A bug unknown or a bug with no issue is refused `bug_unknown` (exit 4) or `bug_issue_required` (exit 3). Set only here; `workflow edit` takes no `--bug`. A rerun with another or a new `--bug` than the stored one is `workflow_exists`. Exclusive with `--adopt` (`adopt_bug_unsupported`, exit 2: an adopted pull request keeps its own body, so cpd cannot add the closing reference). When the Workflow merges, the PR body ends with `Fixes #<N>` or `Fixes <owner>/<repo>#<N>` |
 | `--adopt <number>` | adopt the existing pull request `<number>` of `--repo`'s `origin` (below). The Workflow's base is the pull request's `baseRefName` (it must exist as `origin/<base>`: `base_not_found`) and its head is `head_ref`, stored in `workflows.head_ref` |
 | `--confirm-author <login>` | the pull request's author, when it is not the User (`adopt_foreign`); accepted and does nothing when the author is the User. Needs `--adopt` |
 | `--base <key>` | exclusive with `--adopt`. **Stack on a Workflow**, the bare form: the Workflow `<key>` of this Plan in the repo, as in the table above (contract §2.2 "A Workflow reference") |
@@ -2749,6 +2750,9 @@ Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an 
 | a Workflow of an archived Plan is referenced only as a `merged` need; `details` is `{plan, next}`, `next` the `cpd plan unarchive` command | `archived` | 3 |
 | the base Workflow is not also in `--needs` (a need is merged before this Workflow starts, a base Workflow is the implied need met when it is `open`) | `usage` | 2 |
 | no Workflow of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape, needs and `jira` (compared only when `--jira` is given) equal the resolved flags, the default needs included (then `already`) | `workflow_exists` | 3 |
+| `--bug` and `--adopt` are not both given | `adopt_bug_unsupported` | 2 |
+| `--bug`, if given: names a `bug_records` row of the Plan | `bug_unknown` | 4 |
+| `--bug`, if given: the bug has an `issue` URL recorded | `bug_issue_required` | 3 |
 | in phase `dispatch`, one of `--needs` or `--no-needs` is required; an existing Workflow key is compared first (`already` when the flags match, else `workflow_exists`), so a rerun is never refused (idempotence, pro-d46) | `needs_required` | 3 |
 | (`--adopt`) the pull request's state is `OPEN`; `details` is `{number, url, state}` | `adopt_not_open` | 3 |
 | (`--adopt`) it is not from a fork (`isCrossRepository` false); `details` is `{number, url}` | `adopt_fork` | 3 |
@@ -8385,7 +8389,7 @@ Records a bug and opens its protocol state. `--title` is the one-line name (1 to
 **Output:**
 
 ```json
-{"ok": true, "bug": {"id": "b7", "plan": "protocol-enforce", "title": "pr merge refused on a clean stacked PR", "symptom": "...", "cause": null, "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:30:00Z", "closed_at": null, "closed_by": null}}
+{"ok": true, "bug": {"id": "b7", "plan": "protocol-enforce", "title": "pr merge refused on a clean stacked PR", "symptom": "...", "cause": null, "mitigation": null, "mitigated_by": null, "mitigated_at": null, "issue": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:30:00Z", "closed_at": null, "closed_by": null}}
 ```
 
 **Not idempotent:** every call reports a new bug.
@@ -8393,23 +8397,25 @@ Records a bug and opens its protocol state. `--title` is the one-line name (1 to
 ### 33.2 `protocol bug mitigate`
 
 ```
-cpd protocol bug mitigate <id> --mitigation <text> [--cause <text>]
+cpd protocol bug mitigate <id> --mitigation <text> --issue <url> [--cause <text>]
 ```
 
-Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b<k>`), `--mitigation` the stopgap that removes or contains the User's symptom now (1 to 20000 characters with no NUL), `--cause` the diagnosed cause when it is first known here. `<id>` that no row holds is `bug_not_found` (exit 4); a bug whose `status` is `closed` takes no mitigation (`illegal_transition`, exit 3, nothing written).
+Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b<k>`), `--mitigation` the stopgap that removes or contains the User's symptom now (1 to 20000 characters with no NUL), `--issue` a GitHub issue URL on the Context's repo, `--cause` the diagnosed cause when it is first known here. `<id>` that no row holds is `bug_not_found` (exit 4); a bug whose `status` is `closed` takes no mitigation (`illegal_transition`, exit 3, nothing written).
 
 | Precondition | Code | Exit |
 |---|---|---|
-| `--mitigation` present, 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL | `usage` | 2 |
+| `--mitigation` and `--issue` present; `--mitigation` is 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL; `--issue` matches `https://github.com/<owner>/<repo>/issues/<N>` (with N a positive integer) | `usage` or `issue_invalid` | 2 or 2 |
+| `--issue` is missing | `issue_required` | 3 |
 | `<id>` names a `bug_records` row | `bug_not_found` | 4 |
 | the bug's `status` is `open` | `illegal_transition` | 3 |
+| the bug has no issue yet, or `--issue` equals the one it has (linked pull requests close the recorded issue, so it is never changed) | `issue_conflict` | 3 |
 | the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
 
-**Effects:** one transaction, the row's `mitigation` set from the flag, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set from `--cause` when it is given; without `--cause` a recorded `cause` stands. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
+**Effects:** one transaction, the row's `mitigation` set from the flag, `issue` set from `--issue`, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set from `--cause` when it is given; without `--cause` a recorded `cause` stands. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
 
 **Output:** the `bug` object of §33.1, with the new values.
 
-**Idempotent:** the same `--mitigation` (and `--cause`) on an open bug whose stored values already equal them is `{"ok": true, "already": true}` with the `bug` object, nothing written.
+**Idempotent:** the same `--mitigation`, `--issue` (and `--cause`) on an open bug whose stored values already equal them is `{"ok": true, "already": true}` with the `bug` object, nothing written.
 
 ### 33.3 `protocol bug close`
 
@@ -8424,6 +8430,7 @@ Closes a bug whose root fix is in and its regression test recorded (air-d107). `
 | `--root-fix` and `--regression-test` present, 1 to 200 characters each, no NUL (`details` `{"missing": [...]}`) | `root_fix_required` | 3 |
 | `<id>` names a `bug_records` row | `bug_not_found` | 4 |
 | the bug's `status` is `open` | `illegal_transition` | 3 |
+| the bug has an `issue` URL recorded (checked before the existing root_fix_required checks' success path) | `bug_issue_required` | 3 |
 | the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
 
 **Effects:** one transaction: `root_fix` and `regression_test` set from the flags, `status` `closed`, `closed_at` the transaction's time, `closed_by` the caller's Session id (`CPD_SESSION`; null when unset). **No Event is appended.** Nothing else changes: the root-fix Job or Workflow is queued and merged by the Plan's own machinery, never by this command.
@@ -8448,7 +8455,7 @@ Lists bug records, `id` ascending (b1, b2, …). The filters combine: `--plan <i
 **Output:**
 
 ```json
-{"ok": true, "bugs": [{"id": "b3", "plan": null, "title": "...", "symptom": "...", "cause": "...", "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:00:00Z", "closed_at": null, "closed_by": null}]}
+{"ok": true, "bugs": [{"id": "b3", "plan": null, "title": "...", "symptom": "...", "cause": "...", "mitigation": null, "mitigated_by": null, "mitigated_at": null, "issue": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:00:00Z", "closed_at": null, "closed_by": null}]}
 ```
 
 **Idempotent:** a read; the same store gives the same list.

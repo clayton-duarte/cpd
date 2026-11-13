@@ -1995,6 +1995,7 @@ CREATE TABLE workflows (
   description        TEXT CHECK (description IS NULL OR length(description) BETWEEN 1 AND 65536),   -- migration `pr-description` (pro-d93..pro-d96, §4.5; an ADD COLUMN, so after `head_ref`): the PR's description, a Markdown body; non-empty after trimming is checked at the boundary; null only for a PR made before it
   jira               TEXT,   -- migration `pr-jira` (pro-d127, B1, §4.5; an ADD COLUMN, so after `description`): the PR's Jira ticket, a key matching `^[A-Z][A-Z0-9]+-[0-9]+$` (checked at the boundary by the `Jira` type); null until one is set; not a Locked field, outside the plan fingerprint
   repair             TEXT CHECK (repair IS NULL OR json_valid(repair)),   -- migration `workflow-repair` (pro-d465, §4.5; an ADD COLUMN, so after `jira`): the repair marker of §7.6 "The repair marker", JSON `{"pid", "start", "command"}`, its shape checked at the boundary (`RepairMarker`); null when no repair runs; not a Locked column
+  bug_id             TEXT REFERENCES bug_records(id),   -- migration `bug-issue` (an ADD COLUMN, so after `repair`): the bug the Workflow fixes; null when none
   PRIMARY KEY (plan, key),
   UNIQUE (plan, lead_branch),
   CHECK ((status IN ('waiting', 'cancelled')) = (lead_worktree IS NULL)),
@@ -2870,6 +2871,7 @@ CREATE TABLE bug_records (
   reported_at     TEXT NOT NULL,
   closed_at       TEXT,
   closed_by       TEXT,
+  issue           TEXT,
   CHECK ((mitigation IS NULL) = (mitigated_at IS NULL)),
   CHECK (mitigated_by IS NULL OR mitigation IS NOT NULL),
   CHECK ((status = 'closed') = (closed_at IS NOT NULL)),
