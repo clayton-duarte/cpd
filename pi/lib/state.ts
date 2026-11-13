@@ -206,17 +206,38 @@ export class Reporter {
   }
 }
 
-/** Publish an approval as human-blocked for the lifetime of its editor prompt. */
-export function approvalPrompt<T>(host: Host, run: Run, title: string, show: () => Promise<T>): Promise<T> {
+/** Publish an approval as human-blocked for the lifetime of its editor prompt; an abort of `signal` closes the fact at once, in the same tick as the dialog dismissal. */
+export function approvalPrompt<T>(host: Host, run: Run, title: string, show: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   return run.facts.ownPrompt(async () => {
     const key = `approval:${title}`;
     run.facts.open(key, `approval: ${title}`, "human");
     host.refresh(run);
+    const release = () => {
+      if (run.facts.close(key)) host.refresh(run);
+    };
+    signal?.addEventListener("abort", release, { once: true });
     try {
       return await show();
     } finally {
-      run.facts.close(key);
-      host.refresh(run);
+      signal?.removeEventListener("abort", release);
+      release();
     }
+  }, signal);
+}
+
+/**
+ * Runs an approval call whose promise settles with `aborted` in the same tick as an abort of `signal`, while the dialog is up.
+ * `body` calls `answered()` once the dialog is over: an abort after that changes nothing, the approved action runs to its end.
+ */
+export function abortableApproval<R>(signal: AbortSignal | undefined, aborted: R, body: (answered: () => void) => Promise<R>): Promise<R> {
+  return new Promise<R>((resolve, reject) => {
+    const onAbort = () => resolve(aborted);
+    const answered = () => signal?.removeEventListener("abort", onAbort);
+    if (signal?.aborted) return resolve(aborted);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    body(answered).then(resolve, reject).finally(answered);
   });
 }
+
+/** The result of an approval call whose dialog an abort dismissed: no approval was given. */
+export const DISMISSED = { content: [{ type: "text" as const, text: "The approval was dismissed. Do not try again." }], details: {} };

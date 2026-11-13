@@ -1,4 +1,4 @@
-import { approvalPrompt } from "./state.ts";
+import { abortableApproval, approvalPrompt, DISMISSED } from "./state.ts";
 /** Decision pro-d451: the tool `cpd_external_approve` (model: hostapprove.ts). The parsing and the dialog text are shared with the durable host. */
 import { CpdError } from "./cpd.ts";
 import { grantSlackSend, type SlackTool } from "./externalguard.ts";
@@ -82,19 +82,22 @@ export function registerExternalApproveTool(host: Host): void {
       additionalProperties: false,
     },
     exposure: "model-only",
-    async execute(_id: string, params: unknown) {
-      const r = host.run;
-      const a = parseExternal(params, r?.info.role, r?.info.planLead === true);
-      if ("code" in a) throw new CpdError(a.code, a.message);
-      if (!r) throw new CpdError("not_a_lead", "no session");
-      const ui = host.ctx?.ui;
-      if (!ui) throw new CpdError("no_ui", "the cockpit chat is needed to ask the User; there is no dialog in this session");
-      const title = approvalTitle(r.info.name ?? "the session", a);
-      const choice = await approvalPrompt(host, r, title, () => ui.select(title, ["Allow once", "Deny"]));
-      if (choice !== "Allow once") return { content: [{ type: "text" as const, text: "The User denied it. Do not try again." }], details: {} };
-      if (a.kind === "slack_send") grantOf(a);
-      else await host.call(approveArgv(a));
-      return { content: [{ type: "text" as const, text: APPROVED_TEXT }], details: {} };
+    execute(_id: string, params: unknown, signal?: AbortSignal) {
+      return abortableApproval(signal, DISMISSED, async (answered) => {
+        const r = host.run;
+        const a = parseExternal(params, r?.info.role, r?.info.planLead === true);
+        if ("code" in a) throw new CpdError(a.code, a.message);
+        if (!r) throw new CpdError("not_a_lead", "no session");
+        const ui = host.ctx?.ui;
+        if (!ui) throw new CpdError("no_ui", "the cockpit chat is needed to ask the User; there is no dialog in this session");
+        const title = approvalTitle(r.info.name ?? "the session", a);
+        const choice = await approvalPrompt(host, r, title, () => ui.select(title, ["Allow once", "Deny"], { signal }), signal);
+        answered();
+        if (choice !== "Allow once") return { content: [{ type: "text" as const, text: "The User denied it. Do not try again." }], details: {} };
+        if (a.kind === "slack_send") grantOf(a);
+        else await host.call(approveArgv(a));
+        return { content: [{ type: "text" as const, text: APPROVED_TEXT }], details: {} };
+      });
     },
   });
 }
