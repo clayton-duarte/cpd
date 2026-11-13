@@ -89,12 +89,25 @@ isolated `CPD_HOME` and test credentials; never mutate the User's live store.
 ## Limits and deterministic tools
 
 One active QA loop across both repos. Per `America/Toronto` calendar day,
-including daylight-saving transitions: **at most 10 new issues and 5 new PRs**.
+including daylight-saving transitions: **at most 20 new issues and 10 new PRs**.
 The purpose initially includes accumulating a useful backlog: issue creation
 can continue after the PR allowance is exhausted. These are ceilings, not quotas.
 Updates/comments on existing items consume neither allowance. Closed issues,
 closed/merged PRs and drafts still count on their creation day. Reopening does
 not reset creation time. The setup issue and PR use the same accounting.
+
+The User may explicitly reset today's allowance. Record that instruction and a
+new dated batch identifier in an existing QA issue comment before creation.
+Use `CPD_QA_BATCH=YYYY-MM-DD-reset-N` for every status/creation call in that
+batch, with the current Toronto date. Each marked batch has the same 20/10
+limits; status also reports aggregate `day_counts`, preserving prior work.
+The creator atomically adds a batch marker beside the original attribution
+marker. Never remove markers or autonomously switch identifiers to regain
+allowance. A wrong-day, empty or malformed identifier fails closed, so a reset
+cannot silently carry into tomorrow. No local counter/ledger is introduced.
+Without the variable, normal calendar-day accounting still counts all work.
+The first batch after a reset includes any supporting tooling issue/PR.
+
 
 Use Node (the repo already requires Node >=22.19) and authenticated `gh` with
 read access to both repos and write access to the target. From the CPD checkout:

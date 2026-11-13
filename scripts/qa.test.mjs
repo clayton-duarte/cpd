@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MARKER, REPOS, day, run, status } from "./qa.mjs";
+import { MARKER, REPOS, batchMarker, day, run, status } from "./qa.mjs";
 
 const now = new Date("2026-11-13T17:00:00Z");
 const item = (number, extra = {}) => ({ number, created_at: now.toISOString(), body: MARKER, ...extra });
@@ -26,15 +26,15 @@ test("counts both repositories and every page, including closed issues and draft
   }, now);
   assert.equal(calls, 4);
   assert.deepEqual(result.counts, { issues: 2, prs: 2 });
-  assert.deepEqual(result.remaining, { issues: 8, prs: 3 });
+  assert.deepEqual(result.remaining, { issues: 18, prs: 8 });
 });
 
 test("caps are independent and cannot have negative allowances", () => {
   let calls = 0;
-  const result = status(() => calls++ ? [] : Array.from({ length: 11 }, (_, i) => item(i)), now);
+  const result = status(() => calls++ ? [] : Array.from({ length: 21 }, (_, i) => item(i)), now);
   assert.equal(result.can_create_issue, false);
   assert.equal(result.can_create_pr, true);
-  assert.deepEqual(result.remaining, { issues: 0, prs: 5 });
+  assert.deepEqual(result.remaining, { issues: 0, prs: 10 });
 });
 
 test("fall-back day includes creations more than 24 hours ago", () => {
@@ -64,8 +64,8 @@ test("API failure, invalid pages and malformed records fail closed before writes
   assert.throws(() => status(() => { throw new Error("rate limited"); }), /rate limited/);
 });
 
-test("refuses the eleventh issue and sixth PR without a POST", () => {
-  for (const [command, count] of [["issue", 10], ["pr", 5]]) {
+test("refuses the twenty-first issue and eleventh PR without a POST", () => {
+  for (const [command, count] of [["issue", 20], ["pr", 10]]) {
     let calls = 0;
     const api = (args) => {
       assert.ok(!args.includes("POST"));
@@ -103,4 +103,57 @@ test("bad commands, unknown repos and empty bodies never reach GitHub", () => {
     assert.throws(() => run(args, api));
   }
   assert.throws(() => run(["issue", REPOS[0], "title", "file"], api, () => " "));
+});
+
+test("an explicit batch preserves day totals and counts only its own creations across repos", () => {
+  const batch = "2026-11-13-reset-2";
+  const rows = [item(1), item(2, { body: `${MARKER}\n${batchMarker(batch)}` }),
+    item(3, { body: `${MARKER}\n${batchMarker(batch)}`, pull_request: {} }),
+    item(4, { body: `${MARKER}\n${batchMarker("2026-11-13-another")}` })];
+  const result = status(() => rows, now, batch);
+  assert.deepEqual(result.counts, { issues: 2, prs: 2 });
+  assert.deepEqual(result.day_counts, { issues: 6, prs: 2 });
+  assert.deepEqual(status(() => rows, now, null).counts, result.day_counts);
+});
+
+test("wrong-day, empty and malformed batch identifiers fail before API access", () => {
+  for (const batch of ["", "2026-11-12-reset-2", "2026-11-13-../bad", "arbitrary"])
+    assert.throws(() => status(() => assert.fail("API must not run"), now, batch), /CPD_QA_BATCH/);
+});
+
+test("an exhausted ordinary day does not consume an explicitly authorized fresh batch", () => {
+  const rows = [...Array.from({ length: 20 }, (_, n) => item(n)),
+    ...Array.from({ length: 10 }, (_, n) => item(n + 20, { pull_request: {} }))];
+  const api = () => {
+    let calls = 0;
+    return () => calls++ ? [] : rows;
+  };
+  const ordinary = status(api(), now, null);
+  assert.equal(ordinary.can_create_issue, false);
+  assert.equal(ordinary.can_create_pr, false);
+  const reset = status(api(), now, "2026-11-13-reset-2");
+  assert.deepEqual(reset.counts, { issues: 0, prs: 0 });
+  assert.deepEqual(reset.day_counts, { issues: 20, prs: 10 });
+  assert.deepEqual(reset.remaining, { issues: 20, prs: 10 });
+});
+
+test("batch creation is marked atomically and its own cap is enforced", () => {
+  const batch = `${day(new Date())}-reset-2`;
+  const body = `${MARKER}\n${batchMarker(batch)}`;
+  let posts = 0;
+  const api = (args, input) => {
+    if (args.includes("POST")) {
+      posts++;
+      assert.equal(input.body, `${body}\n\nreason`);
+      return { number: 42 };
+    }
+    return [];
+  };
+  assert.equal(run(["issue", REPOS[0], "title", "file"], api, () => "reason", batch).result.number, 42);
+  assert.equal(posts, 1);
+  let reads = 0;
+  const full = () => reads++ ? [] : Array.from({ length: 20 }, (_, number) => item(number, {
+    body, created_at: new Date().toISOString(),
+  }));
+  assert.equal(run(["issue", REPOS[0], "title", "file"], full, () => "reason", batch).exit, 3);
 });
