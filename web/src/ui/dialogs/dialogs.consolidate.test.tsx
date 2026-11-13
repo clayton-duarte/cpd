@@ -42,12 +42,10 @@ it("plan review card renders a confirmation item with approve, reject and change
   const dialog: Extract<Dialog, { method: "cpd_plan_review" }> = { id: "review:r1", method: "cpd_plan_review", interactive: true, title: "Ship the widget", summary: "Three steps" };
   const m = mount(<PlanReviewCard dialog={dialog} readOnly={false} onRespond={(r) => responses.push(r)} />);
   const card = m.container.querySelector<HTMLElement>('section[aria-label="Plan review"][data-dialog="cpd_plan_review"]');
-  expect(card?.getAttribute("data-slot"), "the section is the Item frame").toBe("item");
-  expect(card?.getAttribute("data-variant")).toBe("outline");
-  expect(card?.getAttribute("data-size")).toBe("sm");
-  expect(card?.querySelector('[data-slot="item-media"][data-part="phi"]')).not.toBeNull();
-  expect(card?.querySelector('[data-slot="item-content"] h3')?.textContent).toBe("Ship the widget");
-  const actions = card?.querySelector('[data-slot="item-actions"]');
+  expect(card?.getAttribute("data-slot")).toBeNull();
+  expect(card?.querySelector('[data-part="phi"]')).not.toBeNull();
+  expect(card?.querySelector('[data-part="header"] h3')?.textContent).toBe("Ship the widget");
+  const actions = card?.querySelector('[data-part="actions"]');
   for (const a of ["reject", "request-changes", "approve"]) {
     expect(actions?.querySelector(`button[data-action="${a}"]`), a).not.toBeNull();
   }
