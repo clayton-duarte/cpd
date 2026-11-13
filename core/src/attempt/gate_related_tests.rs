@@ -2,13 +2,19 @@
 //! its tests with the changed tests; non-zero is `gate_related_failed`; an absent key is today's behaviour.
 //! The command runner is a closure: no test spawns anything.
 
-use super::kind::{RelatedRun, gate_tests};
+use serde_json::{Map, Value, json};
+
+use super::kind::{RelatedRun, gate_tests, split_unknown};
 use crate::policy::Scope;
 
 const JEST: &str = "jest --findRelatedTests {{ files }}";
 
 fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| (*s).to_owned()).collect()
+}
+
+fn none() -> Map<String, Value> {
+    Map::new()
 }
 
 fn ok(stdout: &str) -> RelatedRun {
@@ -22,9 +28,9 @@ fn ok(stdout: &str) -> RelatedRun {
 fn related_command_runs_with_changed_files() {
     let mut commands = Vec::new();
     let files = names(&["src/app.ts", "test/app.test.ts"]);
-    gate_tests(Some(JEST), &files, &[], &mut |c| {
+    gate_tests(Some(JEST), &files, &[], &none(), &mut |c| {
         commands.push(c.to_owned());
-        ok("")
+        ok("[]")
     })
     .unwrap();
     assert_eq!(
@@ -39,7 +45,8 @@ fn related_results_union_with_changed_tests() {
         Some(JEST),
         &names(&["src/app.ts"]),
         &names(&["a.test.ts", "b.test.ts"]),
-        &mut |_| ok("b.test.ts\nc.test.ts\n"),
+        &none(),
+        &mut |_| ok(r#"["b.test.ts","c.test.ts"]"#),
     )
     .unwrap();
     let mut got = got;
@@ -55,9 +62,10 @@ fn missing_related_key_keeps_current_behaviour() {
         None,
         &names(&["src/a.ts"]),
         &names(&["a.test.ts"]),
+        &none(),
         &mut |_| {
             ran += 1;
-            ok("x.test.ts\n")
+            ok(r#"["x.test.ts"]"#)
         },
     )
     .unwrap();
@@ -91,6 +99,7 @@ fn related_failure_fails_the_gate() {
         Some(JEST),
         &names(&["src/a.ts"]),
         &names(&["a.test.ts"]),
+        &none(),
         &mut |_| RelatedRun {
             exit: 1,
             stdout: String::new(),
@@ -104,10 +113,16 @@ fn related_failure_fails_the_gate() {
 fn files_placeholder_lists_changed_non_test_files() {
     let mut commands = Vec::new();
     let files = names(&["core/src/lib.rs", "core/src/util.rs"]);
-    gate_tests(Some("related {{ files }}"), &files, &[], &mut |c| {
-        commands.push(c.to_owned());
-        ok("")
-    })
+    gate_tests(
+        Some("related {{ files }}"),
+        &files,
+        &[],
+        &none(),
+        &mut |c| {
+            commands.push(c.to_owned());
+            ok("[]")
+        },
+    )
     .unwrap();
     assert_eq!(
         commands,
@@ -122,12 +137,60 @@ fn related_nonzero_is_not_swallowed() {
         Some(JEST),
         &names(&["src/a.ts"]),
         &names(&["a.test.ts"]),
+        &none(),
         &mut |_| RelatedRun {
             exit: 2,
-            stdout: "b.test.ts\n".to_owned(),
+            stdout: r#"["b.test.ts"]"#.to_owned(),
         },
     )
     .unwrap_err();
     assert_eq!(err.code().as_str(), "gate_related_failed");
     assert!(err.message().contains('2'), "{}", err.message());
+}
+
+#[test]
+fn related_output_is_a_json_array_not_one_literal_name() {
+    let got = gate_tests(Some(JEST), &[], &[], &none(), &mut |_| {
+        ok("[\"a.test.ts\", \"b.test.ts\"]\n")
+    })
+    .unwrap();
+    assert_eq!(got, names(&["a.test.ts", "b.test.ts"]));
+    for bad in ["a.test.ts\nb.test.ts\n", "not json", "{\"a\":1}", "[1]", ""] {
+        let err = gate_tests(Some(JEST), &[], &[], &none(), &mut |_| ok(bad)).unwrap_err();
+        assert_eq!(err.code().as_str(), "gate_related_failed", "{bad:?}");
+    }
+}
+
+#[test]
+fn a_name_only_related_found_that_list_rejects_is_gate_related_failed() {
+    let (named, found) = split_unknown(
+        &names(&["a.test.ts"]),
+        &names(&["a.test.ts", "ghost.test.ts"]),
+    );
+    assert_eq!(
+        (named, found),
+        (names(&["a.test.ts"]), names(&["ghost.test.ts"]))
+    );
+}
+
+#[test]
+fn related_renders_with_the_hook_context_and_files() {
+    let mut context = none();
+    context.insert("repo_path".to_owned(), json!("/r"));
+    context.insert("branch".to_owned(), json!("feat"));
+    let mut commands = Vec::new();
+    gate_tests(
+        Some("rel {{ repo_path }} {{ branch }} {{ files | length }} {{ files }}"),
+        &names(&["a.rs", "b.rs"]),
+        &[],
+        &context,
+        &mut |c| {
+            commands.push(c.to_owned());
+            ok("[]")
+        },
+    )
+    .unwrap();
+    assert_eq!(commands, vec!["rel /r feat 2 a.rs b.rs".to_owned()]);
+    let err = gate_tests(Some("{{ nope }}"), &[], &[], &context, &mut |_| ok("[]")).unwrap_err();
+    assert_eq!(err.code().as_str(), "gate_related_failed");
 }

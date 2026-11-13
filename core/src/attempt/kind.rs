@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::Env;
 use crate::config::RepoTests;
 use crate::error::{CpdError, ErrorCode};
-use crate::git::hooks::{Log, run_command};
+use crate::git::hooks::{Log, command_variables, render_template, run_command};
 use crate::git::{self, HookOutcome, Operation};
 use crate::ids::{AttemptId, PlanId};
 use crate::job::guard;
@@ -80,6 +80,8 @@ struct Ran {
     outcome: HookOutcome,
     tail: Option<String>,
     log: String,
+    /// stdout alone of the command.
+    stdout: String,
 }
 
 /// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then the
@@ -175,6 +177,7 @@ fn run_tests(
             Ok(Ran {
                 outcome: result.outcome,
                 tail: result.tail,
+                stdout: result.stdout,
                 log: if wrote {
                     log.display().to_string()
                 } else {
@@ -217,6 +220,41 @@ fn run_tests(
         ));
     }
 
+    // related (an `impl` Job): the tests of the changed files join the named ones, before `list` checks the union; a discovery failure is the Gate's.
+    let all = if job.kind == "impl" {
+        let context = command_variables(root, &operation)?;
+        gate_tests(
+            commands.related.as_deref(),
+            changed,
+            tests,
+            &context,
+            &mut |command| {
+                // The command is already rendered: `raw` keeps `go` from rendering it again.
+                let raw = format!("{{% raw %}}{command}{{% endraw %}}");
+                match go("related", &raw, &[], Log::Truncate) {
+                    Ok(Ran {
+                        outcome: HookOutcome::Passed,
+                        stdout,
+                        ..
+                    }) => RelatedRun { exit: 0, stdout },
+                    Ok(Ran {
+                        outcome: HookOutcome::Failed { exit, .. },
+                        ..
+                    }) => RelatedRun {
+                        exit,
+                        stdout: String::new(),
+                    },
+                    // Could not run (signal, timeout, I/O): not a pass.
+                    _ => RelatedRun {
+                        exit: -1,
+                        stdout: String::new(),
+                    },
+                }
+            },
+        )?
+    } else {
+        tests.to_vec()
+    };
     // list, once per named test: non-zero means no test has that name.
     if let Some(list) = &commands.list {
         let log = log_of("list");
@@ -237,9 +275,9 @@ fn run_tests(
             })?;
         let mut unknown = Vec::new();
         let mut last = None;
-        for name in tests {
+        for name in all.as_slice() {
             let ran = go("list", list, &[("test", json!(name))], Log::Append)?;
-            if let Some(e) = error("list", &ran, tests) {
+            if let Some(e) = error("list", &ran, &all) {
                 return Err(e);
             }
             if matches!(ran.outcome, HookOutcome::Failed { .. }) {
@@ -252,54 +290,30 @@ fn run_tests(
                 .ok()
                 .map(|t| git::tail(&t, git::TAIL_LINES));
             let ran = Ran { tail, ..ran };
+            let (named, found) = split_unknown(tests, &unknown);
+            if named.is_empty() {
+                return Err(refuse(
+                    ErrorCode::GateRelatedFailed,
+                    format!(
+                        "The repo's [test-commands] `related` printed a name that no test has: {}; the repo's `list` said so (details.log).",
+                        found.join(", ")
+                    ),
+                    &ran,
+                    &all,
+                ));
+            }
             return Err(refuse(
                 ErrorCode::TestsNotFound,
                 format!(
                     "No test has the name: {}. Fix the name or the test, commit, and submit again; the repo's `list` said so (details.log).",
-                    unknown.join(", ")
+                    named.join(", ")
                 ),
                 &ran,
-                &unknown,
+                &named,
             ));
         }
     }
 
-    // related (an `impl` Job): the tests of the changed files join the named ones; a discovery failure is the Gate's.
-    let all = if job.kind == "impl" {
-        gate_tests(
-            commands.related.as_deref(),
-            changed,
-            tests,
-            &mut |command| {
-                // The command is already rendered: `raw` keeps `go` from rendering it again.
-                let raw = format!("{{% raw %}}{command}{{% endraw %}}");
-                match go("related", &raw, &[], Log::Truncate) {
-                    Ok(Ran {
-                        outcome: HookOutcome::Passed,
-                        log,
-                        ..
-                    }) => RelatedRun {
-                        exit: 0,
-                        stdout: std::fs::read_to_string(log).unwrap_or_default(),
-                    },
-                    Ok(Ran {
-                        outcome: HookOutcome::Failed { exit, .. },
-                        ..
-                    }) => RelatedRun {
-                        exit,
-                        stdout: String::new(),
-                    },
-                    // Could not run (signal, timeout, I/O): not a pass.
-                    _ => RelatedRun {
-                        exit: -1,
-                        stdout: String::new(),
-                    },
-                }
-            },
-        )?
-    } else {
-        tests.to_vec()
-    };
     let tests = all.as_slice();
 
     // run: a `test` Job's named tests must fail, an `impl` Job's must pass.
@@ -329,19 +343,26 @@ fn run_tests(
     }
 }
 
+/// The names `list` rejected, as (the Job's named tests, the ones `related` found): a named one is `tests_not_found`,
+/// one only `related` found is `gate_related_failed`.
+pub(crate) fn split_unknown(named: &[String], unknown: &[String]) -> (Vec<String>, Vec<String>) {
+    unknown.iter().cloned().partition(|n| named.contains(n))
+}
+
 /// What the repo's `related` command ended as.
 pub(crate) struct RelatedRun {
     pub exit: i32,
-    /// One test name per line.
+    /// What the command printed to stdout: a JSON array of test names.
     pub stdout: String,
 }
 
 /// The tests the Gate runs: the changed tests, unioned with what `related` (the `[test-commands]` key, with `{{ files }}`
-/// the changed files) prints; a non-zero exit is `gate_related_failed`. No `related` is the changed tests alone.
+/// the changed files, and the hook's other variables from `context`) prints as a JSON array on stdout; a non-zero exit or output that is not that array is `gate_related_failed`. No `related` is the changed tests alone.
 pub(crate) fn gate_tests(
     related: Option<&str>,
     changed_files: &[String],
     changed_tests: &[String],
+    context: &serde_json::Map<String, Value>,
     run: &mut dyn FnMut(&str) -> RelatedRun,
 ) -> Result<Vec<String>, CpdError> {
     let mut tests = changed_tests.to_vec();
@@ -349,19 +370,14 @@ pub(crate) fn gate_tests(
         return Ok(tests);
     };
     let failed = |message: String| CpdError::new(ErrorCode::GateRelatedFailed, message);
-    // `files` is the changed files, each shell-escaped, space-joined (as a list renders in a hook).
-    let files = changed_files
-        .iter()
-        .map(|f| crate::git::hooks::shell_escape(f))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let command = minijinja::Environment::new()
-        .render_str(template, minijinja::context! { files })
-        .map_err(|e| {
-            failed(format!(
-                "The repo's [test-commands] `related` cannot run: {e}"
-            ))
-        })?;
+    // The hook's variables, and `files`: the changed files, which a list renders shell-escaped and space-joined.
+    let mut vars = context.clone();
+    vars.insert("files".to_owned(), json!(changed_files));
+    let command = render_template(template, &vars).map_err(|e| {
+        failed(format!(
+            "The repo's [test-commands] `related` cannot run: {e}"
+        ))
+    })?;
     let ran = run(&command);
     if ran.exit != 0 {
         return Err(failed(format!(
@@ -369,9 +385,14 @@ pub(crate) fn gate_tests(
             ran.exit
         )));
     }
-    for name in ran.stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        if !tests.iter().any(|t| t == name) {
-            tests.push(name.to_owned());
+    let found: Vec<String> = serde_json::from_str(ran.stdout.trim()).map_err(|e| {
+        failed(format!(
+            "The repo's [test-commands] `related` must print a JSON array of test names, as [\"a\", \"b\"]: {e}."
+        ))
+    })?;
+    for name in found {
+        if !tests.contains(&name) {
+            tests.push(name);
         }
     }
     Ok(tests)

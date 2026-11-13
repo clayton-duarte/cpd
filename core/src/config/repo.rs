@@ -30,6 +30,7 @@ impl RepoTests {
             ("build", Some(&self.build)),
             ("run", Some(&self.run)),
             ("list", self.list.as_ref()),
+            ("related", self.related.as_ref()),
         ] {
             if command.is_some_and(|c| c.trim().is_empty()) {
                 return Err(format!(
@@ -41,6 +42,11 @@ impl RepoTests {
             && !template_uses(list, "test")?
         {
             return Err("[tests] `list` must use the template variable `test` (one named test), as `{{ test }}`".to_owned());
+        }
+        if let Some(related) = &self.related
+            && !template_uses(related, "files")?
+        {
+            return Err("[tests] `related` must use the template variable `files` (the changed files), as `{{ files }}`".to_owned());
         }
         Ok(())
     }
@@ -63,6 +69,22 @@ mod tests {
         assert!(parse("build = \"true\"\nrun = \"true\"\nlist = \"grep -q {{ test }}\"\n").is_ok());
         assert!(parse("build = \"true\"\n").unwrap_err().contains("run"));
         assert!(parse("run = \"true\"\n").unwrap_err().contains("build"));
+    }
+
+    #[test]
+    fn related_is_non_empty_and_uses_files() {
+        let table = |related: &str| {
+            parse(&format!(
+                "build = \"true\"\nrun = \"true\"\nrelated = \"{related}\"\n"
+            ))
+        };
+        for empty in ["", "  "] {
+            let err = table(empty).unwrap_err();
+            assert!(err.contains("related") && err.contains("empty"), "{err}");
+        }
+        let err = table("jest --findRelatedTests").unwrap_err();
+        assert!(err.contains("related") && err.contains("files"), "{err}");
+        assert!(table("jest {{ files }}").is_ok());
     }
 
     #[test]
