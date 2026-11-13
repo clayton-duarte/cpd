@@ -968,6 +968,7 @@ fn a_deploys_rate_limit_pauses_until_the_rest_reset_not_the_graphql_one() {
     );
 }
 
+<<<<<<< HEAD
 /// `gh` whose GraphQL answers an empty body (exit 1) whenever the document asks for heavy fields, as a document GitHub cannot
 /// answer does; a light document goes to the [`World`].
 struct HeavyFails(Arc<World>);
@@ -1061,5 +1062,29 @@ fn a_rate_limited_light_retry_pauses_the_endpoint() {
     assert!(
         endpoint::is_paused(&row, rig.t0 + Duration::from_secs(1)),
         "the endpoint is paused through the rate-limit path"
+=======
+#[test]
+fn a_deploys_rate_limit_never_shortens_an_active_graphql_floor_pause() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let graphql_reset = rig.t0 + time::Duration::seconds(3600);
+    rig.state().remaining = 99;
+    rig.state().reset = graphql_reset;
+    let rest_reset = rig.t0 + time::Duration::seconds(120);
+    let stdout = format!(
+        "HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Reset: {}\r\n\r\n{{\"message\":\"API rate limit exceeded\"}}",
+        rest_reset.unix_timestamp()
+    );
+    *handler.deploys.lock().unwrap() = Reply::exit(1, &stdout, "gh: HTTP 403\n");
+    let error = rig.pass(10).unwrap_err();
+    assert_eq!(error.details()["rate_limited"], true);
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(
+        row.paused_until,
+        Some(graphql_reset),
+        "the later floor pause stands"
+>>>>>>> origin/swr-commit/fixreview
     );
 }

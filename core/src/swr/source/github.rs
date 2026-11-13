@@ -390,6 +390,11 @@ impl GithubSource {
                 .map(|reset| reset + RATE_GRACE)
                 .filter(|until| *until > now)
                 .unwrap_or(now + RATE_LIMITED_PAUSE);
+            // Never shorten an active pause (e.g. the GraphQL rate-floor one set earlier in this pass).
+            let until = endpoint::get(cx.store, "github")?
+                .filter(|row| endpoint::is_paused(row, now))
+                .and_then(|row| row.paused_until)
+                .map_or(until, |active| active.max(until));
             endpoint::pause_until(cx.store, "github", until)?;
             return Err(e);
         }
