@@ -3074,6 +3074,11 @@ fn poll_node(
             checks.push(Check::from(raw));
         }
         pr.checks = ChecksSummary::of(&checks, &[], &[], hold);
+    } else if hold && pr.checks == ChecksSummary::Failed {
+        // b61, assumption A1: under a policy hold a failed rollup whose individual checks are unknown (empty or absent
+        // contexts) may be only the excused Danger: it is not stored as `failed`, so it raises no `checks_failed`.
+        // Only a non-Danger failing check seen in the contexts (above) may fail a held PR.
+        pr.checks = ChecksSummary::Pending;
     }
     let mut membership = Membership::default();
     if let Some(did) = v.get("viewerDidAuthor").and_then(Value::as_bool) {
