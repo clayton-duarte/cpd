@@ -233,7 +233,15 @@ export interface SettingsChanges {
   readonly concurrency?: number;
 }
 
-/** Parses the engine fields of an inbox model from its wire shape. Stub: not implemented yet. */
-export function parseInboxEngine(_raw: unknown): { engineRunning: boolean; engineDownSince: string | null; engineRestartReason: string | null } {
-  return { engineRunning: true, engineDownSince: null, engineRestartReason: null };
+/** Parses the engine fields of an inbox model; an absent down-since or reason is null. */
+export function parseInboxEngine(raw: unknown): { engineRunning: boolean; engineDownSince: string | null; engineRestartReason: string | null } {
+  const o = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+  const opt = (name: string): string | null => {
+    const v = o[name];
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "string") throw new WebError("invalid_message", `inbox engine: bad field ${name}`, { field: name });
+    return v;
+  };
+  if (typeof o["engineRunning"] !== "boolean") throw new WebError("invalid_message", "inbox engine: bad field engineRunning", { field: "engineRunning" });
+  return { engineRunning: o["engineRunning"], engineDownSince: opt("engineDownSince"), engineRestartReason: opt("engineRestartReason") };
 }

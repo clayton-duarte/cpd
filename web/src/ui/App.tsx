@@ -9,6 +9,7 @@ import { createStore, useStore } from "../state/store.ts";
 import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
+import { EngineStatusBanner } from "./components/EngineStatusBanner.tsx";
 import { Empty } from "./components/empty.tsx";
 import { routeErrorTarget } from "./errorReport.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
@@ -220,6 +221,16 @@ export function App(props: AppProps): ReactElement {
         </Button>
       </div>
     ) : null}
+    {cockpit.inbox === null ? null : (
+      <div className="fixed top-2 left-1/2 z-50 w-full max-w-md -translate-x-1/2">
+        <EngineStatusBanner
+          engineRunning={cockpit.inbox.engineRunning}
+          engineDownSince={cockpit.inbox.engineDownSince ?? null}
+          engineRestartReason={cockpit.inbox.engineRestartReason ?? null}
+          now={new Date()}
+        />
+      </div>
+    )}
     {shownError === null ? null : (
       <div
         data-part="cockpit-error-toast"
