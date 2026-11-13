@@ -286,6 +286,18 @@ pub(super) fn run(ports: &Ports, install: &Install, dest: &Path, err: &mut dyn W
     follow_ups.failed
 }
 
+/// The argv of the installed `cpd` that is the detached restart waiter (the install hands off to it when the old engine
+/// still holds `locks/watch.lock` after `lock_wait`).
+#[allow(dead_code)] // stub: used by the implementation
+pub(super) const WAITER_ARGS: [&str; 2] = ["watch", "--ensure-when-free"];
+
+/// The waiter's body: waits (on the clock) for `locks/watch.lock` to be free, then runs `cpd watch --ensure` once.
+/// Stub: the implementation is a later Job.
+#[allow(dead_code)] // stub: used by the implementation
+pub(super) fn restart_waiter(_ports: &Ports, _install: &Install, _dest: &Path) {
+    todo!("the restart waiter")
+}
+
 /// The last step: the tagger. It never fails the install; the next install retries the tag.
 pub(super) fn tag(ports: &Ports, install: &Install, err: &mut dyn Write) {
     let mut cmd = Command::new(install.root.join("scripts/tag-version.sh"));
