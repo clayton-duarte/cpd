@@ -158,7 +158,7 @@ test("loop guard: a message that would start a turn is sent with triggerTurn fal
 
   const first = nextId++;
   const second = nextId++;
-  f.emit(ev(first, "job-failed", { data: {} }), ev(second, "session-message", { session: ID, data: { from: null, text: "hi", wake: false } }));
+  f.emit(ev(first, "job-failed", { data: {} }), ev(second, "session-message", { session: ID, data: { from: "s_other", text: "hi", wake: false } }));
   await waitFor("both delivered", () => f.pi.delivered().length === 2);
   const [a, b] = f.pi.delivered();
   assert.deepEqual([(a!.message.details as any).id, (b!.message.details as any).id], [first, second], "they keep their order");

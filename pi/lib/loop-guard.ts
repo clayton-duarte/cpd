@@ -152,6 +152,8 @@ export function registerLoopGuard(host: Host): void {
   });
   host.pi.on("agent_end", function loopGuardAgentEnd() {
     const r = host.run;
-    if (r && guarded(r)) resetTurn(r);
+    if (!r || !guarded(r)) return;
+    resetTurn(r);
+    clearTrip(host, r); // a turn that ended leaves the blocked state (the trip gated deliveries only within it)
   });
 }

@@ -188,14 +188,15 @@ test("a successful switch runs switched after the model and level are set", asyn
   assert.deepEqual(adapterErrors(f), []);
 });
 
-test("a failed session show records nothing", async (t) => {
+test("a failed session show records switch-failed only", async (t) => {
   const f = await started(t);
   f.respond("session-show", { ok: false, error: { code: "session_not_found", message: "no" } }, { exit: 4 });
   f.emit(retiered(200));
   await f.drain();
   await f.quiet();
   assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet], [[], []]);
-  assert.deepEqual([switchCalls(f, "switch-failed"), switchCalls(f, "switched")], [[], []], "the process state is unknown: nothing is recorded");
+  assert.equal(switchCalls(f, "switch-failed").length, 1, "the failed read is reported once");
+  assert.deepEqual(switchCalls(f, "switched"), []);
 
   // A later switch that works is the only one recorded.
   f.respond("session-show", shownO2());
@@ -203,7 +204,7 @@ test("a failed session show records nothing", async (t) => {
   await waitFor("switched", () => switchCalls(f, "switched").length > 0, WAIT);
   await f.quiet();
   assert.deepEqual(switchCalls(f, "switched"), [["session", "switched", "--session", ID]]);
-  assert.deepEqual(switchCalls(f, "switch-failed"), []);
+  assert.equal(switchCalls(f, "switch-failed").length, 1);
 });
 
 test("the protocol is exactly one past the base", () => {
