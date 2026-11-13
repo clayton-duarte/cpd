@@ -180,6 +180,8 @@ fn close_requires_a_root_fix_and_a_regression_test() {
     );
     assert_eq!(show(&fx, "b1")["status"], "open");
 
+    mitigate(&fx, "b1", "A stopgap.", "s-42");
+
     // Both: it closes, keeping the root-fix reference and the regression test, and records when.
     let bug = fx
         .cpd(&[
