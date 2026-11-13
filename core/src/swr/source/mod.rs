@@ -26,6 +26,9 @@ mod slack_tests;
 mod slack_write_tests;
 
 #[cfg(test)]
+#[path = "excused_policy_tests.rs"]
+mod excused_policy_tests;
+#[cfg(test)]
 mod github_budget_tests;
 #[cfg(test)]
 mod github_poll_tests;
