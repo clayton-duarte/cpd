@@ -672,6 +672,20 @@ fn find_cycle(
 /// Workflow landed there; a stale local branch may lack it), else the local branch.
 fn authoritative_commit(repo: &Path, branch: &str) -> Result<String, CpdError> {
     if has_origin(repo)? {
+        // Fetch first: the stored baseline must be the commit the remote has now, not a stale tracking ref.
+        let fetched = run(repo, &["fetch", "origin", branch])?;
+        let tracked = format!("refs/remotes/origin/{branch}");
+        if fetched.code != 0
+            && run(repo, &["rev-parse", "--verify", "--quiet", &tracked])?.code == 0
+        {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!(
+                    "Could not fetch origin/{branch} to measure its coverage baseline: {}",
+                    fetched.stderr.trim()
+                ),
+            ));
+        }
         let remote = run(
             repo,
             &[
@@ -685,6 +699,24 @@ fn authoritative_commit(repo: &Path, branch: &str) -> Result<String, CpdError> {
         }
     }
     crate::git::run::rev_parse(repo, branch)
+}
+
+/// Fetches the base, then measures its coverage with the repo's `measure` command: the `(base_sha, report json)` a refactor
+/// Workflow is held to; `None` when the repo has no measure command.
+pub(super) fn capture_coverage_baseline(
+    repo: &Path,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    base_branch: &str,
+    policy: &Policy,
+) -> Result<Option<(String, String)>, CpdError> {
+    let Some(command) = &policy.coverage_commands.measure else {
+        return Ok(None);
+    };
+    let sha = authoritative_commit(repo, base_branch)?;
+    let report = super::measure_coverage(repo, plan, key, &sha, command)?;
+    let json = serde_json::to_string(&report).map_err(|e| CpdError::bad_row(e.to_string()))?;
+    Ok(Some((sha, json)))
 }
 
 pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
@@ -789,15 +821,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         } => {
             // Capture the coverage base before creating the refactor workflow.
             let coverage_baseline = if wanted.shape == "refactor" {
-                if let Some(command) = &policy.coverage_commands.measure {
-                    let sha = authoritative_commit(&repo, &base_branch)?;
-                    let report = super::measure_coverage(&repo, &plan, &wanted.key, &sha, command)?;
-                    let json = serde_json::to_string(&report)
-                        .map_err(|e| CpdError::bad_row(e.to_string()))?;
-                    Some((sha, json))
-                } else {
-                    None
-                }
+                capture_coverage_baseline(&repo, &plan, &wanted.key, &base_branch, &policy)?
             } else {
                 None
             };

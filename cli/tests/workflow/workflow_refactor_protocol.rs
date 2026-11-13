@@ -69,8 +69,135 @@ impl RefactorFixture {
     }
 }
 
+const MAKE_GREEN: &str = "UPDATE jobs SET status = 'queued', tier = 'S2', goal = 'goal', context = 'context', touches = '[\"src/**\"]', acceptance = '[\"works\"]', out_of_scope = '[]', fingerprint = printf('%064d', 0) WHERE workflow = 'WF'; UPDATE jobs SET status = 'running' WHERE workflow = 'WF'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE workflow = 'WF';";
+
+impl RefactorFixture {
+    /// A merged coverage workflow `key` whose lead branch exists, and a policy that measures coverage with a mock.
+    fn green_coverage(&self, key: &str) {
+        self.add_workflow(key, &["--shape", "coverage"]).ok();
+        self.env.sql(&MAKE_GREEN.replace("WF", key));
+        self.git(&self.repo, &["branch", &format!("pay-1/{key}")]);
+    }
+
+    fn measure_with_mock(&self, replies: &[&str]) {
+        use cpd_core::host::runner::Reply;
+        self.env.repo_policy(
+            "acme",
+            "pay",
+            &format!("{TESTS_TABLE}\n[coverage-commands]\nmeasure = \"mock-coverage\"\n"),
+        );
+        let mut runner = (*self.fakes.runner).clone();
+        for reply in replies {
+            runner = runner.once(
+                "sh",
+                |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                Reply::ok(reply),
+            );
+        }
+    }
+
+    fn baseline(&self, workflow: &str) -> (String, String) {
+        self.env.read(|conn| {
+            conn.query_row(
+                "SELECT base_sha, report FROM refactor_coverage_baselines WHERE plan = 'pay-1' AND workflow = ?1",
+                [workflow],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+        })
+    }
+}
+
 mod tests {
     use super::*;
+
+    /// The baseline is captured at the remote tip, fetched first: a stale remote-tracking ref is not used.
+    #[test]
+    fn baseline_capture_fetches_the_base_before_measuring() {
+        let fx = fixture("grounding");
+        let origin = fx.env.root().join("origin.git");
+        fx.git(
+            fx.env.root(),
+            &[
+                "init",
+                "--bare",
+                "-q",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        fx.local_origin(&fx.repo, &origin);
+        fx.green_coverage("cov");
+        fx.git(&fx.repo, &["push", "-q", "origin", "pay-1/cov"]);
+        let stale = fx.git(&fx.repo, &["rev-parse", "pay-1/cov"]);
+        fx.git(&fx.repo, &["checkout", "-q", "pay-1/cov"]);
+        fx.commit_file(&fx.repo, "src/new.rs", "new", "advance the remote");
+        fx.git(&fx.repo, &["push", "-q", "origin", "pay-1/cov"]);
+        let tip = fx.git(&fx.repo, &["rev-parse", "pay-1/cov"]);
+        fx.git(&fx.repo, &["checkout", "-q", "main"]);
+        fx.git(
+            &fx.repo,
+            &["update-ref", "refs/remotes/origin/pay-1/cov", &stale],
+        );
+        // The remote-tracking ref lags the remote's tip.
+        fx.git(
+            &fx.repo,
+            &["update-ref", "refs/remotes/origin/pay-1/cov", &stale],
+        );
+        fx.measure_with_mock(&[r#"{"line": 90.0, "branch": 80.0}"#]);
+
+        fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
+            .ok();
+
+        let (sha, report) = fx.baseline("refact");
+        assert_eq!(
+            sha, tip,
+            "the baseline is the fetched remote tip, not the stale ref"
+        );
+        assert!(
+            report.contains("90"),
+            "the measured report is stored: {report}"
+        );
+    }
+
+    /// Editing a refactor's base re-measures and replaces its stored baseline.
+    #[test]
+    fn editing_the_base_of_a_refactor_refreshes_its_baseline() {
+        let fx = fixture("grounding");
+        fx.green_coverage("cov");
+        fx.green_coverage("cov2");
+        fx.git(&fx.repo, &["checkout", "-q", "pay-1/cov2"]);
+        fx.commit_file(&fx.repo, "src/two.rs", "two", "second base");
+        fx.git(&fx.repo, &["checkout", "-q", "main"]);
+        let second = fx.git(&fx.repo, &["rev-parse", "pay-1/cov2"]);
+        fx.measure_with_mock(&[
+            r#"{"line": 50.0, "branch": 40.0}"#,
+            r#"{"line": 95.0, "branch": 85.0}"#,
+        ]);
+        fx.add_workflow("refact", &["--shape", "refactor", "--base", "cov"])
+            .ok();
+        let (before, _) = fx.baseline("refact");
+        assert_ne!(before, second);
+
+        fx.cpd(&[
+            "workflow",
+            "edit",
+            "refact",
+            "--base",
+            "cov2",
+            "--no-needs",
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
+
+        let (sha, report) = fx.baseline("refact");
+        assert_eq!(sha, second, "the baseline follows the new base");
+        assert!(
+            report.contains("95"),
+            "the baseline was re-measured: {report}"
+        );
+    }
 
     /// Decision pro-d579 / pro-d581, commands.md §34.1 rule 2, §34.3:
     /// Creating a refactor workflow without a coverage base (or pointing to a non-coverage / non-green base)
