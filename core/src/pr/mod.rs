@@ -31,6 +31,8 @@ mod deploys_tests;
 mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod merge_gate_tests;
 pub mod merge_green;
 #[cfg(test)]
 mod merge_green_tests;
