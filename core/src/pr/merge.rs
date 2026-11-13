@@ -6,6 +6,8 @@ use std::str::FromStr;
 
 use serde_json::json;
 
+use rusqlite::OptionalExtension;
+
 use super::gh;
 use super::poll;
 use super::status::{Required, required_states};
@@ -111,6 +113,30 @@ pub(super) fn merge_in(ports: &Ports, home: &CpdHome, args: MergeArgs) -> Result
         .with("merge_state", e.row.merge_state.as_str()));
     }
     refuse_unless_required_passed(home, &repo, number, &e.row.checks, e.detail.as_ref())?;
+    // Prerequisites gate (§9.5b): unmet external prerequisites refuse before any write or further check
+    let owning_workflow: Option<(String, String)> = store.read(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT plan, key FROM workflows WHERE repo = ?1 AND pr_number = ?2 AND status = 'open'
+                 UNION
+                 SELECT plan, key FROM workflows WHERE pull_request = ?3 AND status = 'open'
+                 LIMIT 1",
+                rusqlite::params![repo.as_str(), number, e.row.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    })?;
+    if let Some((plan, key)) = owning_workflow {
+        store.read(|conn| {
+            crate::workflow::prereq::ensure_prereqs_met(
+                conn,
+                &*ports.runner,
+                &plan,
+                &key,
+                "pr merge",
+            )
+        })?;
+    }
     let Some(head) = e.head_oid.clone() else {
         return Err(CpdError::new(
             ErrorCode::ItemNotFound,

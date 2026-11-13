@@ -128,5 +128,6 @@ mod worker_runner_durable;
 mod worker_runner_report;
 mod workflow_commands;
 mod workflow_policy;
+mod workflow_prereq;
 mod workflow_wire;
 mod working_workflow;

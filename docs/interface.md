@@ -77,6 +77,9 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd workflow describe` | Store the Workflow's description, which becomes the pull request body (§9.5a) | Lead | |
 | `cpd workflow cancel` | Remove a Workflow from the Plan before the lock; after it, end a Workflow with nothing to open, or whose work another Workflow carried (`--superseded-by`) (§9.6) | Lead | |
 | `cpd workflow start` | Start a waiting Workflow whose needs are merged, after a failed start (§9.7) | Lead | |
+| `cpd workflow prereq` | External prerequisites of a Workflow (§9.8) | | |
+| `cpd workflow prereq add` | Add an external prerequisite to a workflow | Lead | |
+| `cpd workflow prereq confirm` | Confirm a manual prerequisite | | yes |
 | `cpd pr` | Pull requests, through gh (commands.md §9) | | |
 | `cpd pr open` | Push the Lead Branch and open the Workflow, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |
 | `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |

@@ -137,6 +137,16 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             .with("repo", pull.repo.as_str()));
         }
     }
+    // Prerequisites gate (§9.5b, check 9): unmet external prerequisites refuse before post_guard or send
+    env.store.read(|conn| {
+        crate::workflow::prereq::ensure_prereqs_met(
+            conn,
+            &*ports.runner,
+            id.as_str(),
+            key.as_str(),
+            "pr post",
+        )
+    })?;
     let approval = super::approval::post_guard(&mut env, &id, &key)?;
     // (h)
     let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url)
