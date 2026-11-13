@@ -2027,6 +2027,8 @@ Note: `ToolItem.result` is set while `status` is running (a partial output from 
 4. **Tool items.** A committed tool item has the id of the live one, so the append replaces it (`mergeById`, `transcript.ts:29-39`). A committed tool item is `running` until its toolResult line, so a live status set before that line is replaced by `running`, then by the result.
 5. **Either order.** Live first, then committed: the live item is removed and the committed one takes its place. Committed first, then live: the live frames are ignored (rule 2). Neither order gives a duplicate.
 
+The backend supplies live tool suppression from the current tail normalizer’s `completedTools` set (every committed `toolResult`, including orphan results). A committed call without a result remains live. The callback reads the current normalizer on every frame, so tail reload/replacement resets authority; `tool_start`, `tool_update`, `tool_end` and `inflight.tools` never overwrite those committed results (#1196).
+
 ### 12.5 Connection, errors and stop
 
 - **Path.** `${deps.cpdHome}/run/pi/${sessionId}.sock`, with `sessionId` = `ref.id` (`backend.ts:80`). `CPD_SESSION` is the Session id (§6.6), and `pi/lib/host.ts:92` falls back to it for the Session row id. The pi side names its socket `${CPD_HOME}/run/pi/${CPD_SESSION}.sock` (`pi/lib/live-stream.ts:35`).

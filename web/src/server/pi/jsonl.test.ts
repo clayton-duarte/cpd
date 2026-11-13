@@ -316,3 +316,14 @@ describe("pi jsonl normalisation", () => {
     }
   });
 });
+
+
+it("records result completion independently of whether its call is inside the window", () => {
+  const n = createNormalizer();
+  n.push(assistantMsg("a1", [{ type: "toolCall", id: "c1", name: "read", arguments: {} }]), { offset: 0 });
+  expect(n.completedTools.has("c1")).toBe(false);
+  n.push(toolResult("r1", "c1", "read", "ok"), { offset: 100 });
+  n.push(toolResult("r2", "outside-window", "read", "ok"), { offset: 200 });
+  expect([...n.completedTools]).toEqual(["c1", "outside-window"]);
+  expect(createNormalizer().completedTools.size).toBe(0);
+});

@@ -5,6 +5,8 @@ import type { SessionServerMessage } from "../../protocol/wire.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import { createPiBackend } from "./backend.ts";
+import { createStore } from "../../state/store.ts";
+import { createLiveSource } from "./live.ts";
 import type { LiveSource } from "./live.ts";
 import type { WatchBoundary } from "./watch.ts";
 import type { FileBoundary } from "./window.ts";
@@ -166,4 +168,36 @@ describe("pi backend with a live source", () => {
     expect(s.out.map((m) => m.type)).toEqual(["session.append", "session.status"]);
     expect(s.out.some((m) => m.type === "session.remove")).toBe(false);
   });
+});
+
+
+it.each([false, true])("late live tool_end preserves a committed edit result (in initial tail: %s)", async (initial) => {
+  const call = assistantLine("a1", 100, [{ type: "toolCall", id: "edit1", name: "edit", arguments: { path: "f" } }]);
+  const result = { type: "message", id: "r1", message: { role: "toolResult", toolCallId: "edit1", toolName: "edit",
+    isError: false, content: [text("edited")], durationMs: 42, details: { patch: "-before\n+after" } } };
+  const fs = new FakeFile(`${call}\n${initial ? JSON.stringify(result) + "\n" : ""}`);
+  const watch = new FakeWatch();
+  const scheduler = new FakeScheduler();
+  let feed: (line: string) => void = () => {};
+  const live = createLiveSource({ cpdHome: "/home", scheduler, connect: () => ({
+    onLine: (cb) => { feed = cb; }, onClose: () => {}, close: () => {},
+  }) });
+  const store = createStore();
+  store.dispatch({ type: "selectSession", sessionId: "s1" });
+  const backend = createPiBackend({ cpd: new FakeCpd(), fs, watch, git: { branch: async () => "main" },
+    cpdHome: "/home", attachmentsDir: "/att", now: () => 1000, scheduler, live });
+  const handle = await backend.attach({ ref, file: FILE, tierOptions: ["S3"] }, (message) => store.dispatch({ type: "server", message }));
+  feed(JSON.stringify({ t: "hello", protocol: 1 }));
+  feed(JSON.stringify({ t: "tool_start", toolCallId: "edit1", toolName: "edit", args: { path: "f" } }));
+  if (!initial) {
+    fs.append(`${JSON.stringify(result)}\n`);
+    watch.fire();
+    await flush();
+  }
+  const tool = () => store.getState().session?.transcript.items.find((i) => i.id === "tool:edit1");
+  expect(tool()).toMatchObject({ status: "done", diff: "-before\n+after", result: { durationMs: 42 } });
+  // The IPC delivery can lag the independent transcript watch delivery.
+  feed(JSON.stringify({ t: "tool_end", toolCallId: "edit1", isError: false, result: { content: [text("edited")] } }));
+  expect(tool()).toMatchObject({ status: "done", diff: "-before\n+after", result: { durationMs: 42 } });
+  await handle.dispose();
 });
