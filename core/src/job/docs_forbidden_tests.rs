@@ -132,6 +132,25 @@ impl Rig {
         }
     }
 
+    /// A draft Job `key` (kind `work`) of Workflow `workflow`.
+    fn add_draft(&mut self, key: &str, workflow: &str) {
+        self.sql(&format!(
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pay', '{workflow}', '{key}', 'D', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');"
+        ));
+    }
+
+    /// A second Workflow `key` of the Plan on the same repo.
+    fn add_workflow_row(&mut self, key: &str, branch: &str) {
+        let sql = format!(
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+               VALUES ('pay', '{key}', '{repo}', 'main', 'dispatch', '{branch}', '{lead}', 't', cpd_txn(), 't');",
+            repo = self.repo.dir().display(),
+            lead = self.lead_worktree.display(),
+        );
+        self.sql(&sql);
+    }
+
     fn scoped<R>(&self, f: impl FnOnce() -> R) -> R {
         Ports::scope(&self.fakes.ports, f)
     }
@@ -459,5 +478,93 @@ fn submit_allows_modified_markdown_under_docs_dir_and_added_markdown_elsewhere()
     assert!(
         out.is_ok(),
         "a modified docs file and an added .md elsewhere pass: {out:?}"
+    );
+}
+
+#[test]
+fn policy_show_lists_local_docs() {
+    #[derive(Parser)]
+    struct Wrap {
+        #[command(subcommand)]
+        command: crate::policy::Command,
+    }
+    let rig = Rig::new(OWNER_NO_DOCS, "dispatch");
+    let wrap = Wrap::try_parse_from(["wrap", "show", "--owner", "acme"]).unwrap();
+    let out = rig
+        .scoped(|| crate::policy::run(wrap.command))
+        .expect("policy show succeeds");
+    let crate::output::Output::Success(map) = out else {
+        panic!("policy show prints a success envelope")
+    };
+    let json = Value::Object(map);
+    let key = &json["policy"]["workflow"]["keys"]["workflow.local_docs"];
+    assert_eq!(key["value"], Value::Bool(false), "{json}");
+    assert!(
+        key["source"].as_str().unwrap().contains("owner.toml"),
+        "{key}"
+    );
+}
+
+#[test]
+fn submit_allows_deleting_docs_markdown_already_deleted_on_lead() {
+    let mut rig = Rig::new(OWNER_NO_DOCS, "dispatch");
+    rig.workflow_with_job();
+    rig.start_and_commit(&[("docs/old.md", None)]);
+    // Another Job deleted the same file on the Lead Branch meanwhile.
+    let lead = rig.repo.dir().to_path_buf();
+    rig.git(&lead, &["rm", "-q", "docs/old.md"]);
+    let out = rig.submit();
+    assert!(out.is_ok(), "a deletion is never refused: {out:?}");
+}
+
+/// `cpd job edit <key> ...` on the draft `d` of Workflow `api`.
+fn edit_draft(rig: &mut Rig, extra: &[&str]) -> Result<crate::output::Output, CpdError> {
+    #[derive(Parser)]
+    struct Wrap {
+        #[command(flatten)]
+        edit: crate::job::EditArgs,
+    }
+    let mut argv = vec!["wrap", "d", "--plan", "pay"];
+    argv.extend_from_slice(extra);
+    let wrap = Wrap::try_parse_from(argv).unwrap();
+    let ports = rig.fakes.ports.clone();
+    Ports::scope(&ports, || {
+        crate::job::edit::edit_in(&mut rig.env, wrap.edit)
+    })
+}
+
+#[test]
+fn job_edit_to_docs_kind_refused_when_local_docs_false() {
+    let mut rig = Rig::new(OWNER_NO_DOCS, "dispatch");
+    rig.workflow_with_job();
+    rig.add_draft("d", "api");
+    refused(
+        edit_draft(&mut rig, &["--kind", "docs"]),
+        "job edit --kind docs",
+    );
+    assert_eq!(
+        rig.count("SELECT count(*) FROM jobs WHERE key = 'd' AND kind = 'docs'"),
+        0
+    );
+}
+
+#[test]
+fn job_edit_move_docs_draft_into_forbidden_workflow_refused() {
+    let mut rig = Rig::new("", "dispatch");
+    rig.workflow_with_job();
+    rig.add_workflow_row("other", "cpd/pay/other");
+    rig.add_draft("d", "other");
+    rig.sql("UPDATE jobs SET kind = 'docs' WHERE key = 'd';");
+    let owner = rig
+        .env
+        .home
+        .config()
+        .parent()
+        .unwrap()
+        .join("policy/acme/owner.toml");
+    std::fs::write(owner, OWNER_NO_DOCS).unwrap();
+    refused(
+        edit_draft(&mut rig, &["--workflow", "api"]),
+        "job edit --workflow of a docs draft",
     );
 }

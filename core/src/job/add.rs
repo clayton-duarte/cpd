@@ -115,16 +115,8 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
             load_workflows(conn, &plan)
         })?;
         let workflow = args.workflow.select(&plan, &docs_workflows)?.key.clone();
-        let local_docs = env.store.read(|conn| {
-            Ok(
-                crate::pr::policy_of_workflow(conn, &env.home, &plan, &workflow)?
-                    .workflow
-                    .local_docs,
-            )
-        })?;
-        if !local_docs {
-            return Err(crate::error::docs_forbidden("A docs Job is refused"));
-        }
+        env.store
+            .read(|conn| check_docs_allowed(conn, &env.home, &plan, workflow.as_str()))?;
     }
     require_tier_and_spec(&args)?;
     let mut spec = args
@@ -753,4 +745,22 @@ pub(crate) fn glob_matches(pattern: &str, path: &str) -> bool {
         &pattern.chars().collect::<Vec<_>>(),
         &path.chars().collect::<Vec<_>>(),
     )
+}
+
+/// A docs Job is refused when the policy of its Workflow's repo sets `workflow.local_docs = false`.
+pub(super) fn check_docs_allowed(
+    conn: &rusqlite::Connection,
+    home: &crate::home::CpdHome,
+    plan: &PlanId,
+    workflow: &str,
+) -> Result<(), CpdError> {
+    let workflow = crate::ids::WorkflowKey::parse(workflow)?;
+    if crate::pr::policy_of_workflow(conn, home, plan, &workflow)?
+        .workflow
+        .local_docs
+    {
+        Ok(())
+    } else {
+        Err(crate::error::docs_forbidden("A docs Job is refused"))
+    }
 }

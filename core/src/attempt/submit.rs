@@ -297,13 +297,33 @@ fn run_checks(
         sha,
     )?;
     if !policy.workflow.local_docs {
+        // An addition is judged against the diff's own baseline, the merge base of `compare` and `sha`, and only
+        // for a path the submitted tree holds: a deletion is never an addition, whatever the Lead tip holds.
         let mut added = Vec::new();
+        let baseline = git::run::run(root, &["merge-base", compare, sha])?;
+        let baseline = baseline.stdout.trim().to_owned();
         for path in git::tamper::changed_paths(root, compare, sha)? {
             if !(path.starts_with("docs/") && path.ends_with(".md")) {
                 continue;
             }
-            let spec = format!("{compare}:{path}");
-            if git::run::run(root, &["rev-parse", "--verify", "--quiet", &spec])?.code == 1 {
+            let in_sha = git::run::run(
+                root,
+                &["rev-parse", "--verify", "--quiet", &format!("{sha}:{path}")],
+            )?
+            .code
+                == 0;
+            let in_base = git::run::run(
+                root,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{baseline}:{path}"),
+                ],
+            )?
+            .code
+                == 0;
+            if in_sha && !in_base {
                 added.push(path);
             }
         }
