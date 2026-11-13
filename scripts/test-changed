@@ -1,11 +1,9 @@
 #!/bin/sh
 # scripts/test-changed [--dry-run] [<base>]: runs the Rust tests that the changed files can reach, which is
 # `cpd test changed` (docs/commands.md §26.1; docs/implementing.md "The scoped loop" is the contract).
-# This is only the bootstrap: it builds cpd with scripts/cargo.sh, takes the newest target/*/cpd, and hands over.
+# Cargo builds and executes this checkout's cpd, including when its target directory is customized.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-scripts/cargo.sh build -q -p cpd >&2 # a no-op when cpd is current: a cpd older than this source has no `cpd test`
-cpd=$(ls -t target/*/cpd | head -n 1)
-exec "$cpd" test changed "$@"
+exec scripts/cargo.sh run -q -p cpd --bin cpd -- test changed "$@"
