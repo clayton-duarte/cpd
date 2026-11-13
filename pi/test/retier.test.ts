@@ -215,3 +215,28 @@ test("the protocol was raised past 8 and session-retiered is a known kind delive
   assert.ok((KINDS as readonly string[]).includes("session-retiered"), "session-retiered is not in KINDS");
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["session-retiered"], undefined, "no message, no turn");
 });
+
+test("retier: a failed session show keeps retier due and reports switch-failed", async (t) => {
+  for (const failure of [
+    () => f0.respond("session-show", { ok: false, error: { code: "session_not_found", message: "no" } }, { exit: 4 }),
+    () => f0.respond("session-show", "", { exit: 0 }),
+  ]) {
+    var f0 = await started(t);
+    failure();
+    f0.emit(retiered(200));
+    await f0.drain();
+    await f0.quiet();
+    assert.deepEqual([f0.pi.modelsSet, f0.pi.thinkingSet], [[], []]);
+    const failed = switchCalls(f0, "switch-failed");
+    assert.equal(failed.length, 1, "the failed show is reported once");
+    assert.ok(flag(failed[0]!, "--code"), "with a --code");
+    assert.ok(flag(failed[0]!, "--message"), "with a --message");
+    assert.equal(flag(failed[0]!, "--session"), ID);
+
+    // retier stayed due: the next idle retries the switch with no new Event
+    f0.respond("session-show", shownO2());
+    await f0.pi.fire("agent_settled");
+    await waitFor("the retried switch", () => switchCalls(f0, "switched").length > 0, WAIT);
+    assert.deepEqual(f0.pi.modelsSet, [{ provider: "p", id: "opus" }]);
+  }
+});

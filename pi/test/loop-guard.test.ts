@@ -609,3 +609,31 @@ test("loop guard intra-turn: a state write resets the turn refusals", async (t) 
   assert.ok(!(await settled(f)).includes(LABEL), "not blocked");
   assert.deepEqual(guardEntries(f), []);
 });
+
+test("loop guard: a clean turn end clears a tripped guard and unblocks", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+  await selfTurn(f, 21);
+  await waitFor("the blocked state", () => stateCalls(f).includes(LABEL));
+
+  await f.pi.fire("agent_end", { messages: [] });
+  await waitFor("unblocked", () => stateCalls(f).at(-1) !== LABEL);
+  assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true, false]);
+  assert.deepEqual(await probe(f), TURNS, "deliveries start turns again");
+});
+
+test("loop guard: a WebUI User message clears the trip and starts a turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await start(f);
+  await selfTurn(f, 21);
+  await waitFor("the blocked state", () => stateCalls(f).includes(LABEL));
+
+  const id = nextId++;
+  f.emit(ev(id, "session-message", { session: ID, data: { from: null, text: "hi", wake: false } }));
+  const sent = await waitFor("the message", () => f.pi.sent.find((s) => (s.message.details as any)?.id === id));
+  assert.deepEqual(sent.options, TURNS, "not downgraded to nextTurn");
+  await waitFor("unblocked", () => stateCalls(f).at(-1) !== LABEL);
+  assert.deepEqual(guardEntries(f).map((e: any) => e.tripped), [true, false]);
+});
