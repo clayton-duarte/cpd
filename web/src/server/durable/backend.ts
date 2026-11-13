@@ -229,7 +229,7 @@ export function createDurableBackend(deps: {
           refuse();
           return;
         }
-        if (frame.approval === true || frame.purpose === "secret_approve") approvals.add(result.id);
+        if (frame.approval === true || frame.purpose === "secret_approve" || frame.purpose === "external_approve" || frame.purpose === "host_approve") approvals.add(result.id);
         dialogs.set(result.id, { dialog: result });
         send({ type: "session.dialog", sessionId, dialog: result });
       };
