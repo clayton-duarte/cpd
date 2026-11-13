@@ -436,6 +436,7 @@ describe("connection outbox", () => {
     const { transport, store, connection } = setup();
     connection.start(); transport.emitStatus("open");
     connection.selectSession("s1");
+    transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities: {}, meta: {} });
     connection.respond("d1", { method: "ask_user_question", outcome: "cancelled" } as never);
     await Promise.resolve();
     transport.emitMessage({ type: "session.error", sessionId: "s1", clientSubmissionId: "d1", error: { code: "internal", message: "pi down" } });
