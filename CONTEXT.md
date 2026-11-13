@@ -431,8 +431,8 @@ _Avoid_: checks (alone)
 A check that refuses an action as it is attempted, as a reply to the call — the explore Worker's tool-call refusals (`φ: <rule>`; contract §6.6) and the red-test guard are instances — one of the ways cpd gates undesired behaviour (the canonical definition in [README.md](README.md)). A guard is not an OS sandbox: it stops mistakes, not a determined agent.
 _Avoid_: sandbox
 
-**Protocol** (mechanism, air-d101):
-A rule the User defines as a procedure that must be followed when it is invoked: it is called with prose, reaches the agent as a skill, and is enforced by commands and hooks that exist as guardrails — one of the protocols cpd's definition names (the canonical definition in [README.md](README.md), line 5; recorded in [docs/adr/0017-protocols.md](docs/adr/0017-protocols.md)). No protocol is enforced by cpd's commands and hooks yet; the bug report protocol is still prose in the manager and lead skills, and Plan `protocol-enforce` brings the protocols up to this definition.
+**Protocol** (mechanism, air-d101; clarified by the User, 2026-11-13):
+A User-defined collection of procedures and methods that must be followed when invoked. The [QA Protocol](docs/qa-protocol.md) is one such collection; it initially runs through Git and GitHub directly, with scripts enforcing its daily creation limits. Delivery as a CPD skill and enforcement by CPD commands and hooks remain separate integration work, rather than prerequisites for calling a collection a Protocol. Definition and placement: [ADR-0018](docs/adr/0018-protocol-collections.md), refining [ADR-0017](docs/adr/0017-protocols.md). CPD's canonical definition remains in [README.md](README.md).
 _Avoid_: convention; protocol (alone, for the pi adapter's wire protocol: commands.md §15)
 
 **Enforcement** (other, air-d86):

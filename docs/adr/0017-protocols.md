@@ -1,9 +1,13 @@
 ---
-status: accepted
+status: superseded
+superseded_by: ADR-0018
 refines: ADR-0016
 ---
 
 # ADR 0017: A protocol's definition lives in the glossary
+
+Superseded by [ADR-0018](0018-protocol-collections.md); the text below preserves
+the original decision. ADR-0018 retains glossary placement and clarifies the definition.
 
 **Accepted, 2026-11-08 (air-d101, air-d85).** The User has defined what a protocol is (air-d101), and cpd's canonical definition (air-d85) names protocols without defining them ("it enforces its protocols through tooling rather than prose", README.md line 5). The word has no home: nothing in the repo says what a protocol is, and the only enforcement of any protocol today is prose in agent skills, which air-d85 says cpd must not rely on. The definition of a protocol is stated once, in the glossary, and every other mention points there.
 
