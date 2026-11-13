@@ -558,6 +558,22 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
                 Err(e) => return crash_end(e, None),
             }
         }
+        // A refactor's coverage baseline holds before any commit is published (§7.6), whatever the Job's kind.
+        {
+            let workflow = workflow_row(store, target)?;
+            let head = git::run::rev_parse(&target.worktree, "HEAD")?;
+            if let Err(error) =
+                crate::pr::coverage_check(store, &policy, &target.plan, &workflow, &head)
+            {
+                if error.code() != ErrorCode::CoverageBelowBaseline {
+                    return Err(error);
+                }
+                return Ok(Stepped::ends(End::Failed {
+                    cause: Failure::GateError,
+                    detail: error.to_string(),
+                }));
+            }
+        }
         // 7. Cancel check again: the last safe point.
         if store
             .read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?

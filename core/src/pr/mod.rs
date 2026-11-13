@@ -420,6 +420,21 @@ fn coverage_gate(
     workflow: &WorkflowRow,
     sha: &str,
 ) -> Result<(), CpdError> {
+    if workflow.shape != "refactor" || policy.coverage_commands.measure.is_none() {
+        return Ok(());
+    }
+    let mut gate_env = Env::open_with(&env.ports)?;
+    coverage_check(&mut gate_env.store, policy, plan, workflow, sha)
+}
+
+/// The stored baseline of a refactor against the coverage measured at `sha`; nothing when the policy measures none.
+pub(crate) fn coverage_check(
+    store: &mut crate::store::Store,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    sha: &str,
+) -> Result<(), CpdError> {
     use rusqlite::OptionalExtension;
     if workflow.shape != "refactor" {
         return Ok(());
@@ -427,8 +442,7 @@ fn coverage_gate(
     let Some(command) = &policy.coverage_commands.measure else {
         return Ok(());
     };
-    let mut gate_env = Env::open_with(&env.ports)?;
-    let stored: Option<(String, String)> = gate_env.store.read(|conn| Ok(conn.query_row(
+    let stored: Option<(String, String)> = store.read(|conn| Ok(conn.query_row(
         "SELECT base_sha, report FROM refactor_coverage_baselines WHERE plan = ?1 AND workflow = ?2",
         [plan.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))
     ).optional()?))?;
@@ -513,6 +527,16 @@ fn gate_checked(
     // Before anything is published (a rebase's included): a refactor's own commits change no test, the base's amended ones excepted.
     {
         let mut guard_env = Env::open_with(&env.ports)?;
+        let repo = std::path::Path::new(&workflow.repo);
+        // The authoritative bases: the local base and the fetched remote base a rebase goes onto, whose amended tests are inherited.
+        let remote = format!(
+            "origin/{}",
+            workflow.head_ref.as_deref().unwrap_or(&workflow.base)
+        );
+        let mut allowed = vec![workflow.base.as_str()];
+        if git::run::rev_parse(repo, &format!("refs/remotes/{remote}")).is_ok() {
+            allowed.push(remote.as_str());
+        }
         guard_env.store.read(|conn| {
             crate::workflow::guard_refactor_tests_allowing(
                 conn,
@@ -521,7 +545,7 @@ fn gate_checked(
                 std::path::Path::new(&workflow.repo),
                 &workflow.base,
                 sha,
-                &[workflow.base.as_str()],
+                &allowed,
             )
         })?;
     }
