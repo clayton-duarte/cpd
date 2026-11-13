@@ -96,4 +96,11 @@ impl PollRun {
     pub(super) fn wait(&mut self) -> Option<Finished> {
         self.result.take()?.recv().ok()
     }
+
+    /// Shutdown's bounded wait: the result when the poll ends within 5 s of `clock`, else `None` and the poll is
+    /// abandoned. Stub: a later Job.
+    #[allow(dead_code)] // stub: used by the implementation
+    pub(super) fn shutdown(&mut self, _clock: Arc<dyn Clock>) -> Option<Finished> {
+        todo!("the bounded shutdown wait")
+    }
 }

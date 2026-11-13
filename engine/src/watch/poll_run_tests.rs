@@ -89,3 +89,26 @@ fn the_poll_output_reaches_the_engine_unchanged_so_the_rebind_is_the_polls_own()
     let finished = run.wait().expect("the finished poll");
     assert_eq!(finished.result.expect("the job's result"), out);
 }
+
+#[test]
+fn shutdown_abandons_stuck_poll_after_bound() {
+    // time-claim: the bound is 5 s on a manual clock; the poll never finishes.
+    let clock = std::sync::Arc::new(cpd_core::clock::ManualClock::new());
+    let (release, mut run) = {
+        let (tx, rx) = channel::<()>();
+        let run = PollRun::start_on(clock.clone(), move || {
+            let _ = rx.recv();
+            Ok(json!({}))
+        });
+        (Release(tx), run)
+    };
+    let finished = run.shutdown(clock.clone());
+    let waited = clock.elapsed();
+    drop(release);
+    assert!(finished.is_none(), "the stuck poll is abandoned");
+    assert!(
+        waited <= std::time::Duration::from_secs(5),
+        "shutdown waited {waited:?}"
+    );
+    assert!(run.wait().is_none(), "the abandoned poll is gone");
+}

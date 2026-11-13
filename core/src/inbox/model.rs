@@ -351,6 +351,22 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
     Ok(!shared)
 }
 
+/// `run/watch-stopped`: the stop stamp the engine writes when it stops, one RFC 3339 UTC time. Stub path.
+#[must_use]
+pub fn engine_stop_stamp(home: &CpdHome) -> std::path::PathBuf {
+    home.run_dir().join("watch-stopped")
+}
+
+/// When the engine went down, from the stop stamp (RFC 3339 UTC); `None` without a stamp. Stub: a later Job.
+pub fn engine_down_since(_home: &CpdHome) -> Result<Option<String>, CpdError> {
+    Ok(None)
+}
+
+/// Why the engine is down: `Some("install")` while `run/cpd-install.json` says `restarting`. Stub: a later Job.
+pub fn engine_restart_reason(_home: &CpdHome) -> Result<Option<&'static str>, CpdError> {
+    Ok(None)
+}
+
 /// The one-line form of a two-row label (pro-d171), as every Event text names an item: Row 1 and Row 2 joined with `: `;
 /// just Row 1 when Row 2 is empty.
 #[must_use]
