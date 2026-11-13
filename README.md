@@ -86,6 +86,10 @@ State lives in `$CPD_HOME`, default `~/.cpd`: the database `cpd.db` (with its `-
 
 ## Gate
 
+The continuous repository QA process, its operating limits and creation
+tools are documented in [QA workflow](docs/qa-workflow.md), with the
+[decisions and research](docs/qa-decisions.md) behind it.
+
 ```sh
 pnpm run verify
 ```
