@@ -225,3 +225,46 @@ fn resume_refuses_a_durable_session_before_any_side_effect() {
     assert!(pane_starts(&w).is_empty(), "no pane: {:?}", pane_starts(&w));
     assert_eq!(count(&mut w, "SELECT count(*) FROM events"), 0, "no Event");
 }
+
+#[test]
+fn resume_replacing_the_wrapper_in_the_chat_slot_keeps_the_chat_slot() {
+    let w = world();
+    let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
+    let (_, placeholder) = tmux
+        .create_session("cpd", "main", &super::moves::placeholder_spawn())
+        .unwrap()
+        .unwrap();
+    tmux.set_pane_view(&placeholder, crate::host::View::Chat)
+        .unwrap();
+    try_cpd(&w, &["resume", "stopped1"]).unwrap();
+    // The wrapper (pi exited) holds the chat slot: swapped into cpd:main.
+    let wrapper = tmux
+        .list_panes()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.cpd_session.is_some())
+        .unwrap()
+        .pane;
+    tmux.swap_pane(&wrapper, &placeholder).unwrap();
+    let slot =
+        |panes: &[crate::host::Pane]| crate::host::chat_slot(panes, "cpd").map(|p| p.pane.clone());
+    assert_eq!(slot(&tmux.list_panes().unwrap()), Some(wrapper.clone()));
+
+    try_cpd(&w, &["resume", "stopped1"]).unwrap();
+
+    let panes = tmux.list_panes().unwrap();
+    assert!(
+        slot(&panes).is_some(),
+        "the chat slot still exists: {panes:?}"
+    );
+    assert!(
+        panes.iter().all(|p| p.pane != wrapper),
+        "the old wrapper is gone"
+    );
+    assert!(
+        panes
+            .iter()
+            .any(|p| !p.dead && p.cpd_session.is_some() && Some(&p.pane) != slot(&panes).as_ref()),
+        "the restarted pi runs parked"
+    );
+}
