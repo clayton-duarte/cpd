@@ -315,7 +315,11 @@ impl GithubSource {
             endpoint::pause_until(cx.store, "github", reset)?;
         }
         endpoint::record_ok(cx.store, "github", now)?;
-        self.commit(cx, &plan, read, now, poll_started_at)
+        let committed = self.commit(cx, &plan, read, now, poll_started_at)?;
+        // A mutation whose target this poll never refetched (a PR outside the poll scope) settles here: the poll
+        // started after its completion, so it has seen the write.
+        cache::settle_completed_for(cx.store, "github", poll_started_at)?;
+        Ok(committed)
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint

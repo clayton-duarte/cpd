@@ -237,8 +237,32 @@ pub fn settle(
 /// Settle every `revalidating` mutation completed at or before `poll_started_at`, whatever its
 /// target key (a poll that started after the completion has seen the write; no key refetch needed).
 pub fn settle_completed(
-    _store: &mut Store,
-    _poll_started_at: OffsetDateTime,
+    store: &mut Store,
+    poll_started_at: OffsetDateTime,
 ) -> Result<usize, CpdError> {
-    Ok(0)
+    settle_where(store, None, poll_started_at)
+}
+
+/// [`settle_completed`] for one system's mutations: that system's poll proves only its own writes.
+pub fn settle_completed_for(
+    store: &mut Store,
+    system: &str,
+    poll_started_at: OffsetDateTime,
+) -> Result<usize, CpdError> {
+    settle_where(store, Some(system), poll_started_at)
+}
+
+fn settle_where(
+    store: &mut Store,
+    system: Option<&str>,
+    poll_started_at: OffsetDateTime,
+) -> Result<usize, CpdError> {
+    let started = timestamp(poll_started_at);
+    store.write("swr settle completed", |tx| {
+        Ok::<usize, CpdError>(tx.execute(
+            "UPDATE swr_mutations SET status = 'done'
+             WHERE status = 'revalidating' AND completed_at <= ?1 AND (?2 IS NULL OR system = ?2)",
+            params![started, system],
+        )?)
+    })
 }
