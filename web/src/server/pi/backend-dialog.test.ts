@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { SessionRef } from "../../protocol/domain.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DialogResponse, SessionRef } from "../../protocol/domain.ts";
 import type { Disposable, GitBoundary } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
@@ -8,6 +8,13 @@ import type { Cpd } from "../cockpit/cli.ts";
 import type { SessionHandle } from "../hub/connection.ts";
 import type { WatchBoundary } from "./watch.ts";
 import type { FileBoundary } from "./window.ts";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const enc = new TextEncoder();
 const FILE = "/s/s1.jsonl";
@@ -84,9 +91,63 @@ const rejects = async (p: Promise<unknown>) => {
 const reviewLine = (n: string) =>
   JSON.stringify({ type: "custom", id: `r${n}`, customType: "cpd-plan-review", data: { review: n, status: "pending" } });
 const REVIEW_TEXT = `${reviewLine("7")}\n`;
+const ASK_TEXT = `${JSON.stringify({
+  type: "message",
+  id: "ask",
+  message: {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "q1", name: "ask_user_question", arguments: {
+      questions: [{ header: "Choice", question: "Proceed?", options: [
+        { label: "Yes", description: "Continue" }, { label: "No", description: "Stop" },
+      ] }],
+    } }],
+  },
+})}\n`;
+const ANSWER: DialogResponse = { method: "ask_user_question", outcome: "answered", result: {
+  answers: [{ questionIndex: 0, question: "Proceed?", kind: "option", answer: "Yes" }],
+  cancelled: false,
+} };
+const CANCEL: DialogResponse = { method: "ask_user_question", outcome: "cancelled" };
 const decide = (n: string, flag: string[]) => ["plan", "decide", n, ...flag, "--plan", "plan"];
 
 describe("pi backend plan review dialogs", () => {
+  it.each([ANSWER, CANCEL])("keeps $outcome unresolved while the response write is pending", async (response) => {
+    const s = await setup({ text: ASK_TEXT });
+    expect(s.out).toContainEqual(expect.objectContaining({ type: "session.dialog", dialog: expect.objectContaining({ id: "call:q1" }) }));
+    let finishWrite!: () => void;
+    const delivery = new Promise<void>((resolve) => { finishWrite = resolve; });
+    vi.spyOn(s.fs, "write").mockReturnValueOnce(delivery);
+    const responded = s.handle.respond("call:q1", response);
+    try {
+      expect(s.out.filter((m) => m.type === "session.dialogResolved")).toEqual([]);
+    } finally {
+      finishWrite();
+      await responded;
+    }
+    expect(s.out.filter((m) => m.type === "session.dialogResolved")).toEqual([
+      { type: "session.dialogResolved", sessionId: "s1", dialogId: "call:q1", outcome: response.outcome },
+    ]);
+    await s.handle.dispose();
+  });
+
+  it.each([ANSWER, CANCEL])("keeps failed $outcome delivery retryable without premature resolution", async (response) => {
+    const s = await setup({ text: ASK_TEXT });
+    vi.spyOn(s.fs, "write").mockRejectedValueOnce(new Error("disk full"));
+    await expect(s.handle.respond("call:q1", response)).rejects.toThrow("disk full");
+    expect(s.out.filter((m) => m.type === "session.dialogResolved")).toEqual([]);
+    expect(s.fs.writes).toEqual([]);
+
+    await s.handle.respond("call:q1", response);
+    expect(s.fs.writes).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode(s.fs.writes[0]?.bytes))).toEqual({
+      dialogId: "call:q1", result: response.outcome === "answered" ? response.result : { answers: [], cancelled: true },
+    });
+    expect(s.out.filter((m) => m.type === "session.dialogResolved")).toEqual([
+      { type: "session.dialogResolved", sessionId: "s1", dialogId: "call:q1", outcome: response.outcome },
+    ]);
+    await s.handle.dispose();
+  });
+
   it("a cancelled ask_user_question answer resolves cancelled and goes to the ask answer file", async () => {
     const s = await setup({ text: REVIEW_TEXT });
     await s.handle.respond("call:q1", { method: "ask_user_question", outcome: "cancelled" });
