@@ -30,6 +30,23 @@ pub struct ReplyArgs {
     body_file: Option<PathBuf>,
 }
 
+#[cfg(test)]
+impl ReplyArgs {
+    pub(super) fn for_test(plan: &str, workflow: &str, to: &str, body: &str) -> ReplyArgs {
+        ReplyArgs {
+            workflow: WorkflowArg {
+                workflow: Some(crate::ids::WorkflowKey::parse(workflow).unwrap()),
+            },
+            plan: PlanArg {
+                plan: Some(crate::ids::PlanId::parse(plan).unwrap()),
+            },
+            to: to.into(),
+            body: Some(body.into()),
+            body_file: None,
+        }
+    }
+}
+
 fn usage(message: &str) -> CpdError {
     CpdError::new(ErrorCode::Usage, message)
 }
@@ -73,6 +90,10 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         .pull_request
         .expect("an open Workflow has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
+    // Stub (red tests): the impl Job restores the lookup for a stored list and enqueues node ids when it is NULL.
+    if pull.feedback.is_some() {
+        todo!("refuse an id absent from the stored feedback");
+    }
     let list = pull.feedback.unwrap_or_default();
     let Some(item) = list.iter().find(|i| i.id == args.to) else {
         let open: Vec<&str> = list.iter().map(|i| i.id.as_str()).collect();
