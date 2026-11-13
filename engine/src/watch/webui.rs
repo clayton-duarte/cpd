@@ -375,9 +375,7 @@ fn read_process_command(runner: &dyn Runner, pid: u32) -> Option<String> {
 /// - `webui-preview` on 33333: command line running `vite`
 fn is_same_service(kind: ServiceKind, cmd: &str) -> bool {
     match kind {
-        ServiceKind::Prod => {
-            cmd.contains("web/src/server/serve.ts") || cmd.contains("serve-prod.mjs")
-        }
+        ServiceKind::Prod => cmd.contains("src/server/serve.ts") || cmd.contains("serve-prod.mjs"),
         ServiceKind::Preview => cmd.contains("vite"),
     }
 }
@@ -494,7 +492,13 @@ fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError>
         ServiceKind::Preview => (
             "pnpm".to_owned(),
             vec!["run".to_owned(), "dev".to_owned()],
-            preview_worktree_path(&engine.home),
+            preview_worktree_path(&engine.home).map(|p| {
+                if p.join("web/package.json").exists() {
+                    p.join("web")
+                } else {
+                    p
+                }
+            }),
         ),
     };
 

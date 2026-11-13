@@ -36,12 +36,13 @@ Two different lookups exist. They do not share a source.
 The engine takes the first candidate that exists (`engine/src/watch/webui.rs`, `preview_worktree_path`):
 
 1. `$CPD_WEB_PREVIEW_WORKTREE`, when set and it exists.
-2. `<CPD_HOME>/projects/cpd.preview.web`
-3. `<CPD_HOME>/../cpd.preview.web`
-4. `<CPD_HOME>/projects/cpd.preview`
-5. `<CPD_HOME>/run/preview-web`
+2. The checkout's parent plus `cpd.preview.web`, when a checkout is found.
+3. `<CPD_HOME>/projects/cpd.preview.web`
+4. `<CPD_HOME>/../cpd.preview.web`
+5. `<CPD_HOME>/projects/cpd.preview`
+6. `<CPD_HOME>/run/preview-web`
 
-When a candidate is found, the preview service is supervised. It starts `pnpm run dev` with the working directory set to that candidate.
+When a candidate is found, the preview service is supervised. It starts `pnpm run dev`. The working directory is set to the candidate; if `web/package.json` exists in the candidate, the working directory is set to `<candidate>/web` instead, so `pnpm run dev` runs the dev script from the web subdirectory.
 
 `cpd install` creates the worktree at `$CPD_WEB_PREVIEW_WORKTREE`, or else at the checkout's parent plus `cpd.preview.web` (`core/src/install/worktree.rs`). With the default `CPD_HOME`, candidates 2 to 5 do not match that path. The engine finds the worktree only through `CPD_WEB_PREVIEW_WORKTREE`, if the engine's environment sets it. Whether it does in a live install is not verified.
 
@@ -56,7 +57,7 @@ When a candidate is found, the preview service is supervised. It starts `pnpm ru
   5. No child pid: start.
 - Start:
   1. Find the port holder with `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fpcn`, falling back to `ss -H -ltnp 'sport = :<port>'`.
-  2. If a holder exists, read its command line with `ps -o command= -p <pid>`. It is the same service when the command line contains `web/src/server/serve.ts` or `serve-prod.mjs` (prod), or `vite` (preview). The same service gets a takeover. Anything else, or an unreadable command line, is refused.
+  2. If a holder exists, read its command line with `ps -o command= -p <pid>`. It is the same service when the command line contains `web/src/server/serve.ts`, `src/server/serve.ts`, or `serve-prod.mjs` (prod), or `vite` (preview). The same service gets a takeover. Anything else, or an unreadable command line, is refused.
   3. Spawn. Output goes to `run/webui-prod.log` or `run/webui-preview.log`.
 - Takeover: send `SIGTERM` to the holder, then poll the port with 100 ms sleeps for 10 iterations. If the port clears, spawn. If it does not, raise a `port_in_use` error Event and do not spawn. Nothing is sent `SIGKILL`.
 - Refusal: a non-matching holder raises a `port_in_use` error Event, naming the process and PID, and the message is `Port <port> is in use by <process> (PID <pid>). Exiting.` (or `... by an unknown process. Exiting.` when neither tool names the holder). The message describes the port refusal only; the engine process does not exit.
@@ -75,7 +76,7 @@ Each row is a decided or documented rule, and what the code does at base `b8021c
 
 | Rule (source) | Code |
 |---|---|
-| The engine resolves the preview worktree from app-root and the checkout, `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` (`web/CONTRACT.md` §31.1, `docs/ui-preview.md`) | The engine does not read app-root and does not know the checkout. It searches the five candidates above, none of which is the checkout's parent. |
+| The engine resolves the preview worktree from app-root and the checkout, `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` (`web/CONTRACT.md` §31.1, `docs/ui-preview.md`) | The engine does not read app-root. It searches the six candidates above; candidate 2 is the checkout's parent when a checkout is found. |
 | Prod and preview are supervised from the checkout (`docs/architecture/webui-supervision.md`) | Prod runs from `<CPD_HOME>`, and is supervised only if `<CPD_HOME>/web/src/server/serve.ts` exists. |
 | Takeover waits up to 10 seconds (`docs/architecture/webui-supervision.md`, "Takeover of port holders") | The poll is 10 × 100 ms, so about 1 second. |
 | The preview holder is the same service when it runs `vite` whose working directory is the preview worktree (`docs/architecture/webui-supervision.md`) | Any command line containing `vite` matches. The working directory is not checked. |
