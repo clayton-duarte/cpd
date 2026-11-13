@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::functions::FunctionFlags;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
@@ -132,8 +132,11 @@ fn stamp(at: OffsetDateTime) -> String {
         .expect("a UTC time always formats")
 }
 
-/// Copies the live store files (db, -wal, -shm) to `dest_dir`.
-fn copy_store_files(db: &Path, dest_dir: &Path) -> Result<(), CpdError> {
+/// Takes a consistent SQLite snapshot, including committed WAL data. The
+/// destination is reserved exclusively so an earlier rollback artifact survives.
+fn snapshot_store(db: &Path, dest_dir: &Path) -> Result<(), CpdError> {
+    let source = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(CpdError::from)?;
     fs::create_dir_all(dest_dir).map_err(|e| {
         CpdError::new(
             ErrorCode::Internal,
@@ -141,19 +144,23 @@ fn copy_store_files(db: &Path, dest_dir: &Path) -> Result<(), CpdError> {
         )
     })?;
 
-    for suffix in ["", "-wal", "-shm"] {
-        let mut from = db.to_path_buf().into_os_string();
-        from.push(suffix);
-        let from = PathBuf::from(from);
-        if from.is_file() {
-            let to = dest_dir.join(from.file_name().unwrap_or_default());
-            fs::copy(&from, &to).map_err(|e| {
-                CpdError::new(
-                    ErrorCode::Internal,
-                    format!("Cannot copy {} to {}: {e}", from.display(), to.display()),
-                )
-            })?;
-        }
+    let to = dest_dir.join(db.file_name().unwrap_or_default());
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    drop(options.open(&to).map_err(|e| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("Cannot reserve snapshot {}: {e}", to.display()),
+        )
+    })?);
+    if let Err(error) = source.backup(rusqlite::MAIN_DB, &to, None) {
+        let _ = fs::remove_file(&to);
+        return Err(CpdError::from(error));
     }
     Ok(())
 }
@@ -161,7 +168,7 @@ fn copy_store_files(db: &Path, dest_dir: &Path) -> Result<(), CpdError> {
 /// Backs up the store to `$CPD_HOME/run/backups/<ts>/cpd.db`.
 pub fn backup_store(home: &CpdHome, ts: &str) -> Result<PathBuf, CpdError> {
     let backup_dir = home.root().join("run/backups").join(ts);
-    copy_store_files(&home.db(), &backup_dir)?;
+    snapshot_store(&home.db(), &backup_dir)?;
     Ok(backup_dir.join("cpd.db"))
 }
 
@@ -438,7 +445,7 @@ pub fn dry_run_on_copy(
         .root()
         .join(format!("run/scratch-repair-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch_dir);
-    copy_store_files(&home.db(), &scratch_dir)?;
+    snapshot_store(&home.db(), &scratch_dir)?;
 
     let scratch_db = scratch_dir.join(home.db().file_name().unwrap_or_default());
     let res = (|| -> Result<(), CpdError> {

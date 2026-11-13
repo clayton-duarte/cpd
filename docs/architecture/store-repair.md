@@ -93,7 +93,7 @@ Today host repair runs none of this (see Current state). Install's dry run is th
 
 Proposed (A3), in the order the Job lists them:
 
-- **Backup.** Before the live write, copy `cpd.db`, `-wal` and `-shm` to `$CPD_HOME/run/backups/<ts>/`, where `<ts>` is UTC `YYYYMMDDTHHMMSSZ` as host repair already stamps. This is distinct from `run/cpd-install-backups/`, which holds the checkout patch. The backup is taken after the dry run passes and before the transaction opens.
+- **Backup.** Before the live write, take a consistent SQLite online-backup snapshot at `$CPD_HOME/run/backups/<ts>/cpd.db`, where `<ts>` is UTC `YYYYMMDDTHHMMSSZ` as host repair already stamps. This is distinct from `run/cpd-install-backups/`, which holds the checkout patch. The backup is taken after the dry run passes and before the transaction opens.
 - **Confirmation.** The repair asks the User at a terminal to confirm, showing the migration name, both checksums and the backup path, and continues only on an explicit yes. Not decided: whether this replaces or adds to the Session approval file that `cpd host approve` writes today (10 minutes, one repair, `approval::live`). Neither is built.
 - **Transaction.** The repair insert and any migration step run in one `BEGIN IMMEDIATE` transaction. A failure before commit drops it and the store is unchanged. Failure after commit leaves the repair row in place; that is the ledger working as designed.
 
@@ -102,7 +102,7 @@ Proposed (A3), in the order the Job lists them:
 Proposed. The ledger cannot be edited, so rollback restores the backup.
 
 1. Stop every writer of the store. Not decided: the exact stop command. Do not rely on this list being complete until it is written in the implementation.
-2. Replace `cpd.db`, `cpd.db-wal` and `cpd.db-shm` with the copies in `$CPD_HOME/run/backups/<ts>/`. The restored store has no repair row.
+2. Move the live `cpd.db`, `cpd.db-wal` and `cpd.db-shm` aside together, then restore only the snapshot `cpd.db` from `$CPD_HOME/run/backups/<ts>/`. Never combine the restored snapshot with old live sidecars. The restored store has no repair row.
 3. Check the result with `cpd --version`, which runs the read-only verdict and migrates nothing (verified in `cli/src/cli.rs`).
 4. If the checksum is still refused, restore the migration's file from `origin/main`, as the `migration_changed` message says.
 
@@ -165,9 +165,9 @@ Three points specific to cpd:
 The steps, in order, as `cpd host repair` runs them:
 
 1. **Detect.** Diverged migrations (`detect_divergences`) and drifted tables (the schema comparison above). Nothing drifted: no store keys in the output, as today.
-2. **Copy dry run.** `cpd.db`, `-wal` and `-shm` are copied to `run/scratch-repair-<pid>/`. The 12-step rebuild of every drifted table and the `schema_migration_repairs` insert run on the copy. The copy must then pass the checks the migrate path runs before commit (`migrate_in_txn`): `foreign_key_check` is empty, and the schema comparison matches main's expected schema. The copy is removed on success and on failure. The live store is not touched.
+2. **Copy dry run.** A consistent SQLite online-backup snapshot is created at `run/scratch-repair-<pid>/cpd.db`. The 12-step rebuild of every drifted table and the `schema_migration_repairs` insert run on the copy. The copy must then pass the checks the migrate path runs before commit (`migrate_in_txn`): `foreign_key_check` is empty, and the schema comparison matches main's expected schema. The copy is removed on success and on failure. The live store is not touched.
 3. **Confirmation.** The command lists each diverged migration (name, recorded and accepted checksum) and each drifted table, then the backup path it will write. `-y` or `--yes` confirms. Otherwise it asks `[y/N]`, and only an explicit yes continues. Answering N refuses before any write.
-4. **Backup.** `cpd.db`, `-wal` and `-shm` are copied to `$CPD_HOME/run/backups/<ts>/` (`<ts>` UTC `YYYYMMDDTHHMMSSZ`), before the live transaction opens. The backup is distinct from `run/cpd-install-backups/`.
+4. **Backup.** A consistent SQLite online-backup snapshot is created at `$CPD_HOME/run/backups/<ts>/cpd.db` (`<ts>` UTC `YYYYMMDDTHHMMSSZ`), before the live transaction opens. The backup is distinct from `run/cpd-install-backups/`.
 5. **Apply to the live store.** One `BEGIN IMMEDIATE` transaction runs the same rebuilds and the same `schema_migration_repairs` insert as the copy, then the same checks, then commits. A failure before commit rolls the transaction back, and the live store is unchanged. The live run uses the same code path as the copy, so the copy's result is the live result, not a second implementation.
 
 The copy run is the only gate before the live write. A live apply that skipped the checks of step 2 would be a defect, not a shortcut.
@@ -182,3 +182,29 @@ The rebuilds are in the transaction, so a failure before commit needs no restore
 - **Not decided: the `reason` text** for the rebuilt tables' ledger rows. Today it is `cpd host repair`.
 - **Observed, unverified by running: no store lock.** `repair.rs` takes no store lock, unlike `migrate` (`settled_setup_lock`). A rebuild in a repair that runs beside a writer may conflict. The rebuild needs the lock or a busy-timeout rule before implementation.
 - **Observed, unverified by running: the next txn id is read before `BEGIN`** (`repair.rs`, `apply_repair_in_txn`). A concurrent writer can take the same id. The rebuild's transaction must read it inside `BEGIN IMMEDIATE`.
+
+## Consistent repair snapshots (QA #1120)
+
+Repair backups and scratch copies use SQLite's online backup API through the
+existing rusqlite dependency's `backup` feature. The source is opened read-only;
+SQLite includes committed WAL data in the snapshot, without separately copying
+a live WAL or SHM file. The returned database file can be restored independently.
+An existing destination is refused rather than overwritten, and a missing
+source is an error. A failed backup is not returned as a successful artifact.
+
+This supersedes the raw three-file copy method in earlier versions of this
+document. SQLite documents both the [copying risk](https://www.sqlite.org/howtocorrupt.html#_backup_or_restore_while_a_transaction_is_active)
+and the [online backup API](https://www.sqlite.org/backup.html).
+`VACUUM INTO` is another safe snapshot option, but vacuums/reorganizes the copy;
+the backup API preserves the existing database-image backup intent and does not
+require new libraries. Its existing rusqlite convenience method returns an
+error on busy/locked outcomes instead of introducing an unbounded retry loop.
+Sources inspected 2026-11-13: rusqlite 0.40.2 `src/backup.rs`,
+[versioned documentation](https://docs.rs/rusqlite/0.40.2/rusqlite/struct.Connection.html#method.backup),
+and [issue #1120](https://github.com/clayton-duarte/cpd/issues/1120).
+
+Stop all processes using the live store before restoring. Move aside the whole
+old database/WAL/SHM set and restore the standalone snapshot, then validate it
+before resuming. This changes repair snapshots only; upgrade's separate backup
+implementation is not implicitly covered. No live-host repair is performed by
+this change.
