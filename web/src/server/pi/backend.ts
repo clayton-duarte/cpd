@@ -66,7 +66,8 @@ interface ShowStats {
   readonly error?: string;
 }
 
-const isBusy = (f: JsonlFacts): boolean =>
+/** `state` is the engine session state; a stub for now: behaviour is unchanged. */
+export const isBusy = (f: JsonlFacts, _state?: string): boolean =>
   f.lastRole === "user" ||
   f.lastRole === "toolResult" ||
   (f.lastRole === "assistant" && (f.lastStopReason === "toolUse" || f.lastStopReason === "pending"));

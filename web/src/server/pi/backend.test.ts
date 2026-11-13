@@ -4,7 +4,8 @@ import { PI_SEND_TEXT_MAX } from "../../protocol/domain.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
-import { createPiBackend } from "./backend.ts";
+import { createPiBackend, isBusy } from "./backend.ts";
+import type { JsonlFacts } from "./jsonl.ts";
 import type { GitBoundary } from "../../protocol/runtime.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import type { SessionHandle } from "../hub/connection.ts";
@@ -327,5 +328,15 @@ describe("pi backend", () => {
     expect(errs[0]?.error.code).toBe("session_file_missing");
     expect(s.scheduler.pending()).toBe(0);
     await s.handle.dispose();
+  });
+});
+
+describe("isBusy", () => {
+  const facts = { lastRole: "toolResult" } as JsonlFacts;
+  it("isBusy is false when the session is stopped and the transcript ends on a toolResult", () => {
+    expect(isBusy(facts, "stopped")).toBe(false);
+  });
+  it("isBusy is still true when the session is working and the transcript ends on a toolResult", () => {
+    expect(isBusy(facts, "working")).toBe(true);
   });
 });
