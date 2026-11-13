@@ -944,3 +944,25 @@ fn a_304_deploys_read_still_commits_changed_rows_and_records_ok() {
     );
     assert_eq!(last_ok(&mut rig), Some(timestamp(rig.t0)), "ok is recorded");
 }
+
+#[test]
+fn a_deploys_rate_limit_pauses_until_the_rest_reset_not_the_graphql_one() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let rest_reset = rig.t0 + time::Duration::seconds(120);
+    let stdout = format!(
+        "HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Reset: {}\r\n\r\n{{\"message\":\"API rate limit exceeded\"}}",
+        rest_reset.unix_timestamp()
+    );
+    *handler.deploys.lock().unwrap() = Reply::exit(1, &stdout, "gh: HTTP 403\n");
+    let error = rig.pass(10).unwrap_err();
+    assert_eq!(error.details()["rate_limited"], true);
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(
+        row.paused_until,
+        Some(rest_reset + time::Duration::seconds(3)),
+        "the REST reset plus grace, earlier than the stored GraphQL reset"
+    );
+}
