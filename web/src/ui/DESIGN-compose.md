@@ -28,6 +28,54 @@ What ChatPane passes (source field → prop):
 
 ---
 
+## 0.1 Plan review dialog layout contract
+
+Status: **decided** (pro-d776, 2026-11-13). The layout of the ChatPane when a Plan review dialog is pending, and how the dialog is cleared.
+
+### A1: Layout while pending
+
+While a `cpd_plan_review` dialog is pending in the open session, the ChatPane displays in the following order, top to bottom:
+
+1. **ChatHeader**: kept visible at the top (DESIGN-chat §1)
+2. **PlanReviewCard**: the review card fills the remaining pane height with `flex-1 min-h-0`; the card is the only flexible child
+3. **Transcript and Composer**: hidden (not rendered or display none)
+
+Inside the PlanReviewCard (DESIGN-compose §5.3):
+
+- **header row and actions** (the title, subtitle, previous, stats, and buttons): remain always visible
+- **body (summary and sections)**: scrollable through `ScrollArea[data-part="body"]`, with `max-h-60` constraint on the summary section as initially rendered; the height grows to accommodate expanded sections
+
+The main `main[aria-label="Chat"]` layout is `flex flex-col min-h-0`; ChatHeader is `shrink-0`; PlanReviewCard is `flex-1 min-h-0`.
+
+### A2: Dismissal and return
+
+No new dismiss UI is added. The dialog is cleared by exactly two means:
+
+1. **User action**: one of the three buttons on the card (Approve & lock, Reject plan, Request changes + Send feedback). The User must complete the flow to close the dialog.
+2. **Server action**: the server sends `session.dialogResolved`, which clears `view.dialog` on the client, and the card unmounts. The Transcript and Composer return.
+
+When the dialog is cleared by either means, the Transcript and Composer are shown again in their original position below ChatHeader (section 0 layout).
+
+### A3: Other dialog methods
+
+Other dialog methods (`ask_user_question`, `secret_approve`, `host_approve`, and any future dialog methods) use the same layout rule as today: the dialog card replaces the Composer while pending, and ChatHeader and Transcript remain visible. The `max-h-60` constraint of A1 applies only to the Plan review's summary section; other dialog types have no such constraint.
+
+The rule holds for all dialog methods: `view.dialog` is non-null ⇒ dialog card shown, Composer hidden; `view.dialog` is null ⇒ Composer shown, no card.
+
+### A4: Review root layout
+
+The PlanReviewCard root is a plain column, never an Item or Card: `section[data-dialog="cpd_plan_review"]` with `className="flex min-h-0 flex-1 flex-col"`. No border, no margin, no radius. The one border is the pane's border, inherited from its parent. The card itself is borderless and spans the full width and height of the pane.
+
+### A5: Single scroll region
+
+The review card has exactly one scroll region, the body (summary and sections). The body is `ScrollArea[data-part="body"]` with `min-h-0 flex-1 overflow-y-auto` (or, when using ScrollArea, every ancestor from the body to the pane root is `min-h-0` in a `flex flex-col`). The header row (title, subtitle, stats) and the action buttons are `shrink-0` and always visible; they do not scroll.
+
+### A6: Verification
+
+With jsdom (unit tests), the class structure (the presence of `flex`, `min-h-0`, `flex-1`, `overflow-y-auto`, `shrink-0`) is pinned by the test assertions. With a real-layout Playwright Electron spec (`web/src/testing/e2e-*.spec.ts`), computed boxes (the header height, body height, body scroll height) and whether the body scrolls (overflow visible vs. scroll) are pinned by visual measurements.
+
+---
+
 ## 1. Composer
 
 File `web/src/ui/composer/Composer.tsx`. Exports `Composer` and `ComposerHandle` (`{ addFiles(files: readonly FileLike[]): Promise<void> }`, KEPT). Built from the shadcn `InputGroup` parts (`web/src/ui/components/input-group.tsx`, DESIGN.md 2f), in the AI Elements `PromptInput` slot layout: header, body, footer. There is no separate `PromptInput` module.

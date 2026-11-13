@@ -34,6 +34,19 @@ const setup = () => {
 };
 
 describe("connection", () => {
+  it("reselecting an errored session retries a transient failed attach", () => {
+    const { connection, transport, store } = setup();
+    connection.start();
+    transport.emitStatus("open");
+    connection.selectSession("s1");
+    transport.emitMessage({ type: "session.error", sessionId: "s1", error: { code: "host_unreachable", message: "offline" } });
+    expect(store.getState().session?.attached).toBe(false);
+    transport.sent.length = 0;
+    connection.selectSession("s1");
+    expect(transport.sent).toEqual([{ type: "session.attach", sessionId: "s1" }]);
+    expect(store.getState().session?.error).toBeNull();
+  });
+
   it("connect subscribes to the cockpit and reattaches the selected session", () => {
     const { transport, store, connection } = setup();
     connection.start();

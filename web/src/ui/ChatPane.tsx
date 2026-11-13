@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DragEvent, ReactElement } from "react";
 import type { Connection } from "../state/connection.ts";
 import type { SessionView } from "../state/store.ts";
+import { Button } from "./components/button.tsx";
 import { ChatHeader } from "./chat/ChatHeader.tsx";
 import { Transcript } from "./chat/Transcript.tsx";
 import { buildPrompt, filesFromDrop } from "./composer/attachments.ts";
@@ -41,10 +42,17 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
   const { dialog } = view;
   const toggles = useChatToggles();
   const sessionKey = view.ref?.key ?? view.id;
+  const planReview = dialog?.method === "cpd_plan_review";
   const isBusy = view.busy || view.pending.some((p) => p.state === "sending");
   return (
     <div
       data-chat-dropzone
+      className={planReview ? "flex min-h-0 flex-1 flex-col" : undefined}
+      onKeyDown={(e) => {
+        // The Composer handles (and prevents) its own Escape; this covers a dialog or focus outside the textarea.
+        if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing) return;
+        if (isBusy && view.capabilities?.abort?.supported) connection.abort();
+      }}
       onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
       onDrop={(e) => {
         if (!hasFiles(e)) return;
@@ -59,7 +67,15 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         completion={view.completion ?? null}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
       />
-      <Transcript
+      {!view.attached && view.error !== null ? (
+        <div data-attach-status role="status" className="flex items-center gap-2 px-4 py-2 text-sm text-destructive">
+          <span>{view.error.code}: {view.error.message}</span>
+          <Button type="button" variant="outline" size="sm" data-action="retry" onClick={() => connection.selectSession(view.id)}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {planReview ? null : <Transcript
         items={view.transcript.items}
         hasEarlier={view.transcript.hasEarlier}
         busy={isBusy}
@@ -70,7 +86,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         sessionKey={sessionKey}
         thinking={toggles.thinking}
         tools={toggles.tools}
-      />
+      />}
       {dialog === null ? (
         <Composer
           ref={composer}

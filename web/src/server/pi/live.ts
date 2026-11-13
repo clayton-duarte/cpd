@@ -13,7 +13,7 @@ export interface LiveConnection {
 
 export interface LiveSource {
   /** `committed(ts)` tells whether an assistant `message.timestamp` is already in the transcript. */
-  attach(sessionId: string, emit: (msg: SessionServerMessage) => void, committed: (timestamp: number) => boolean): void;
+  attach(sessionId: string, emit: (msg: SessionServerMessage) => void, committed: (timestamp: number) => boolean, toolCommitted?: (callId: string) => boolean): void;
   detach(): void;
 }
 
@@ -64,7 +64,7 @@ export function createLiveSource(deps: LiveDeps): LiveSource {
     c?.close();
   }
 
-  function attach(sessionId: string, emit: (msg: SessionServerMessage) => void, committed: (timestamp: number) => boolean): void {
+  function attach(sessionId: string, emit: (msg: SessionServerMessage) => void, committed: (timestamp: number) => boolean, toolCommitted: (callId: string) => boolean = () => false): void {
     stopped = false;
     const out = (m: SessionServerMessage): void => {
       if (!stopped) emit(m);
@@ -79,11 +79,16 @@ export function createLiveSource(deps: LiveDeps): LiveSource {
       return { kind: "tool", id: `tool:${callId}`, callId, name: kept.name, args: kept.args, status, ...(result === undefined ? {} : { result }) };
     };
     const startTool = (callId: string, name: string, args: unknown): void => {
+      if (toolCommitted(callId)) return;
       tools.set(callId, { name, args: isObj(args) ? args : {} });
       const item = toolItem(callId, "running");
       if (item !== null) out({ type: "session.append", sessionId, items: [item] });
     };
     const updateTool = (callId: string, status: ToolItem["status"], result: unknown, isError: boolean): void => {
+      if (toolCommitted(callId)) {
+        tools.delete(callId);
+        return;
+      }
       const item = toolItem(callId, status, { text: resultText(result), isError });
       if (item !== null) out({ type: "session.update", sessionId, items: [item] });
     };

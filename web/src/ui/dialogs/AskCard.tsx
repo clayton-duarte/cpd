@@ -155,7 +155,7 @@ export function AskCard(props: {
         shortcuts="letters"
         onKeyDown={(e) => {
           if (e.key === "Escape") {
-            e.preventDefault();
+            // No preventDefault: the Escape also bubbles to ChatPane, which aborts the running turn.
             cancel();
           }
         }}

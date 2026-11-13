@@ -9,7 +9,10 @@ const REGENERATE: &str = "CPD_BLESS=1 scripts/cargo.sh test -p cpd --test interf
 
 fn help_tree() -> Value {
     let mut stdout = Vec::new();
-    cpd::main_with(["cpd".into(), "--help".into()], &mut stdout);
+    assert_eq!(
+        cpd::main_with(["cpd".into(), "--help".into()], &mut stdout),
+        std::process::ExitCode::SUCCESS,
+    );
     let json: Value = serde_json::from_slice(&stdout).expect("one JSON value");
     json["tree"].clone()
 }

@@ -105,3 +105,16 @@ for (const summary of ["", "   "]) {
     unmount();
   });
 }
+
+it("summary scrolls inside a fill-height card with header and actions fixed", () => {
+  const { container, unmount } = setup();
+  const card = container.querySelector<HTMLElement>('section[data-dialog="cpd_plan_review"]')!;
+  expect(card.classList.contains("flex-1")).toBe(true);
+  expect(card.classList.contains("min-h-0")).toBe(true);
+  const viewport = container.querySelector<HTMLElement>('[data-part="body"]')!.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+  expect(viewport).not.toBeNull();
+  expect(card.innerHTML).not.toContain("max-h-60");
+  expect(viewport.contains(container.querySelector('[data-part="header"]'))).toBe(false);
+  expect(viewport.contains(container.querySelector('[data-part="actions"]'))).toBe(false);
+  unmount();
+});

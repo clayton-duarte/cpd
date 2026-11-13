@@ -127,6 +127,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   let restart: Disposable | null = null;
   let safety: Disposable | null = null;
   let raw: RawPanes | null = null;
+  let mapped: ReturnType<typeof mapPanes> | null = null;
   let snapEmit: Disposable | null = null;
   let planDue = false;
 
@@ -276,10 +277,6 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     inbox: checkOk(p.inbox, "inbox"),
     owners: checkOwners(p.owners),
   });
-  const emitRaw = (): void => {
-    if (raw === null) return;
-    try { const m = mapPanes(raw); apply({ tree: m.tree, inbox: m.inbox }); } catch (e) { emitError(e); }
-  };
   const loadPlanView = async (): Promise<void> => {
     const id = planId;
     if (id === null || stream === undefined) return;
@@ -293,19 +290,26 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   const onSnapshot = (s: StreamSnapshot): void => {
     if (stopped) return;
     stopFollow();
-    try { raw = toRaw(s.panes); } catch (e) { emitError(e); return; }
-    if (s.panes.status !== undefined) {
-      let pane: StatusPane;
-      try { pane = checkOk(s.panes.status, "status") as unknown as StatusPane; } catch (e) { emitError(e); return; }
-      if (JSON.stringify(pane) !== JSON.stringify(serveStatus)) {
-        serveStatus = pane;
+    let next: RawPanes;
+    let nextMapped: ReturnType<typeof mapPanes>;
+    let nextStatus: StatusPane | undefined;
+    try {
+      next = toRaw(s.panes);
+      nextMapped = mapPanes(next);
+      nextStatus = s.panes.status === undefined ? undefined : checkOk(s.panes.status, "status") as unknown as StatusPane;
+    } catch (e) { emitError(e); return; }
+    raw = next;
+    mapped = nextMapped;
+    if (nextStatus !== undefined) {
+      if (JSON.stringify(nextStatus) !== JSON.stringify(serveStatus)) {
+        serveStatus = nextStatus;
         void refreshStatus();
       }
     }
     if (snapEmit === null) {
       snapEmit = scheduler.after(COALESCE_MS, () => {
         snapEmit = null;
-        emitRaw();
+        if (mapped !== null) apply({ tree: mapped.tree, inbox: mapped.inbox });
         if (planDue) { planDue = false; void loadPlanView(); }
       });
     }
@@ -325,8 +329,13 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       return r;
     });
     if (!hit) return;
-    raw = { ...raw, session: { ...raw.session, sessions } };
-    try { apply({ tree: mapPanes(raw).tree }); } catch (e) { emitError(e); }
+    const next = { ...raw, session: { ...raw.session, sessions } };
+    try {
+      const nextMapped = mapPanes(next);
+      raw = next;
+      mapped = nextMapped;
+      apply({ tree: nextMapped.tree });
+    } catch (e) { emitError(e); }
   };
   const onStreamState = (ready: boolean): void => {
     if (stopped) return;

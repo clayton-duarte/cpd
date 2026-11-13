@@ -59,14 +59,19 @@ export function watchSession(deps: {
       return;
     }
     if (stat.size === offset) return;
-    let buf = new Uint8Array(0);
+    const pieces: Uint8Array[] = [];
+    let length = 0;
     for (let pos = offset; pos < stat.size; pos += CHUNK_BYTES) {
       const piece = await fs.read(path, pos, Math.min(stat.size, pos + CHUNK_BYTES));
       if (stopped()) return;
-      const next = new Uint8Array(buf.length + piece.length);
-      next.set(buf);
-      next.set(piece, buf.length);
-      buf = next;
+      pieces.push(piece);
+      length += piece.length;
+    }
+    const buf = new Uint8Array(length);
+    let written = 0;
+    for (const piece of pieces) {
+      buf.set(piece, written);
+      written += piece.length;
     }
     const last = buf.lastIndexOf(NL);
     if (last < 0) return;
@@ -117,6 +122,10 @@ export function watchSession(deps: {
     if (reading) again = true;
     else void drain();
   });
+
+  // Subscribe before checking the saved offset: writes during the tail read or
+  // registration must be consumed even when no later watch event arrives.
+  void drain();
 
   return {
     dispose(): void {
