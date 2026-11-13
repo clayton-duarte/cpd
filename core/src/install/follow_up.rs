@@ -199,6 +199,10 @@ impl FollowUps<'_> {
     /// WebUI is left to the new engine's own supervision.
     fn prepare_webui(&mut self) -> Option<Pid> {
         let prepared = self.cpd(&["webui", "--prepare"]);
+        // A successful prepare that says nothing has no WebUI to hand over: the engine supervises it as before.
+        if prepared.ok() && prepared.stdout.trim().is_empty() {
+            return None;
+        }
         let pid = prepared.ok().then(|| {
             serde_json::from_str::<serde_json::Value>(&prepared.stdout)
                 .ok()?

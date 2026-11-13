@@ -390,6 +390,10 @@ archive_sleep_seconds = 86400
             Reply::exit(0, "node web/src/server/serve.ts\n", ""),
         );
 
+        // The install's `cpd webui --prepare` recorded the prepared WebUI's pid: that marks the holder as prepared.
+        fs::create_dir_all(fx.home.run_dir()).expect("create run dir");
+        fs::write(fx.home.run_dir().join("webui.pid"), pid.to_string()).expect("write webui.pid");
+
         let mut engine = fx.engine();
         webui::run(&mut engine);
 

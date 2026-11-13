@@ -381,6 +381,15 @@ fn is_same_service(kind: ServiceKind, cmd: &str) -> bool {
     }
 }
 
+/// The pid `run/webui.pid` names: the prod WebUI an install prepared.
+fn prepared_webui_pid(home: &CpdHome) -> Option<u32> {
+    std::fs::read_to_string(home.run_dir().join("webui.pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError> {
     let port = kind.port();
 
@@ -392,15 +401,85 @@ fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError>
             .is_some_and(|cmd| is_same_service(kind, cmd));
 
         if can_takeover {
-            // The holder is this service already (the WebUI an install prepared, pro-d592): adopt it as the
+            // The holder is the WebUI an install prepared (run/webui.pid names it, pro-d592): adopt it as the
             // engine's own, and neither signal it nor spawn a second one.
-            engine.log.line(&format!(
-                "webui: adopted port holder PID {} for {}",
-                holder.pid,
-                kind.name()
-            ));
-            engine.webui.services.entry(kind).or_default().pid = Some(Pid(holder.pid));
-            return Ok(());
+            if prepared_webui_pid(&engine.home) == Some(holder.pid) {
+                engine.log.line(&format!(
+                    "webui: adopted port holder PID {} for {}",
+                    holder.pid,
+                    kind.name()
+                ));
+                engine.webui.services.entry(kind).or_default().pid = Some(Pid(holder.pid));
+                return Ok(());
+            }
+            let cmd = cmd_opt.as_deref().unwrap_or("");
+            // Send SIGTERM to holder
+            let holder_pid = Pid(holder.pid);
+            if engine.ports.spawn.signal(holder_pid, Signal::Term).is_ok() {
+                // Wait up to 10 seconds checking if port cleared or holder died
+                let mut cleared = false;
+                for _ in 0..10 {
+                    let still_held = if !engine.ports.spawn.alive(holder_pid) {
+                        false
+                    } else if let Some(h) = detect_port_holder(engine.ports.runner.as_ref(), port) {
+                        // If runner still returns a holder, check if it's the dead process in spawn
+                        h.pid == holder.pid && engine.ports.spawn.alive(holder_pid)
+                    } else {
+                        false
+                    };
+
+                    if !still_held {
+                        cleared = true;
+                        break;
+                    }
+                    engine
+                        .ports
+                        .clock
+                        .sleep(std::time::Duration::from_millis(100));
+                }
+
+                if cleared {
+                    // Successful takeover writes one line to run/watch.log and no Event
+                    engine.log.line(&format!(
+                        "webui: replaced port holder PID {} ({}) for {}",
+                        holder.pid,
+                        cmd,
+                        kind.name()
+                    ));
+                } else {
+                    // Takeover failed: port still held after wait
+                    let err_msg = format_port_in_use_message(Some(&holder), port);
+                    engine.log.line(&format!("webui: {err_msg}"));
+                    engine.store.write(SOURCE, |tx| {
+                        let event = NewEvent::error(
+                            err_msg.clone(),
+                            SOURCE,
+                            "port_in_use",
+                            &err_msg,
+                            json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
+                        );
+                        append(tx, event)?;
+                        Ok(())
+                    })?;
+                    return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
+                }
+            } else {
+                // Signal failed
+                let err_msg = format_port_in_use_message(Some(&holder), port);
+                engine.log.line(&format!("webui: {err_msg}"));
+                engine.store.write(SOURCE, |tx| {
+                    let event = NewEvent::error(
+                        err_msg.clone(),
+                        SOURCE,
+                        "port_in_use",
+                        &err_msg,
+                        json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
+                    );
+                    append(tx, event)?;
+                    Ok(())
+                })?;
+                return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
+            }
         } else {
             // Not the same service, or command line cannot be read:
             // Service does not start, raises error event, latches stopped.
