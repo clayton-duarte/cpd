@@ -26,6 +26,7 @@ use crate::clock::{Clock, ManualClock};
 use crate::fakes::git::{GitRoute, Repo, Universe};
 use crate::home::CpdHome;
 use crate::host::runner::{Call, Handler, Reply};
+use crate::host::spawn::{FakeSpawn, Pid, Signal, Spawn as _};
 use crate::ports::{Fakes, Ports};
 
 const MIGRATIONS: &str = "core/src/store/migrations";
@@ -182,6 +183,37 @@ impl Handler for Tmux {
     }
 }
 
+/// The new WebUI instance as the new `cpd` prepares it (pro-d592): `cpd webui --prepare` starts it beside the old one
+/// and answers its pid; `cpd webui --ready` answers whether it listens, from virtual time `ready_at` on (`None`:
+/// never). Every `--ready` poll logs the answer and how many signals the old instance had received by then.
+struct WebUi {
+    spawn: Arc<FakeSpawn>,
+    clock: Arc<ManualClock>,
+    new_pid: Pid,
+    ready_at: Option<Duration>,
+    polls: Mutex<Vec<(bool, usize)>>,
+}
+
+impl WebUi {
+    fn handle(&self, args: &[&str]) -> Option<Reply> {
+        match args {
+            ["webui", "--prepare"] => Some(Reply::ok(&format!(
+                r#"{{"ok":true,"pid":{}}}"#,
+                self.new_pid.0
+            ))),
+            ["webui", "--ready"] => {
+                let ready = self.ready_at.is_some_and(|at| self.clock.elapsed() >= at);
+                self.polls
+                    .lock()
+                    .unwrap()
+                    .push((ready, self.spawn.signals().len()));
+                Some(Reply::ok(&format!(r#"{{"ok":true,"ready":{ready}}}"#)))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// How the new `cpd watch --ensure` ends.
 #[derive(Clone, Copy)]
 enum Ensure {
@@ -203,11 +235,15 @@ struct NewCpd {
     mark: Reply,
     ensure: Ensure,
     engine: Mutex<Vec<fs::File>>,
+    webui: Arc<WebUi>,
 }
 
 impl Handler for NewCpd {
     fn handle(&self, call: &Call) -> Reply {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        if let Some(reply) = self.webui.handle(&args) {
+            return reply;
+        }
         match args.as_slice() {
             ["config"] => self.config.clone(),
             ["watch", "--check"] => self.check.clone(),
@@ -248,6 +284,8 @@ struct Rig {
     install: Install,
     old: Arc<OldEngine>,
     tmux: Arc<Tmux>,
+    webui: Arc<WebUi>,
+    old_webui: Pid,
 }
 
 /// What a rig is built with: the replies of the new `cpd`, the tagger's, the built binary's.
@@ -261,6 +299,8 @@ struct Script {
     tag: Reply,
     refuse_first: bool,
     lock_wait: Duration,
+    /// Virtual time from which the new WebUI reports ready; `None` never.
+    webui_ready_at: Option<Duration>,
 }
 
 impl Default for Script {
@@ -275,6 +315,7 @@ impl Default for Script {
             tag: Reply::ok(""),
             refuse_first: false,
             lock_wait: DEFAULT_LOCK_WAIT,
+            webui_ready_at: Some(Duration::ZERO),
         }
     }
 }
@@ -334,6 +375,26 @@ impl Rig {
             old: old.clone(),
             clock: fakes.clock.clone(),
         });
+        // The old WebUI serves on 3333 and recorded its pid in `run/webui.pid`.
+        let old_webui = fakes
+            .spawn
+            .add_process(Pid(1), "node web/src/server/serve.ts");
+        let new_webui = fakes
+            .spawn
+            .add_process(Pid(1), "node web/src/server/serve.ts");
+        fs::create_dir_all(install.cpd_home.run_dir()).unwrap();
+        fs::write(
+            install.cpd_home.run_dir().join("webui.pid"),
+            format!("{}\n", old_webui.0),
+        )
+        .unwrap();
+        let webui = Arc::new(WebUi {
+            spawn: fakes.spawn.clone(),
+            clock: fakes.clock.clone(),
+            new_pid: new_webui,
+            ready_at: script.webui_ready_at,
+            polls: Mutex::default(),
+        });
         let new_cpd = Arc::new(NewCpd {
             lock: install.cpd_home.watch_lock(),
             config: script.config,
@@ -342,6 +403,7 @@ impl Rig {
             mark: script.mark,
             ensure: script.ensure,
             engine: Mutex::default(),
+            webui: webui.clone(),
         });
         let tag = install.root.join("scripts/tag-version.sh");
         let built_migrate = {
@@ -382,6 +444,8 @@ impl Rig {
             install,
             old,
             tmux,
+            webui,
+            old_webui,
         };
         let clone = rig.git(
             &root,
@@ -1084,5 +1148,100 @@ fn restart_waiter_runs_ensure_once_when_lock_frees() {
     assert!(
         rig.fakes.clock.elapsed() >= Duration::from_secs(90),
         "it waited for the lock on the clock"
+    );
+}
+
+// The WebUI handoff (pro-d592, bug b74, #1245). The interface these tests pin: after the engine restart the install
+// runs the new `cpd webui --prepare` (starts the new WebUI beside the old one, answers `{"pid":N}`), polls
+// `cpd webui --ready` on the clock until it answers `{"ready":true}`, and only then sends SIGTERM to the old WebUI,
+// whose pid is in `run/webui.pid`. A new WebUI that is never ready leaves the old one unsignalled and fails the install.
+
+#[test]
+fn old_webui_kept_until_new_webui_ready() {
+    // The engine is slow to stop (30 s) and the new WebUI is ready only at 45 s.
+    let rig = Rig::with(Script {
+        kill: Kill::HoldsFor(Duration::from_secs(30)),
+        webui_ready_at: Some(Duration::from_secs(45)),
+        ..Script::default()
+    });
+    rig.running_old_engine();
+
+    let run = rig.run();
+
+    let polls = rig.webui.polls.lock().unwrap().clone();
+    assert!(
+        !polls.is_empty(),
+        "the install polls the new WebUI's readiness: {}",
+        run.stderr
+    );
+    for (ready, signals) in &polls {
+        if !ready {
+            assert_eq!(
+                *signals, 0,
+                "the old WebUI was signalled before the new one was ready"
+            );
+        }
+    }
+    assert!(
+        rig.fakes.clock.elapsed() >= Duration::from_secs(45),
+        "the install waited, on the clock, for the new WebUI"
+    );
+}
+
+#[test]
+fn old_webui_stopped_only_after_readiness_handoff() {
+    let rig = Rig::with(Script {
+        webui_ready_at: Some(Duration::from_secs(5)),
+        ..Script::default()
+    });
+    rig.running_old_engine();
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    let polls = rig.webui.polls.lock().unwrap().clone();
+    assert_eq!(
+        polls.last(),
+        Some(&(true, 0)),
+        "the last poll answered ready with the old WebUI not yet signalled"
+    );
+    assert_eq!(
+        rig.fakes.spawn.signals(),
+        vec![(rig.old_webui, Signal::Term)],
+        "exactly the old WebUI is told to stop, once the new one is ready"
+    );
+    assert!(
+        rig.fakes.spawn.alive(rig.webui.new_pid),
+        "the new WebUI keeps running and owns the port"
+    );
+}
+
+#[test]
+fn new_webui_not_ready_leaves_old_serving_and_fails_install() {
+    let rig = Rig::with(Script {
+        webui_ready_at: None,
+        ..Script::default()
+    });
+    rig.running_old_engine();
+
+    let run = rig.run();
+
+    assert_ne!(run.exit, 0, "the install fails: {}", run.stderr);
+    assert!(
+        run.stderr.contains("install_failed"),
+        "the install reports install_failed: {}",
+        run.stderr
+    );
+    assert!(
+        !rig.webui.polls.lock().unwrap().is_empty(),
+        "the install polled the new WebUI before giving up"
+    );
+    assert!(
+        rig.fakes.spawn.signals().is_empty(),
+        "the old WebUI is never signalled"
+    );
+    assert!(
+        rig.fakes.spawn.alive(rig.old_webui),
+        "the old WebUI keeps serving"
     );
 }
