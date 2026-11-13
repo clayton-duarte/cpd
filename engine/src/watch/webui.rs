@@ -201,14 +201,15 @@ pub fn run(engine: &mut Engine) {
 }
 
 pub fn resolve_checkout_path(home: &CpdHome) -> Option<PathBuf> {
+    // The home's own checkout wins over the one `HOME` names, so a home under test never reaches the user's.
+    if home.root().join("web/src/server/serve.ts").exists() {
+        return Some(home.root().to_path_buf());
+    }
     if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from)
         && let Ok(checkout) = read_root(&user_home)
         && checkout.join("web/src/server/serve.ts").exists()
     {
         return Some(checkout);
-    }
-    if home.root().join("web/src/server/serve.ts").exists() {
-        return Some(home.root().to_path_buf());
     }
     None
 }
@@ -391,74 +392,15 @@ fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError>
             .is_some_and(|cmd| is_same_service(kind, cmd));
 
         if can_takeover {
-            let cmd = cmd_opt.as_deref().unwrap_or("");
-            // Send SIGTERM to holder
-            let holder_pid = Pid(holder.pid);
-            if engine.ports.spawn.signal(holder_pid, Signal::Term).is_ok() {
-                // Wait up to 10 seconds checking if port cleared or holder died
-                let mut cleared = false;
-                for _ in 0..10 {
-                    let still_held = if !engine.ports.spawn.alive(holder_pid) {
-                        false
-                    } else if let Some(h) = detect_port_holder(engine.ports.runner.as_ref(), port) {
-                        // If runner still returns a holder, check if it's the dead process in spawn
-                        h.pid == holder.pid && engine.ports.spawn.alive(holder_pid)
-                    } else {
-                        false
-                    };
-
-                    if !still_held {
-                        cleared = true;
-                        break;
-                    }
-                    engine
-                        .ports
-                        .clock
-                        .sleep(std::time::Duration::from_millis(100));
-                }
-
-                if cleared {
-                    // Successful takeover writes one line to run/watch.log and no Event
-                    engine.log.line(&format!(
-                        "webui: replaced port holder PID {} ({}) for {}",
-                        holder.pid,
-                        cmd,
-                        kind.name()
-                    ));
-                } else {
-                    // Takeover failed: port still held after wait
-                    let err_msg = format_port_in_use_message(Some(&holder), port);
-                    engine.log.line(&format!("webui: {err_msg}"));
-                    engine.store.write(SOURCE, |tx| {
-                        let event = NewEvent::error(
-                            err_msg.clone(),
-                            SOURCE,
-                            "port_in_use",
-                            &err_msg,
-                            json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
-                        );
-                        append(tx, event)?;
-                        Ok(())
-                    })?;
-                    return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
-                }
-            } else {
-                // Signal failed
-                let err_msg = format_port_in_use_message(Some(&holder), port);
-                engine.log.line(&format!("webui: {err_msg}"));
-                engine.store.write(SOURCE, |tx| {
-                    let event = NewEvent::error(
-                        err_msg.clone(),
-                        SOURCE,
-                        "port_in_use",
-                        &err_msg,
-                        json!({ "port": port, "holder": holder.process, "pid": holder.pid }),
-                    );
-                    append(tx, event)?;
-                    Ok(())
-                })?;
-                return Err(CpdError::new(ErrorCode::SetupFailed, err_msg));
-            }
+            // The holder is this service already (the WebUI an install prepared, pro-d592): adopt it as the
+            // engine's own, and neither signal it nor spawn a second one.
+            engine.log.line(&format!(
+                "webui: adopted port holder PID {} for {}",
+                holder.pid,
+                kind.name()
+            ));
+            engine.webui.services.entry(kind).or_default().pid = Some(Pid(holder.pid));
+            return Ok(());
         } else {
             // Not the same service, or command line cannot be read:
             // Service does not start, raises error event, latches stopped.
