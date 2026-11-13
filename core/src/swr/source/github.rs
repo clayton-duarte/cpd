@@ -63,6 +63,15 @@ fn no_effects(store: &mut crate::store::Store, _now: OffsetDateTime) -> Result<V
 type Listed = HashMap<String, BTreeSet<(String, i64)>>;
 static LISTED: Mutex<Option<Listed>> = Mutex::new(None);
 
+/// Discovery progress is expendable engine memory, scoped by store and authenticated viewer.
+#[derive(Clone, Default)]
+struct SearchPages {
+    viewer: String,
+    authored_after: Option<String>,
+    reviews_after: Option<String>,
+}
+static SEARCH_PAGES: Mutex<Option<HashMap<String, SearchPages>>> = Mutex::new(None);
+
 /// The real `github` source (swr-github.md §4).
 #[derive(Default)]
 pub struct GithubSource {
@@ -265,7 +274,16 @@ impl GithubSource {
             })
             .map(str::to_owned)
             .collect();
+        let pages = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&cx.store.path().display().to_string()))
+            .cloned()
+            .unwrap_or_default();
         Ok(PollPlan {
+            authored_after: pages.authored_after,
+            reviews_after: pages.reviews_after,
             heavy,
             absent,
             meta,
@@ -352,13 +370,35 @@ impl GithubSource {
         if read.remaining < RATE_FLOOR {
             endpoint::pause_until(cx.store, "github", reset)?;
         }
-        // ok is recorded only after the whole pass commits; a failed commit or deploys read is the endpoint's failure.
+        let mut next = SearchPages {
+            viewer: read.viewer.clone(),
+            authored_after: read.authored_after.clone(),
+            reviews_after: read.reviews_after.clone(),
+        };
+        let store = cx.store.path().display().to_string();
+        // @me changed accounts: the old opaque cursor belongs to a different search.
+        let previous = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&store))
+            .cloned();
+        if previous.is_some_and(|p| p.viewer != next.viewer) {
+            next.authored_after = None;
+            next.reviews_after = None;
+        }
+        // A successful read is not enough: deploys and every commit step must succeed too.
         match self.commit(cx, &plan, read, now, poll_started_at) {
             Ok(effects) => match first_failure {
                 // The rows are fresh, but the document that failed is not forgotten: ok stays unrecorded.
                 Some(e) => self.failed(cx, now, e),
                 None => {
                     endpoint::record_ok(cx.store, "github", now)?;
+                    SEARCH_PAGES
+                        .lock()
+                        .expect("search pages")
+                        .get_or_insert_with(HashMap::new)
+                        .insert(store, next);
                     Ok(effects)
                 }
             },
@@ -370,6 +410,10 @@ impl GithubSource {
     /// until its future reset (the error's own, else the stored one) plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
     /// pauses its own poll; it is not an error.
     fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
+        // A failed read or commit restarts discovery rather than retaining an invalid/incomplete sweep.
+        if let Some(pages) = SEARCH_PAGES.lock().expect("search pages").as_mut() {
+            pages.remove(&cx.store.path().display().to_string());
+        }
         let flag = |name: &str| {
             e.details()
                 .get(name)

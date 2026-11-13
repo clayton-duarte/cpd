@@ -282,3 +282,32 @@ describe("completion service", () => {
     expect(t.payloads[t.payloads.length - 1]?.session.hasOpenDialog).toBe(false);
   });
 });
+
+
+it("reconciles live and committed tools once in the completion ledger", async () => {
+  const t = setup();
+  t.tracker.observe(tail([user("u1")]));
+  await flush();
+  const running: TranscriptItem = { kind: "tool", id: "tool:c1", callId: "c1", name: "bash", args: { command: "cpd plan lock p" }, status: "running" };
+  t.tracker.observe(status(true));
+  t.tracker.observe({ type: "session.append", sessionId: "s1", items: [running] });
+  t.tracker.observe({ type: "session.append", sessionId: "s1", items: [running] });
+  t.tracker.observe({ type: "session.update", sessionId: "s1", items: [{ ...running, status: "done", result: { text: "locked", isError: false } }] });
+  t.tracker.observe(status(false));
+  await flush();
+  expect(t.payloads.at(-1)?.ledgerActions).toEqual(["cpd plan lock p"]);
+  expect(t.payloads.at(-1)?.transcript.filter((i) => i.kind === "tool")).toHaveLength(1);
+});
+
+it("applies deltas and ignores unknown updates like the client transcript", async () => {
+  const t = setup();
+  t.tracker.observe(tail([user("u1")]));
+  await flush();
+  t.tracker.observe(status(true));
+  t.tracker.observe({ type: "session.append", sessionId: "s1", items: [{ kind: "assistant", id: "live:1", blocks: [], streaming: true }] });
+  t.tracker.observe({ type: "session.delta", sessionId: "s1", itemId: "live:1", blockIndex: 0, blockType: "text", text: "done" });
+  t.tracker.observe({ type: "session.update", sessionId: "s1", items: [user("unknown")] });
+  t.tracker.observe(status(false));
+  await flush();
+  expect(t.payloads.at(-1)?.transcript).toEqual([{ kind: "user", text: "u1" }, { kind: "assistant", text: "done" }]);
+});

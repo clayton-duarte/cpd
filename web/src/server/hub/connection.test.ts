@@ -380,3 +380,37 @@ describe("hub cockpit readiness", () => {
     expect(t.sent[1]).toEqual({ type: "cockpit.patch", pane: "tree", data: t.tree });
   });
 });
+
+
+it("an older attach waiting on detach cannot replace the newest selection", async () => {
+  const t = setup();
+  await t.hub.handle({ type: "session.attach", sessionId: "dur-1" });
+  const old = t.durable.attaches[0]!.handle;
+  let release = () => {};
+  old.dispose = () => new Promise<void>((resolve) => { release = resolve; });
+  const earlier = t.hub.handle({ type: "session.attach", sessionId: "pi-1" });
+  await flush();
+  await t.hub.handle({ type: "session.attach", sessionId: "pi-2" });
+  const latest = t.pi.attaches.find((a) => a.session.ref.id === "pi-2")!.handle;
+  release();
+  await earlier;
+  t.sent.length = 0;
+  await t.hub.handle({ type: "session.submit", sessionId: "pi-2", clientSubmissionId: "c1", text: "newest", images: [], whenBusy: "followUp" });
+  expect(latest.calls.filter(([name]) => name === "submit")).toHaveLength(1);
+  expect(t.sent.filter((m) => m.type === "session.error")).toEqual([]);
+  await t.hub.close();
+});
+
+
+it("a closing hub ignores new work while backend disposal waits", async () => {
+  const t = setup();
+  await t.hub.handle({ type: "session.attach", sessionId: "dur-1" });
+  let release = () => {};
+  t.durable.attaches[0]!.handle.dispose = () => new Promise<void>((resolve) => { release = resolve; });
+  const closing = t.hub.close();
+  await flush();
+  await t.hub.handle({ type: "cockpit.selectPlan", planId: "late" });
+  release();
+  await closing;
+  expect(t.selected).toEqual([]);
+});
