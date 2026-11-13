@@ -349,3 +349,20 @@ describe("ws server", () => {
     expect(acceptsOrigin("http://[2001:db8::1]:3333")).toBe(false); // global unicast
   });
 });
+
+
+it("does not dispatch gated frames after a socket closes while other clients continue", async () => {
+  const gate = pendingGate();
+  const h = harness({ gate: () => gate.promise });
+  const endpoint = createWsServer(h.deps);
+  const closed = new FakeSocket(), live = new FakeSocket();
+  h.server.connect(closed); h.server.connect(live);
+  closed.emitMessage(JSON.stringify({ type: "cockpit.selectPlan", planId: "late" }));
+  live.emitMessage(JSON.stringify({ type: "cockpit.subscribe" }));
+  closed.emitClose();
+  gate.resolve();
+  await flush();
+  endpoint.dispose();
+  expect(h.hubs[0]!.handled).toEqual([]);
+  expect(h.hubs[1]!.handled).toEqual([{ type: "cockpit.subscribe" }]);
+});

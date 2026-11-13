@@ -7,6 +7,7 @@ import { FakeScheduler } from "../../testing/scheduler.ts";
 import { createDurableBackend } from "./backend.ts";
 import type { SessionEmit, SessionHandle } from "../hub/connection.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
+import { connectHost, type SocketLike } from "./client.ts";
 import type { HostClient, HostFrame } from "./client.ts";
 
 type Obj = Record<string, unknown>;
@@ -416,6 +417,22 @@ describe("durable backend", () => {
     await handle.respond("a1", approvalAnswer("Deny"));
     expect(host.respond).toHaveBeenCalledWith("a1", { value: "Deny" });
   });
+  const purposeReq = (id: string, purpose: string) =>
+    ({ type: "ui_request", id, purpose, created_at: 1, method: "select", title: "Run it?", options: ["Allow once", "Deny"] }) as unknown as HostFrame;
+  it("answering an external_approve dialog Allow once sends ui_response with value Allow once", async () => {
+    const { handle, host } = await setup([viewFrame([userEntry(0)])]);
+    host.deliver(purposeReq("e1", "external_approve"));
+    await tick();
+    await handle.respond("e1", approvalAnswer("Allow once"));
+    expect(host.respond).toHaveBeenCalledWith("e1", { value: "Allow once" });
+  });
+  it("answering a host_approve dialog Deny sends ui_response with value Deny", async () => {
+    const { handle, host } = await setup([viewFrame([userEntry(0)])]);
+    host.deliver(purposeReq("h2", "host_approve"));
+    await tick();
+    await handle.respond("h2", approvalAnswer("Deny"));
+    expect(host.respond).toHaveBeenCalledWith("h2", { value: "Deny" });
+  });
   it("cancelling an approval dialog sends ui_response Deny", async () => {
     const { handle, host } = await approvalSetup();
     await handle.respond("a1", { method: "ask_user_question", outcome: "cancelled" });
@@ -544,4 +561,94 @@ describe("durable backend", () => {
       ]);
     });
   });
+});
+
+
+it.each(["attach", "models"])("bounds durable startup when %s is never acknowledged", async (phase) => {
+  const scheduler = new FakeScheduler();
+  let feed: (chunk: string) => void = () => {};
+  const writes: string[] = [];
+  let ended = 0;
+  const socket: SocketLike = { write: (line) => { writes.push(line); }, destroy: () => { ended++; },
+    onData: (handler) => { feed = handler; return { dispose() {} }; }, onClose: () => ({ dispose() {} }) };
+  const connecting = connectHost("/run/host/s1.sock", { factory: { connect: async () => socket }, scheduler });
+  await tick();
+  feed(JSON.stringify(new FakeHost([]).client().welcome)+"\n");
+  const client = await connecting;
+  const backend = createDurableBackend({ connect: async () => client, cpd: { json: async () => ({ ok: true }) },
+    git: { branch: async () => "main" }, scheduler });
+  let outcome: unknown = null;
+  const messages: SessionServerMessage[] = [];
+  const attaching = backend.attach(SESSION, (m) => messages.push(m)).then((handle) => { outcome = handle; }, (error: unknown) => { outcome = error; });
+  await tick();
+  expect(writes.map((line) => JSON.parse(line).type)).toEqual(["hello", "attach"]);
+  if (phase === "models") {
+    feed(JSON.stringify({ type: "attached", req: "r1", mode: "view", epoch: "e1", from_seq: 0, head_seq: 1, client_id: "c1" })+"\n");
+    feed(JSON.stringify(viewFrame([]))+"\n");
+    await tick();
+    expect(writes.map((line) => JSON.parse(line).type)).toEqual(["hello", "attach", "list_models"]);
+  }
+  scheduler.advance(5001);
+  await tick();
+  const afterDeadline = outcome;
+  const closedAtDeadline = ended;
+  client.close();
+  await attaching;
+  if (phase === "attach") {
+    expect(afterDeadline).toMatchObject({ code: "host_unreachable" });
+    expect(closedAtDeadline).toBe(1);
+  } else {
+    expect(afterDeadline).not.toBeNull();
+    expect(messages.some((m) => m.type === "session.attached")).toBe(true);
+  }
+});
+
+it("disposes a durable attachment even when the host never acknowledges detach", async () => {
+  const scheduler = new FakeScheduler();
+  let feed: (chunk: string) => void = () => {};
+  const writes: string[] = [];
+  let ended = 0;
+  const socket: SocketLike = { write: (line) => { writes.push(line); }, destroy: () => { ended++; },
+    onData: (handler) => { feed = handler; return { dispose() {} }; }, onClose: () => ({ dispose() {} }) };
+  const connecting = connectHost("/run/host/s1.sock", { factory: { connect: async () => socket }, scheduler });
+  await tick();
+  feed(JSON.stringify(new FakeHost([]).client().welcome) + "\n");
+  const client = await connecting;
+  const backend = createDurableBackend({ connect: async () => client, cpd: { json: async () => ({ ok: true }) }, git: { branch: async () => "main" }, scheduler });
+  const attaching = backend.attach(SESSION, () => {});
+  await tick();
+  feed(JSON.stringify({ type: "attached", req: "r1", mode: "view", epoch: "e1", from_seq: 0, head_seq: 1, client_id: "c1" }) + "\n");
+  feed(JSON.stringify(viewFrame([])) + "\n");
+  await tick();
+  feed(JSON.stringify({ type: "result", req: "r2", data: { models: [] } }) + "\n");
+  const handle = await attaching;
+  let settled = false;
+  const disposing = handle.dispose().then(() => { settled = true; });
+  await tick();
+  expect(writes.map((line) => JSON.parse(line).type)).toContain("detach");
+  scheduler.advance(60_000);
+  await tick();
+  const disposedWithoutHost = settled;
+  const endedWithoutHost = ended;
+  client.close();
+  await disposing;
+  expect(disposedWithoutHost).toBe(true);
+  expect(endedWithoutHost).toBe(1);
+});
+
+
+it("disposal is silent and idempotent while detach acknowledgement is pending", async () => {
+  const { host, handle, messages } = await setup([viewFrame([])]);
+  let acknowledge: () => void = () => {};
+  host.detach.mockImplementation(() => new Promise<void>((resolve) => { acknowledge = resolve; }));
+  const disposing = handle.dispose();
+  const count = messages.length;
+  host.deliver({ type: "notice", level: "error", message: "late notice" });
+  host.deliver({ type: "host_state", state: "working", clients: 1, held_ui: 0 });
+  await handle.dispose();
+  expect(messages).toHaveLength(count);
+  expect(host.detach).toHaveBeenCalledTimes(1);
+  acknowledge();
+  await disposing;
+  expect(host.closed).toBe(1);
 });
