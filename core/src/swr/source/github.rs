@@ -242,6 +242,22 @@ impl GithubSource {
                 absent.push((true, String::new(), key));
             }
         }
+        // A `revalidating` mutation's target is read each pass until its own commit settles it (swr.md §10): a merged PR is
+        // omitted from open searches, and only its confirmed raw row may drop the overlay. Sorted before every other candidate.
+        for target in cache::unsettled_targets(cx.store, "github")? {
+            let Some((repo, number)) = target
+                .strip_prefix("github:pr:")
+                .and_then(|k| k.rsplit_once('#'))
+                .and_then(|(r, n)| Some((r.to_owned(), n.parse::<i64>().ok()?)))
+            else {
+                continue;
+            };
+            let key = (repo, number);
+            absent.retain(|(_, _, k)| *k != key);
+            if !heavy.contains(&key) && !tombstoned.contains(&key.0) {
+                absent.push((false, String::new(), key));
+            }
+        }
         absent.sort();
         let room = ABSENT_CAP.saturating_sub(heavy.len());
         let absent: Vec<(String, i64)> = absent.into_iter().take(room).map(|(_, _, k)| k).collect();
