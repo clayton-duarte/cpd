@@ -34,6 +34,13 @@ QA loop remains inactive until merge and an explicit start instruction.
 
 ## Adopted patterns and evidence
 
+Existing CPD conventions were reconciled after merging `origin/main` at
+`2f4001fd`: [the Protocol registry](protocols.md) is the index, and QA's entry
+states its standalone enforcement and lack of CPD breach events. The Bug report
+Protocol supplies mitigation/root-fix/regression distinctions; QA retains the
+User's explicit GitHub-first and User-merge decisions instead of adopting the
+Manager's Merge Protocol implicitly. ADR-0018 records the vocabulary refinement.
+
 Sources consulted 2026-11-13. Published guidance demonstrates established practice,
 not universal consensus; the daily limits, ordering, authority hierarchy and
 autonomy are User policy, not claims about industry consensus.

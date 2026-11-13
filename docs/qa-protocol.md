@@ -3,6 +3,26 @@
 Status: proposed until this PR is merged. The loop starts only after the User
 explicitly starts it after merge. No scheduler, live-host access or CPD adoption
 is enabled by this document. Decisions and research: [QA decisions](qa-decisions.md).
+This Protocol is registered in [Protocols](protocols.md); vocabulary lives in
+the [Protocol glossary entry](../CONTEXT.md#checks-and-gates).
+
+## Relationship to existing Protocols
+
+The registry's **Bug report** Protocol distinguishes the immediate mitigation,
+the root-cause fix and the regression test. Preserve those distinctions in a
+QA bug issue: document a safe mitigation or why none is available, then research
+the root fix and its regression evidence. Standalone QA records these in GitHub;
+it does not require CPD bug commands or introduce duplicate CPD bug records.
+The live-host restrictions below still apply: a mitigation is not authorization
+to change the User's running instance. If live mitigation is needed, state the
+action and request User input.
+
+The registry's **Merge** Protocol describes a CPD Manager's integration path;
+the QA operator uses the explicitly agreed User-review-and-merge policy instead.
+Other Protocols apply according to their documented actors, triggers and the
+User's authorization. This document adds no secret access or external messaging
+authority. Refactors must preserve intended behavior and use relevant existing
+checks; changing intended behavior requires an explicit documented decision.
 
 ## Definition of quality
 
