@@ -140,6 +140,11 @@ export function createConnection(options: ConnectionOptions): OutboxConnection {
   const outbox = createOutbox({
     storage: options.outboxStorage ?? memoryStorage(),
     now: () => new Date().toISOString(),
+    canSend: (entry) => {
+      if (entry.kind === "action") return true;
+      const state = store.getState();
+      return state.session?.attached === true && objectOf(entry.payload)?.["sessionId"] === state.selectedSessionId;
+    },
     send: (entry) =>
       new Promise<SendResult>((resolve, reject) => {
         awaiting.set(entry.id, resolve);
@@ -277,6 +282,7 @@ export function createConnection(options: ConnectionOptions): OutboxConnection {
     }
     flush();
     store.dispatch({ type: "server", message });
+    if (message.type === "session.attached") void outbox.flush();
     if (message.type === "action.result") {
       settle(message.actionId, message.ok ? { ok: true } : { ok: false, error: message.error.message });
     }

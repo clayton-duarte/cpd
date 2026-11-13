@@ -54,6 +54,9 @@ const unsupported = <A extends unknown[], R>(f: ((...a: A) => Promise<R>) | unde
 export function createHubConnection(deps: HubDeps): HubConnection {
   let closed = false;
   const dedup = deps.dedup ?? createDedupStore({ storage: { read: () => undefined, write: () => undefined }, cap: 1000 });
+  const waitingAcks = new Set<string>();
+  const acknowledgements = new Map<string, SessionServerMessage>();
+  const ackKey = (m: SessionServerMessage): string | null => m.type === "session.submitAck" ? `submit:${m.sessionId}:${m.clientSubmissionId}` : m.type === "session.dialogResolved" ? `dialog:${m.sessionId}:${m.dialogId}` : null;
   let subscription: Disposable | null = null;
   let generation = 0;
   let attached: { sessionId: string; handle: SessionHandle; tracker: CompletionTracker | null } | null = null;
@@ -105,6 +108,8 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       }) ?? null;
       const tracked = tracker;
       const handle = await deps.backends[resolved.ref.runner].attach(resolved, (m) => {
+        const key = ackKey(m);
+        if (key !== null && waitingAcks.has(key)) acknowledgements.set(key, m);
         if (generation !== mine) return;
         tracked?.observe(m);
         send(m);
@@ -136,7 +141,19 @@ export function createHubConnection(deps: HubDeps): HubConnection {
   // a failed delivery is reported and forgotten, so the client's retry runs again
   const once = async (key: string, exec: () => Promise<void>): Promise<void> => {
     try {
-      await dedup.run(key, exec);
+      let executed = false;
+      const ack = await dedup.run(key, async () => {
+        executed = true;
+        waitingAcks.add(key);
+        try {
+          await exec();
+          return acknowledgements.get(key) ?? null;
+        } finally {
+          waitingAcks.delete(key);
+          acknowledgements.delete(key);
+        }
+      });
+      if (!executed && ack !== null) send(ack);
     } catch (e) {
       dedup.forget(key);
       throw e;
@@ -174,6 +191,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
         try {
           send({ type: "action.result", actionId: m.actionId, ok: true, output: await dedup.run(`action:${m.actionId}`, () => deps.cockpit.runAction(m.action)) });
         } catch (e) {
+          dedup.forget(`action:${m.actionId}`);
           send({ type: "action.result", actionId: m.actionId, ok: false, error: toWireError(e) });
         }
         return;
@@ -204,9 +222,9 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       case "session.loadEarlier": return onSession(m.sessionId, undefined, (h) => h.loadEarlier(m.before));
       case "session.submit":
         return onSession(m.sessionId, m.clientSubmissionId, async (h) => {
-          if (!isQuit(m.text)) return once(`submit:${m.clientSubmissionId}`, () => h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, ...(m.files === undefined ? {} : { files: m.files }), whenBusy: m.whenBusy }));
+          if (!isQuit(m.text)) return once(`submit:${m.sessionId}:${m.clientSubmissionId}`, () => h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, ...(m.files === undefined ? {} : { files: m.files }), whenBusy: m.whenBusy }));
           // nothing reaches the backend for /q, so the hub acknowledges it itself, a dedup replay included
-          await once(`submit:${m.clientSubmissionId}`, () => quit(m.sessionId));
+          await once(`submit:${m.sessionId}:${m.clientSubmissionId}`, () => quit(m.sessionId));
           send({ type: "session.submitAck", sessionId: m.sessionId, clientSubmissionId: m.clientSubmissionId, queued: false });
         });
       case "session.abort": return onSession(m.sessionId, undefined, (h) => h.abort());
@@ -214,7 +232,7 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       case "session.compact": return onSession(m.sessionId, undefined, (h) => h.compact(m.instructions));
       case "session.configure": return onSession(m.sessionId, undefined, (h) => h.configure(m.change));
       case "session.listModels": return onSession(m.sessionId, undefined, (h) => h.listModels());
-      case "dialog.respond": return onSession(m.sessionId, m.dialogId, (h) => once(`dialog:${m.dialogId}`, () => h.respond(m.dialogId, m.response)));
+      case "dialog.respond": return onSession(m.sessionId, m.dialogId, (h) => once(`dialog:${m.sessionId}:${m.dialogId}`, () => h.respond(m.dialogId, m.response)));
     }
   };
 

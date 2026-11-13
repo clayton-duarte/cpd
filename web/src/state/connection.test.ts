@@ -62,6 +62,7 @@ describe("connection", () => {
     transport.sent.length = 0;
     connection.selectSession("s2");
     expect(transport.sent).toEqual([]);
+    transport.emitMessage({ type: "session.attached", sessionId: "s2", capabilities: {}, meta: {} });
     expect(connection.submit({ text: "hi", images: [], whenBusy: "followUp" })).toBe("id1");
     expect(transport.sent).toEqual([
       { type: "session.submit", sessionId: "s2", clientSubmissionId: "id1", text: "hi", images: [], whenBusy: "followUp" },
@@ -388,6 +389,8 @@ describe("connection outbox", () => {
     expect(connection.outbox.list()).toMatchObject([{ id, kind: "submit", state: "queued" }]);
     transport.emitStatus("open");
     await Promise.resolve();
+    expect(transport.sent.some((m) => (m as { type: string }).type === "session.submit")).toBe(false);
+    transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities: {}, meta: {} });
     const submits = transport.sent.filter((m) => (m as { type: string }).type === "session.submit");
     expect(submits).toEqual([{ type: "session.submit", sessionId: "s1", clientSubmissionId: id, text: "hi", images: [], whenBusy: "queue" }]);
     transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: id, queued: false });
@@ -463,4 +466,13 @@ describe("connection outbox", () => {
       expect(a).toMatch(/^[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/);
     });
   });
+});
+
+it("default request IDs do not collide between page instances", () => {
+  const make = () => createConnection({ transport: new Fake(), scheduler: new FakeScheduler(), store: createStore() });
+  const first = make(), second = make();
+  const a = first.action({ kind: "inbox.dismiss", itemId: 1 });
+  const b = second.action({ kind: "inbox.dismiss", itemId: 1 });
+  expect(a).not.toBe(b);
+  first.close(); second.close();
 });
