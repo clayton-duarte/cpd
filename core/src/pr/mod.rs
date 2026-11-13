@@ -525,11 +525,11 @@ fn gate_checked(
             )
         })?;
     }
-    if policy.gate.workflow != Gate::Local {
-        return Ok(());
-    }
     if measure {
         coverage_gate(env, policy, plan, workflow, sha)?;
+    }
+    if policy.gate.workflow != Gate::Local {
+        return Ok(());
     }
     let hooks = gate_hooks(env, policy, plan, workflow);
     let then =

@@ -410,7 +410,20 @@ pub(super) fn resolve_refs(
             BaseWanted::Workflow(base_plan, base_key) => {
                 coverage_green(conn, base_plan, base_key.as_str(), subject.repo)?
             }
-            BaseWanted::Branch(_) => false,
+            // A needs-only edit carries the stored branch: resolve it back to its coverage workflow.
+            BaseWanted::Branch(branch) => {
+                let mut green = false;
+                for k in known_workflows(conn, subject.plan)? {
+                    if k.repo == subject.repo
+                        && (k.lead_branch == *branch || (k.status == "merged" && k.base == *branch))
+                        && coverage_green(conn, subject.plan, &k.key, subject.repo)?
+                    {
+                        green = true;
+                        break;
+                    }
+                }
+                green
+            }
         };
         if !green {
             return Err(base_coverage_required());
