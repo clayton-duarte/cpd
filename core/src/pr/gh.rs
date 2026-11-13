@@ -3026,7 +3026,7 @@ fn poll_node(
     reply: &Reply,
     v: Value,
     bots: &[String],
-    excused_labels: &[String],
+    excused_labels: &dyn Fn(&str) -> Result<Vec<String>, CpdError>,
 ) -> Result<PollNode, CpdError> {
     let head_oid = v
         .get("headRefOid")
@@ -3058,7 +3058,11 @@ fn poll_node(
         .unwrap_or_default();
     // pro-d447: a PR carrying an excused label has its failing `danger` check (a CheckRun or a StatusContext) excused; the
     // hold is computed once and `ChecksSummary::of` applies it. Never unconditional: Danger without the label stays failed.
-    let hold = super::status::policy_hold(&labels, excused_labels);
+    let repo = v["repository"]["nameWithOwner"].as_str().ok_or_else(|| {
+        reply
+            .fail("gh api graphql answered a pull request without repository.nameWithOwner.".into())
+    })?;
+    let hold = super::status::policy_hold(&labels, &excused_labels(repo)?);
     let contexts =
         v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"].as_array();
     if let Some(nodes) = contexts.filter(|n| !n.is_empty()) {
@@ -3111,7 +3115,7 @@ fn parse_poll(
     reply: &Reply,
     plan: &PollPlan,
     bots: &[String],
-    excused_labels: &[String],
+    excused_labels: &dyn Fn(&str) -> Result<Vec<String>, CpdError>,
 ) -> Result<PollRead, CpdError> {
     let (aliases, metas) = (plan.heavy.len() + plan.absent.len(), plan.meta.len());
     let (data, errors): (Value, _) = reply.envelope()?;
@@ -3212,7 +3216,7 @@ pub fn poll_once(
     cwd: &Path,
     plan: &PollPlan,
     bots: &[String],
-    excused_labels: &[String],
+    excused_labels: &dyn Fn(&str) -> Result<Vec<String>, CpdError>,
 ) -> Result<PollRead, CpdError> {
     let call = || {
         let (args, out) = graphql(runner, cwd, &build_poll_query(plan))?;

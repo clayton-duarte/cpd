@@ -113,7 +113,7 @@ The `Heavy` fragment is sent only when the poll has heavy pull requests (a non-e
 
 The `Heavy` test compares with `swr_pr_detail`, and it is the "moved since `hydrated_at`" test of the spec: a row whose `updated_at` or `head_oid` differs from what the last hydrate stored is re-read, and a successful hydrate sets `hydrated_at`. A pull request whose detail did not move, costs no heavy fields.
 
-**Cap (gh-budget-and-swr, pro-d477).** The builder sends at most `HEAVY_CAP` = 5 `Heavy` selections in one document; the rest wait a pass. Among the candidates the User's authored or Plan-owned pull requests come first (pro-d474 (b)), then the oldest `hydrated_at`. The reason is GitHub's 10 s execution limit for one call, which a document with many `Heavy` selections exceeds (pro-d477). **Superseded:** the cap of 25 that this paragraph first set, and the node-limit reasoning behind it. The code still has 25 until the Job that implements this lands (§14). The cap is this page's guess at keeping one document under GitHub's documented 500 000-node limit, which this page has not measured. The builder's unit test asserts the cap, and `rateLimit.cost` of each pass is stored (§5) so a real cost can replace the guess.
+**Cap (gh-budget-and-swr, pro-d477).** The builder sends at most `HEAVY_CAP` = 5 `Heavy` selections in one document; the rest wait a pass. Among the candidates the User's authored or Plan-owned pull requests come first (pro-d474 (b)), then the oldest `hydrated_at`. The reason is GitHub's 10 s execution limit for one call, which a document with many `Heavy` selections exceeds (pro-d477). **Superseded:** the cap of 25 that this paragraph first set, and the node-limit reasoning behind it. The code still has 25 until the Job that implements this lands (§14). The cap is this page's guess at keeping one document under GitHub's documented 500 000-node limit, which this page has not measured. The builder's unit test asserts the cap, and `rateLimit.cost` of each pass is stored (§5) so a real cost can replace the guess. **Excused labels** are resolved per PR from the PR's repo/owner policy (contract §8.3 `pr.excused_labels`) on each pass, never as a static empty set.
 
 ### 3.3 Paging inside the document
 
@@ -365,7 +365,7 @@ The tests this design needs, by the rule they pin:
 - **Single readers** (`readers_tests.rs`): no module outside `core/src/swr/` reads `pull_requests` for `checks`, `review_decision`, `state` or `head_oid` except through `effective_pr` or the pass; a grep test over the source fails on `Command::new("gh")` outside `core/src/host/runner.rs` and `core/src/pr/gh.rs`.
 - **Wake** (`wake_tests.rs`): a head change with green checks on a claimed pull request appends one `session-message`; the same head again appends none; a head change with checks not green appends none.
 - **Deploys** (`deploys_tests.rs`): an unchanged `(run_id, updated_at)` makes no `pending_deployments` call; a row whose pull request closed goes inactive.
-- **Checks reduction** (`status_tests.rs`, existing): `ChecksSummary::of` keeps the check-level `excused_labels` reduction of pro-d447 (A9). Its tests stay green. This branch predates the #920 merge on `main`; the rebase is the Job's first step, as the spec says.
+- **Checks reduction** (`status_tests.rs`, existing): `ChecksSummary::of` keeps the check-level `excused_labels` reduction of pro-d447 (A9), resolving `pr.excused_labels` from the PR's repo/owner policy. Its tests stay green. This branch predates the #920 merge on `main`; the rebase is the Job's first step, as the spec says.
 - **Cutover** (per file, §12): each deleted cache has no reader after its cutover, pinned by a test that the file path no longer appears in the source.
 
 ## 12. What dies
@@ -423,7 +423,7 @@ Not decided by this page. Each is recorded so no Job guesses it.
 ## Decision pro-d453 (Light read, Danger freeze)
 
 - A teammate's open pull request whose stored rollup is `failed` and whose labels (`labels_json`) match an excused label is hydrated (the `Heavy` set, within the cap) although it is not the User's own, and once for its head: the contexts are what excuse a failing Danger. The Light read has only the rollup state, so a later light node of the same head reduces the stored detail's contexts again under the policy hold instead of bringing `failed` back.
-- `poll_node` computes the policy hold once (`status::policy_hold`) and passes it to `ChecksSummary::of`, which excuses a failing `danger` CheckRun and a failing `Danger` StatusContext. The hold needs the excused label: a failing Danger without it stays failed (pro-d447).
+- `poll_node` computes the policy hold once (`status::policy_hold`) from the PR's repo/owner policy (contract §8.3) and passes it to `ChecksSummary::of`, which excuses a failing `danger` CheckRun and a failing `Danger` StatusContext. The hold matches the PR's labels against the policy's `pr.excused_labels` list (pro-d447): a failing Danger without a matching excused label stays failed.
 - The Inbox reader derives `checks_state` from the effective `checks` first (`passed` is `SUCCESS`, `failed` `FAILURE`, `pending` `PENDING`); only a row with `none` falls back to the detail's rollup. It takes the reviews from the Light read's `latestReviews` and the author from `author_login`.
 
 ## Expired reset deadlines on rate-limit failures (QA #1118)
