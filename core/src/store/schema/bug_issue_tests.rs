@@ -8,11 +8,11 @@ use crate::store::Store;
 #[test]
 fn migrations_fill_issue_for_open_bugs() {
     let (_dir, home) = crate::store::tests::tmp_home();
-    // The store as it is before the migration `*-bug-issue`: every migration but that one.
+    // The store as it is before the migration `*-bug-issue` and its backfill: every migration but those two.
     let before: Vec<Named> = NAMED
         .iter()
         .copied()
-        .filter(|m| !m.name.ends_with("-bug-issue"))
+        .filter(|m| !m.name.ends_with("-bug-issue") && !m.name.ends_with("-bug-issue-backfill"))
         .collect();
     let mut store = crate::store::tests::open_named(&home, &before).unwrap();
     store
