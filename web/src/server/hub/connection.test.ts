@@ -273,7 +273,7 @@ describe("hub connection", () => {
     handle.failWith = new Error("disk full");
     await t.hub.handle(sessionMsg("dialog.respond", { dialogId: "call:q1", response }));
     expect(t.sent).toMatchObject([
-      { type: "session.error", sessionId: "pi-1", error: { code: "internal", message: "disk full" } },
+      { type: "session.error", sessionId: "pi-1", clientSubmissionId: "call:q1", error: { code: "internal", message: "disk full" } },
     ]);
     handle.failWith = null;
     await t.hub.handle(sessionMsg("dialog.respond", { dialogId: "call:q1", response }));
@@ -305,6 +305,16 @@ describe("hub connection", () => {
       expect(t.actions).toEqual([{ kind: "plan.archive", planId: "p1" }, { kind: "plan.archive", planId: "p1" }]);
       expect(handle.calls.filter(([n]) => n === "submit")).toEqual([]);
       expect(t.sent.filter((m) => m.type === "session.error")).toEqual([]);
+    });
+
+    it("a successful /q is acknowledged, and a replay is acknowledged again without archiving twice", async () => {
+      const t = setup();
+      await attachTo(t, "lead-1");
+      await submit(t, "lead-1", "c1", "/q");
+      await submit(t, "lead-1", "c1", "/q");
+      expect(t.actions).toEqual([{ kind: "plan.archive", planId: "p1" }]);
+      const ack = { type: "session.submitAck", sessionId: "lead-1", clientSubmissionId: "c1", queued: false };
+      expect(t.sent).toEqual([ack, ack]);
     });
 
     it("a refused archive of /q is reported and never submits to the model", async () => {

@@ -428,4 +428,39 @@ describe("connection outbox", () => {
     expect(store.getState().pendingActionIds).toEqual([]);
     expect(store.getState().completedActionIds).toEqual([]);
   });
+
+  it("a failed dialog response marks its outbox entry failed with the error", async () => {
+    const { transport, store, connection } = setup();
+    connection.start(); transport.emitStatus("open");
+    connection.selectSession("s1");
+    connection.respond("d1", { method: "ask_user_question", outcome: "cancelled" } as never);
+    await Promise.resolve();
+    transport.emitMessage({ type: "session.error", sessionId: "s1", clientSubmissionId: "d1", error: { code: "internal", message: "pi down" } });
+    await new Promise<void>((r) => queueMicrotask(r));
+    await new Promise<void>((r) => queueMicrotask(r));
+    expect(connection.outbox.list()).toMatchObject([{ id: "d1", kind: "respond", state: "failed", error: "pi down" }]);
+    expect(store.getState().session).not.toBeUndefined();
+  });
+
+  describe("default ids without crypto.randomUUID", () => {
+    const ids = (c: unknown, now = () => 5) => {
+      const transport = new Fake();
+      const connection = createConnection({ transport, scheduler: new FakeScheduler(), store: createStore(), idEnv: { crypto: c as never, now, random: () => 0.5 } });
+      connection.start(); transport.emitStatus("open");
+      connection.selectSession("s1");
+      return [connection.submit({ text: "a", images: [], whenBusy: "followUp" }), connection.submit({ text: "b", images: [], whenBusy: "followUp" })];
+    };
+    it("uses randomUUID when present", () => {
+      expect(ids({ randomUUID: () => "u" })[0]).toBe("u");
+    });
+    it("falls back to a getRandomValues UUIDv4", () => {
+      const [a] = ids({ getRandomValues: (b: Uint8Array) => { b.fill(0xff); return b; } });
+      expect(a).toBe("ffffffff-ffff-4fff-bfff-ffffffffffff");
+    });
+    it("falls back to a unique time+counter+random string without crypto", () => {
+      const [a, b] = ids(undefined);
+      expect(a).not.toBe(b);
+      expect(a).toMatch(/^[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/);
+    });
+  });
 });

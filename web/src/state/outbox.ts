@@ -155,3 +155,26 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     },
   };
 }
+
+/** Browser/runtime pieces an id needs; injected so tests use no real crypto or time. */
+export interface IdEnv {
+  crypto?: { randomUUID?: () => string; getRandomValues?: <T extends ArrayBufferView>(a: T) => T } | undefined;
+  now: () => number;
+  random: () => number;
+}
+/** Request ids: crypto.randomUUID is secure-context only, and the WebUI is also opened over plain-HTTP LAN origins. */
+export function createIdGenerator(env: IdEnv): () => string {
+  let counter = 0;
+  return () => {
+    const c = env.crypto;
+    if (typeof c?.randomUUID === "function") return c.randomUUID();
+    if (typeof c?.getRandomValues === "function") {
+      const b = c.getRandomValues(new Uint8Array(16));
+      b[6] = (b[6]! & 0x0f) | 0x40;
+      b[8] = (b[8]! & 0x3f) | 0x80;
+      const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+    }
+    return `${env.now().toString(36)}-${(++counter).toString(36)}-${Math.floor(env.random() * 2 ** 32).toString(36)}`;
+  };
+}

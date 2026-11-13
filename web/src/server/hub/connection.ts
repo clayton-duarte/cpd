@@ -203,13 +203,18 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       case "session.detach": return detach();
       case "session.loadEarlier": return onSession(m.sessionId, undefined, (h) => h.loadEarlier(m.before));
       case "session.submit":
-        return onSession(m.sessionId, m.clientSubmissionId, (h) => once(`submit:${m.clientSubmissionId}`, () => isQuit(m.text) ? quit(m.sessionId) : h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, ...(m.files === undefined ? {} : { files: m.files }), whenBusy: m.whenBusy })));
+        return onSession(m.sessionId, m.clientSubmissionId, async (h) => {
+          if (!isQuit(m.text)) return once(`submit:${m.clientSubmissionId}`, () => h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, ...(m.files === undefined ? {} : { files: m.files }), whenBusy: m.whenBusy }));
+          // nothing reaches the backend for /q, so the hub acknowledges it itself, a dedup replay included
+          await once(`submit:${m.clientSubmissionId}`, () => quit(m.sessionId));
+          send({ type: "session.submitAck", sessionId: m.sessionId, clientSubmissionId: m.clientSubmissionId, queued: false });
+        });
       case "session.abort": return onSession(m.sessionId, undefined, (h) => h.abort());
       case "session.abortSubmission": return onSession(m.sessionId, undefined, (h) => h.abortSubmission(m.clientSubmissionId));
       case "session.compact": return onSession(m.sessionId, undefined, (h) => h.compact(m.instructions));
       case "session.configure": return onSession(m.sessionId, undefined, (h) => h.configure(m.change));
       case "session.listModels": return onSession(m.sessionId, undefined, (h) => h.listModels());
-      case "dialog.respond": return onSession(m.sessionId, undefined, (h) => once(`dialog:${m.dialogId}`, () => h.respond(m.dialogId, m.response)));
+      case "dialog.respond": return onSession(m.sessionId, m.dialogId, (h) => once(`dialog:${m.dialogId}`, () => h.respond(m.dialogId, m.response)));
     }
   };
 

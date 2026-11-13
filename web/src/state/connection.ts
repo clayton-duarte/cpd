@@ -2,7 +2,7 @@ import type { CockpitAction, SettingsChanges } from "../protocol/cockpit.ts";
 import { WebError, toWireError, type ConfigureChange, type DialogResponse, type WhenBusy, type WireImage, type WireError } from "../protocol/domain.ts";
 import type { Disposable, Scheduler, Transport } from "../protocol/runtime.ts";
 import type { ClientMessage, ServerMessage } from "../protocol/wire.ts";
-import { createOutbox, type Outbox, type OutboxEntry, type OutboxStorage, type SendResult } from "./outbox.ts";
+import { createIdGenerator, createOutbox, type IdEnv, type Outbox, type OutboxEntry, type OutboxStorage, type SendResult } from "./outbox.ts";
 import type { Store } from "./store.ts";
 
 export interface ConnectionOptions {
@@ -10,6 +10,8 @@ export interface ConnectionOptions {
   scheduler: Scheduler;
   store: Store;
   newId?: () => string;
+  /** Inputs of the default id generator; default: the runtime's crypto, clock and Math.random. */
+  idEnv?: IdEnv;
   backoff?: { baseMs: number; maxMs: number };
   /** Where unsent submissions, responses and actions survive a reload. Default: in memory. */
   outboxStorage?: OutboxStorage;
@@ -116,8 +118,7 @@ function parseServerMessage(raw: unknown): ServerMessage {
 export function createConnection(options: ConnectionOptions): OutboxConnection {
   const { transport, scheduler, store } = options;
   const backoff = options.backoff ?? DEFAULT_BACKOFF;
-  let counter = 0;
-  const newId = options.newId ?? ((): string => `c${++counter}`);
+  const newId = options.newId ?? createIdGenerator(options.idEnv ?? { crypto: globalThis.crypto, now: Date.now, random: Math.random });
   let attempt = 0;
   let closed = false;
   let timer: Disposable | null = null;
@@ -282,6 +283,7 @@ export function createConnection(options: ConnectionOptions): OutboxConnection {
     if (message.type === "session.submitAck") settle(message.clientSubmissionId, { ok: true });
     if (message.type === "session.dialogResolved") settle(message.dialogId, { ok: true });
     if (message.type === "session.error" && message.clientSubmissionId !== undefined) {
+      // a failed dialog response carries its dialogId here, which is the outbox id of the response
       store.dispatch({ type: "dismissPending", clientSubmissionId: message.clientSubmissionId });
       settle(message.clientSubmissionId, { ok: false, error: message.error.message });
     }
