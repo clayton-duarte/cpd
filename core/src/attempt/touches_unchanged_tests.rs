@@ -68,7 +68,7 @@ fn directory_prefix_touch_matching_any_change_is_accepted() {
 
 #[test]
 fn explore_and_open_jobs_are_exempt() {
-    for kind in ["explore", "open"] {
+    for kind in ["update", "open"] {
         let mut r = rig(Spec {
             kind,
             ..Spec::default()

@@ -416,7 +416,10 @@ fn a_stray_edit_outside_touches_is_refused() {
 fn a_generated_path_change_passes() {
     // The lockfile is generated: the repo policy's `[generated] paths` allow it without an approval.
     let mut generated = rig(Spec {
-        changed: &[(LOCKFILE, "lockfileVersion: 9\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            (LOCKFILE, "lockfileVersion: 9\n"),
+        ],
         ..Spec::default()
     });
     assert!(generated.submit().is_ok(), "a generated path is exempt");
@@ -424,7 +427,10 @@ fn a_generated_path_change_passes() {
 
     // The control: the same commit, the same Job, and no `[generated]` entry: refused.
     let mut stray = rig(Spec {
-        changed: &[(LOCKFILE, "lockfileVersion: 9\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            (LOCKFILE, "lockfileVersion: 9\n"),
+        ],
         generated: &[],
         ..Spec::default()
     });
@@ -441,6 +447,7 @@ fn a_base_merge_change_passes() {
     // The Attempt merged the base, whose own commit changed `src/from_base.rs`: the same blob as `main`'s, so exempt.
     let ahead = [("src/from_base.rs", "// from the base\n")];
     let mut merging = rig(Spec {
+        changed: &[("docs/research/x.md", "# Findings\n\nEdited.\n")],
         base_ahead: &ahead,
         brings_base: true,
         ..Spec::default()
@@ -453,7 +460,10 @@ fn a_base_merge_change_passes() {
 
     // The control: a commit of the Attempt's own that writes the same path with other content: refused.
     let mut stray = rig(Spec {
-        changed: &[("src/from_base.rs", "// the Attempt's own edit\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            ("src/from_base.rs", "// the Attempt's own edit\n"),
+        ],
         base_ahead: &ahead,
         ..Spec::default()
     });
@@ -495,7 +505,10 @@ fn an_open_and_an_update_job_are_exempt() {
 #[test]
 fn an_approved_touch_passes() {
     let mut rig = rig(Spec {
-        changed: &[("src/stray.rs", "// stray\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            ("src/stray.rs", "// stray\n"),
+        ],
         ..Spec::default()
     });
     // Without an approval the stray path is refused.
