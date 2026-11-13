@@ -2880,6 +2880,9 @@ pub fn checks_of_detail(detail: &Value) -> Vec<Check> {
 /// What one pass of the single GraphQL read needs beyond the fixed part (swr-github.md §3.1): the rows chosen before the call.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PollPlan {
+    /// Opaque continuation cursors for one extra page per search; first pages remain live.
+    pub authored_after: Option<String>,
+    pub reviews_after: Option<String>,
     /// `(owner/name, number)` of the pull requests whose `Heavy` selection is sent: the cached header differs from the last
     /// hydrate (`updatedAt` or `headRefOid`), or there is no detail. One `p<i>` alias each, first.
     pub heavy: Vec<(String, i64)>,
@@ -2900,9 +2903,17 @@ const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { 
 /// The one read document of a pass (swr-github.md §3.1): the viewer, the rate limit, the two searches (light), one alias per
 /// heavy then absent pull request, one per repository metadata. A repo that is not `owner/name` is skipped.
 pub fn build_poll_query(plan: &PollPlan) -> String {
-    let search = |alias: &str, q: &str, fragment: &str| {
+    let search = |alias: &str, q: &str, fragment: &str, after: Option<&str>| {
+        let after = after
+            .map(|cursor| {
+                format!(
+                    ", after: {}",
+                    serde_json::to_string(cursor).expect("string")
+                )
+            })
+            .unwrap_or_default();
         format!(
-            " {alias}: search(type: ISSUE, query: \"{q}\", first: 100) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ ...{fragment} }} }} }}"
+            " {alias}: search(type: ISSUE, query: \"{q}\", first: 100{after}) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ ...{fragment} }} }} }}"
         )
     };
     let mut query = String::from("query { viewer { login } rateLimit { remaining resetAt cost }");
@@ -2910,12 +2921,32 @@ pub fn build_poll_query(plan: &PollPlan) -> String {
         "authored",
         "is:pr is:open author:@me archived:false sort:created-asc",
         "Light",
+        None,
     ));
     query.push_str(&search(
         "reviews",
         "is:pr is:open review-requested:@me archived:false sort:created-asc",
         "PeerLight",
+        None,
     ));
+    for (alias, query_text, fragment, cursor) in [
+        (
+            "authoredMore",
+            "is:pr is:open author:@me archived:false sort:created-asc",
+            "Light",
+            plan.authored_after.as_deref(),
+        ),
+        (
+            "reviewsMore",
+            "is:pr is:open review-requested:@me archived:false sort:created-asc",
+            "PeerLight",
+            plan.reviews_after.as_deref(),
+        ),
+    ] {
+        if cursor.is_some() {
+            query.push_str(&search(alias, query_text, fragment, cursor));
+        }
+    }
     let aliased = plan
         .heavy
         .iter()
@@ -2973,6 +3004,9 @@ pub struct RepoMeta {
 /// What the document answered.
 #[derive(Clone, Debug)]
 pub struct PollRead {
+    /// Continuations for the next successful pass; None starts another sweep.
+    pub authored_after: Option<String>,
+    pub reviews_after: Option<String>,
     pub viewer: String,
     pub remaining: i64,
     pub reset_at: String,
@@ -3026,7 +3060,7 @@ fn poll_node(
     reply: &Reply,
     v: Value,
     bots: &[String],
-    excused_labels: &[String],
+    excused_labels: &dyn Fn(&str) -> Result<Vec<String>, CpdError>,
 ) -> Result<PollNode, CpdError> {
     let head_oid = v
         .get("headRefOid")
@@ -3058,7 +3092,11 @@ fn poll_node(
         .unwrap_or_default();
     // pro-d447: a PR carrying an excused label has its failing `danger` check (a CheckRun or a StatusContext) excused; the
     // hold is computed once and `ChecksSummary::of` applies it. Never unconditional: Danger without the label stays failed.
-    let hold = super::status::policy_hold(&labels, excused_labels);
+    let repo = v["repository"]["nameWithOwner"].as_str().ok_or_else(|| {
+        reply
+            .fail("gh api graphql answered a pull request without repository.nameWithOwner.".into())
+    })?;
+    let hold = super::status::policy_hold(&labels, &excused_labels(repo)?);
     let contexts =
         v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"].as_array();
     if let Some(nodes) = contexts.filter(|n| !n.is_empty()) {
@@ -3111,7 +3149,7 @@ fn parse_poll(
     reply: &Reply,
     plan: &PollPlan,
     bots: &[String],
-    excused_labels: &[String],
+    excused_labels: &dyn Fn(&str) -> Result<Vec<String>, CpdError>,
 ) -> Result<PollRead, CpdError> {
     let (aliases, metas) = (plan.heavy.len() + plan.absent.len(), plan.meta.len());
     let (data, errors): (Value, _) = reply.envelope()?;
@@ -3144,7 +3182,38 @@ fn parse_poll(
             .map(|n| poll_node(reply, n.clone(), bots, excused_labels))
             .collect()
     };
-    let (authored, reviews) = (search("authored")?, search("reviews")?);
+    let pages = |alias: &str,
+                 more: &str,
+                 cursor: Option<&str>|
+     -> Result<(Vec<PollNode>, Option<String>), CpdError> {
+        let mut nodes = search(alias)?;
+        let page = if cursor.is_some() {
+            nodes.extend(search(more)?);
+            more
+        } else {
+            alias
+        };
+        let info = &data[page]["pageInfo"];
+        let has_next = info["hasNextPage"]
+            .as_bool()
+            .ok_or_else(|| missing(&format!("{page}.pageInfo.hasNextPage")))?;
+        let next = if has_next {
+            let next = info["endCursor"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| missing(&format!("{page}.pageInfo.endCursor")))?;
+            if Some(next) == cursor {
+                return Err(reply.fail(format!("{page} pagination made no progress.")));
+            }
+            Some(next.to_owned())
+        } else {
+            None
+        };
+        Ok((nodes, next))
+    };
+    let (authored, authored_after) =
+        pages("authored", "authoredMore", plan.authored_after.as_deref())?;
+    let (reviews, reviews_after) = pages("reviews", "reviewsMore", plan.reviews_after.as_deref())?;
     let mut found = Vec::with_capacity(aliases);
     for i in 0..aliases {
         let alias = format!("p{i}");
@@ -3195,6 +3264,8 @@ fn parse_poll(
         });
     }
     Ok(PollRead {
+        authored_after,
+        reviews_after,
         viewer,
         remaining,
         reset_at,
@@ -3212,7 +3283,7 @@ pub fn poll_once(
     cwd: &Path,
     plan: &PollPlan,
     bots: &[String],
-    excused_labels: &[String],
+    excused_labels: &dyn Fn(&str) -> Result<Vec<String>, CpdError>,
 ) -> Result<PollRead, CpdError> {
     let call = || {
         let (args, out) = graphql(runner, cwd, &build_poll_query(plan))?;

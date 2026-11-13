@@ -1,5 +1,7 @@
 import type { LiveSource } from "./live.ts";
 import { execFile } from "node:child_process";
+import { createAskDiagSink } from "../ask-diag.ts";
+import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import { IMAGE_MAX_COUNT, IMAGE_MAX_TOTAL_BASE64, PI_SEND_TEXT_MAX, WINDOW_SIZE, WebError, toWireError } from "../../protocol/domain.ts";
@@ -71,7 +73,14 @@ const isBusy = (f: JsonlFacts): boolean =>
   f.lastRole === "toolResult" ||
   (f.lastRole === "assistant" && (f.lastStopReason === "toolUse" || f.lastStopReason === "pending"));
 
+/** One diagnostic line of an ask answer (never carries answer text). */
+export type AskDiagRecord = { readonly at: string; readonly side: "web"; readonly event: string; readonly session: string; readonly dialogId?: string } & Readonly<Record<string, unknown>>;
+/** Receives each diagnostic record; the default appends it to `<cpdHome>/run/ask-diag.log`. */
+export type AskDiagSink = (record: AskDiagRecord) => void;
+
 export function createPiBackend(deps: {
+  /** Injectable diagnostics sink; defaults to appending to `<cpdHome>/run/ask-diag.log`. */
+  diag?: AskDiagSink;
   cpd: Cpd;
   fs: FileBoundary;
   watch: WatchBoundary;
@@ -86,6 +95,7 @@ export function createPiBackend(deps: {
   /** One source per attach: pass a factory when the backend serves several sessions. */
   live?: LiveSource | (() => LiveSource);
 }): SessionBackend {
+  const sink: AskDiagSink = deps.diag ?? (createAskDiagSink(deps.cpdHome) as AskDiagSink);
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
 
   async function attach(session: ResolvedSession, emit: SessionEmit): Promise<SessionHandle> {
@@ -180,6 +190,7 @@ export function createPiBackend(deps: {
     const status = (): void => out({ type: "session.status", sessionId, busy, queued: [] });
     const openReviews = new Set<string>();
     const openQuestions = new Set<string>();
+    const answeringQuestions = new Set<string>();
     const dialog = (d: Dialog): void => {
       if (d.method === "cpd_plan_review") openReviews.add(d.id);
       if (d.method === "ask_user_question") openQuestions.add(d.id);
@@ -254,6 +265,7 @@ export function createPiBackend(deps: {
         out(m);
       },
       (ts) => committed.has(ts),
+      (callId) => tail.normalizer.completedTools.has(callId),
     );
 
     const POLL_MS = 250;
@@ -301,7 +313,7 @@ export function createPiBackend(deps: {
         if (input.whenBusy === "steer") throw unsupported(REASON.steer);
         const files = input.files ?? [];
         if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
-        const stamp = deps.now();
+        const stamp = `${deps.now()}-${randomUUID()}`;
         const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
         const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
         const markers: string[] = [];
@@ -338,6 +350,26 @@ export function createPiBackend(deps: {
       listModels: () => Promise.reject(unsupported(REASON.model)),
       async respond(dialogId, response) {
         if (response.method === "ask_user_question") {
+          const diag = (event: string, data: Record<string, unknown> = {}): void => {
+            try {
+              sink({ at: new Date(deps.now()).toISOString(), side: "web", event, session: sessionId, dialogId, ...data });
+            } catch {
+              // diagnostics never change behaviour
+            }
+          };
+          diag("respond.received", {
+            method: response.method,
+            outcome: response.outcome,
+            ...(response.outcome === "answered"
+              ? { answers: response.result.answers.map((a) => ({ kind: a.kind, answerLength: (a.answer ?? "").length })) }
+              : {}),
+          });
+          if (!openQuestions.has(dialogId) || answeringQuestions.has(dialogId)) {
+            diag("respond.refused", {
+              reason: !openQuestions.has(dialogId) ? "dialog is not an open question" : "dialog is already being answered",
+            });
+            throw new WebError("invalid_message", `no answerable question ${dialogId}`, { field: "dialogId" });
+          }
           const askPath = `${deps.cpdHome}/run/ask/${sessionId}.json`;
           const payload = {
             dialogId,
@@ -346,12 +378,18 @@ export function createPiBackend(deps: {
                 ? response.result
                 : { answers: [], cancelled: true },
           };
-          await deps.fs.write(
-            askPath,
-            new TextEncoder().encode(JSON.stringify(payload)),
-          );
+          answeringQuestions.add(dialogId);
+          try {
+            await deps.fs.write(
+              askPath,
+              new TextEncoder().encode(JSON.stringify(payload)),
+            );
+          } finally {
+            answeringQuestions.delete(dialogId);
+          }
           // The file boundary creates parent directories. Only acknowledge
           // delivery once its write succeeds, so failures leave the dialog open.
+          diag("respond.written", { path: askPath });
           openQuestions.delete(dialogId);
           out({
             type: "session.dialogResolved",
@@ -364,14 +402,25 @@ export function createPiBackend(deps: {
             try {
               await nodeFs.stat(askPath);
               await nodeFs.rm(askPath, { force: true });
-              const shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
+              let shown: Record<string, unknown>;
+              try {
+                shown = await deps.cpd.json(toArgv({ kind: "session.show", sessionId }));
+              } catch (error) {
+                diag("respond.escape_failed", { reason: "lookup_failed" });
+                throw error;
+              }
               const pane =
                 typeof (shown["session"] as Record<string, unknown> | undefined)?.["tmux_pane"] === "string"
                   ? ((shown["session"] as Record<string, unknown>)["tmux_pane"] as string)
                   : null;
-              if (pane !== null) {
+              if (pane === null) {
+                diag("respond.escape_failed", { reason: "no_pane" });
+              } else {
                 await new Promise<void>((resolve) => {
-                  execFile("tmux", ["send-keys", "-t", pane, "Escape"], () => resolve());
+                  execFile("tmux", ["send-keys", "-t", pane, "Escape"], (error) => {
+                    diag(error ? "respond.escape_failed" : "respond.escape_sent", error ? { reason: "send_failed" } : {});
+                    resolve();
+                  });
                 });
               }
               if (response.outcome === "answered") {
@@ -394,8 +443,8 @@ export function createPiBackend(deps: {
           })();
           return;
         }
-        if (response.outcome === "cancelled") return;
         if (!openReviews.has(dialogId)) throw new WebError("invalid_message", `no pending plan review ${dialogId}`, { field: "dialogId" });
+        if (response.outcome === "cancelled") return;
         const n = dialogId.slice("review:".length);
         const plan = ref.key.split(":")[1] as string;
         const decide = (decision: "approve" | "reject", feedbackFile?: string): string[] =>

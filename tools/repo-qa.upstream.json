@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "repository": "https://github.com/clayton-duarte/skills",
+  "revision": "9ea7f767ffbeddc3c0ff8adb0679a3d1b200f859",
+  "path": "skills/repo-qa",
+  "files": {
+    "README.md": "6b3bd5d66009c54a8902a80d19a0ab21f556b92c1f54dc7dcf2995c5f1cf19a3",
+    "SKILL.md": "d934e2f6459dbe6533e36e3eff5bbd93aaa68a7433df9cb93e15c9c25bbd6e8a",
+    "assets/config.example.json": "f2172748341b34dca9712a60cf8f49766821b241dd1e770c7e77c7b23b523eb4",
+    "assets/handoff.md": "67b5b4d0f2e2cf87d4d416f46d77e5e0c4368a6cd31ca202d4f91569a06c9c6a",
+    "assets/issue.md": "f46a3c140c2ae0a0061d6e745abdaa63f231e7abaddbaaa6a29839c235a24548",
+    "assets/pr.md": "c8508959c60d53fef894ac4c4467d1ebfacbea4b9d74489a9171ebd4ed5fef82",
+    "assets/profile.md": "cac26bbe9441cdb656471e011888476959ced4a8001952227ed8821d1ade1bb6",
+    "assets/run.example.json": "15791a56d6a09e5348466adfd1a811897a14297506bb931c9d15d2026a2342a0",
+    "references/PROTOCOL.md": "e819e685f5ede2bd665329bfc104f071d217ce20179873e7cad9a824f5573bb1",
+    "references/RESEARCH.md": "03c3ef958c45e92ef79645c7b6f4a2be80052cd9b9729aa7ca3b6d64c27328a1",
+    "scripts/portability.test.mjs": "8013858f0da4ceee0be3ea60e60cc863d02c618dc88be88ac05710d8462e8a78",
+    "scripts/qa.mjs": "97ae2a053abee7e73239cf78b3f8a712b34f9fb7b5dcd870cbfe6f1222e5d5d1",
+    "scripts/qa.test.mjs": "58be1248e2ca55715632661be4ce61ae3bc6e191c4e082e0d0337e7bdce4cdbd"
+  }
+}

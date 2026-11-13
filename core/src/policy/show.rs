@@ -8,9 +8,10 @@ use serde_json::{Map, Value, json};
 
 use super::domain::{
     BUILD, EXCUSED_LABELS, FEEDBACK_CHECKS, FEEDBACK_REPLY, GATE_PR, HUMAN_GATED_CONTEXTS,
-    JIRA_DONE, JIRA_ESTIMATE_FIELDS, JIRA_IN_PROGRESS, JIRA_IN_REVIEW, JIRA_REQUIRED, LIST, MERGE,
-    PATHS, POST_CHANNEL, POST_ENABLED, POST_MERGED_REACTION, POST_REQUIRE_APPROVAL, POST_TEMPLATE,
-    PRE_COMMIT, PRE_MERGE, PRE_START, REQUIRED_CHECKS, RUN, WORKFLOWS,
+    JIRA_DONE, JIRA_ESTIMATE_FIELDS, JIRA_IN_PROGRESS, JIRA_IN_REVIEW, JIRA_REQUIRED, LIST,
+    LOCAL_DOCS, MERGE, PATHS, POST_CHANNEL, POST_ENABLED, POST_MERGED_REACTION,
+    POST_REQUIRE_APPROVAL, POST_TEMPLATE, PRE_COMMIT, PRE_MERGE, PRE_START, REQUIRED_CHECKS, RUN,
+    WORKFLOWS,
 };
 use super::resolve::{machine_path, owner_path, repo_path};
 use super::{
@@ -291,7 +292,10 @@ pub(super) fn typed_keys(
         }
         Domain::Workflow => {
             let workflow = &resolved.policy.workflow;
-            vec![(JIRA_REQUIRED, value(&workflow.jira_required))]
+            vec![
+                (JIRA_REQUIRED, value(&workflow.jira_required)),
+                (LOCAL_DOCS, value(&workflow.local_docs)),
+            ]
         }
         Domain::Hooks => {
             let h = &resolved.policy.hooks;
@@ -360,3 +364,7 @@ fn machine_markdown(name: &str, machine: &Machine) -> String {
     }
     md
 }
+
+#[cfg(test)]
+#[path = "show_tests.rs"]
+mod show_tests;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 import type { ServerMessage } from "../protocol/wire.ts";
 import { FakeScheduler } from "../testing/scheduler.ts";
 import type { HubConnection } from "./hub/connection.ts";
@@ -21,6 +22,7 @@ class FakeSocket implements WsSocket {
   private readonly messageHandlers: Array<(data: unknown) => void> = [];
   private readonly pongHandlers: Array<() => void> = [];
   private readonly closeHandlers: Array<() => void> = [];
+  private readonly errorHandlers: Array<(error: unknown) => void> = [];
 
   send(data: string): void {
     this.sent.push(data);
@@ -35,9 +37,11 @@ class FakeSocket implements WsSocket {
   on(event: "message", listener: (data: unknown) => void): void;
   on(event: "pong", listener: () => void): void;
   on(event: "close", listener: () => void): void;
-  on(event: "message" | "pong" | "close", listener: ((data: unknown) => void) | (() => void)): void {
+  on(event: "error", listener: (error: unknown) => void): void;
+  on(event: "message" | "pong" | "close" | "error", listener: ((data: unknown) => void) | (() => void)): void {
     if (event === "message") this.messageHandlers.push(listener as (data: unknown) => void);
     else if (event === "pong") this.pongHandlers.push(listener as () => void);
+    else if (event === "error") this.errorHandlers.push(listener as (error: unknown) => void);
     else this.closeHandlers.push(listener as () => void);
   }
 
@@ -137,6 +141,35 @@ const flush = async (): Promise<void> => {
 };
 
 describe("ws server", () => {
+  it("contains an accepted socket error and leaves other clients usable", async () => {
+    const h = harness();
+    const errors: unknown[] = [];
+    const endpoint = createWsServer({ ...h.deps, onError: (error) => errors.push(error) });
+    const socket = Object.assign(new EventEmitter(), {
+      send() {}, ping() {}, terminate() { socket.emit("close"); },
+    });
+    h.server.connect(socket as unknown as WsSocket);
+    const other = new FakeSocket();
+    h.server.connect(other);
+    const error = new Error("invalid WebSocket frame");
+    try {
+      expect(() => socket.emit("error", error)).not.toThrow();
+      expect(errors).toEqual([error]);
+      expect(h.hubs[0]!.closes).toBe(1);
+      expect(h.scheduler.pending()).toBe(1);
+      socket.emit("close");
+      socket.emit("error", error);
+      expect(h.hubs[0]!.closes).toBe(1);
+      expect(errors).toEqual([error]);
+      other.emitMessage(JSON.stringify({ type: "cockpit.subscribe" }));
+      await flush();
+      expect(h.hubs[1]!.handled).toHaveLength(1);
+      expect(h.hubs[1]!.closes).toBe(0);
+    } finally {
+      endpoint.dispose();
+    }
+    expect(h.scheduler.pending()).toBe(0);
+  });
   it("accepts a loopback connection and rejects a foreign origin", () => {
     const h = harness();
     createWsServer(h.deps);
@@ -315,4 +348,21 @@ describe("ws server", () => {
     expect(acceptsOrigin("http://[fe80::1]:3333")).toBe(false); // link-local
     expect(acceptsOrigin("http://[2001:db8::1]:3333")).toBe(false); // global unicast
   });
+});
+
+
+it("does not dispatch gated frames after a socket closes while other clients continue", async () => {
+  const gate = pendingGate();
+  const h = harness({ gate: () => gate.promise });
+  const endpoint = createWsServer(h.deps);
+  const closed = new FakeSocket(), live = new FakeSocket();
+  h.server.connect(closed); h.server.connect(live);
+  closed.emitMessage(JSON.stringify({ type: "cockpit.selectPlan", planId: "late" }));
+  live.emitMessage(JSON.stringify({ type: "cockpit.subscribe" }));
+  closed.emitClose();
+  gate.resolve();
+  await flush();
+  endpoint.dispose();
+  expect(h.hubs[0]!.handled).toEqual([]);
+  expect(h.hubs[1]!.handled).toEqual([{ type: "cockpit.subscribe" }]);
 });

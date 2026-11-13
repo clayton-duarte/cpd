@@ -113,13 +113,44 @@ The `Heavy` fragment is sent only when the poll has heavy pull requests (a non-e
 
 The `Heavy` test compares with `swr_pr_detail`, and it is the "moved since `hydrated_at`" test of the spec: a row whose `updated_at` or `head_oid` differs from what the last hydrate stored is re-read, and a successful hydrate sets `hydrated_at`. A pull request whose detail did not move, costs no heavy fields.
 
-**Cap (gh-budget-and-swr, pro-d477).** The builder sends at most `HEAVY_CAP` = 5 `Heavy` selections in one document; the rest wait a pass. Among the candidates the User's authored or Plan-owned pull requests come first (pro-d474 (b)), then the oldest `hydrated_at`. The reason is GitHub's 10 s execution limit for one call, which a document with many `Heavy` selections exceeds (pro-d477). **Superseded:** the cap of 25 that this paragraph first set, and the node-limit reasoning behind it. The code still has 25 until the Job that implements this lands (§14). The cap is this page's guess at keeping one document under GitHub's documented 500 000-node limit, which this page has not measured. The builder's unit test asserts the cap, and `rateLimit.cost` of each pass is stored (§5) so a real cost can replace the guess.
+**Cap (gh-budget-and-swr, pro-d477).** The builder sends at most `HEAVY_CAP` = 5 `Heavy` selections in one document; the rest wait a pass. Among the candidates the User's authored or Plan-owned pull requests come first (pro-d474 (b)), then the oldest `hydrated_at`. The reason is GitHub's 10 s execution limit for one call, which a document with many `Heavy` selections exceeds (pro-d477). **Superseded:** the cap of 25 that this paragraph first set, and the node-limit reasoning behind it. The code still has 25 until the Job that implements this lands (§14). The cap is this page's guess at keeping one document under GitHub's documented 500 000-node limit, which this page has not measured. The builder's unit test asserts the cap, and `rateLimit.cost` of each pass is stored (§5) so a real cost can replace the guess. **Excused labels** are resolved per PR from the PR's repo/owner policy (contract §8.3 `pr.excused_labels`) on each pass, never as a static empty set.
 
 ### 3.3 Paging inside the document
 
-The search returns at most 100 pull requests (`first: 100`, oldest first; the limit is `SEARCH_QUERY` of `core/src/pr/gh.rs:831` today). The design sends a second page **in the same document**, with the cursor the previous pass stored, and only when that pass answered `pageInfo.hasNextPage` true (`authoredMore` above). Pages beyond the second are not read: §4.2 covers every tracked pull request that a search does not list, so the limit hides none of them.
+**QA #1121 (2026-11-13), superseding the page-two-only design and open
+cursor-column choice below.** Each document reads the first100 nodes of both
+searches, plus at most one continuation page per search when its previous
+successful pass returned `hasNextPage`/`endCursor`. Continuations advance through
+all available pages; at the end they reset and begin another sweep. Both searches
+advance independently. First-page freshness, one GraphQL call per pass and the
+existing heavy/absent alias caps remain. Up to400 search nodes can be selected
+when both continuations are active; the number of calls is bounded, not their
+GraphQL cost or response latency. No production cost improvement is claimed.
 
-**Blocked on a column (open item, §14).** The cursor is opaque text, and no `swr_*` table has a free text column for it: `swr_queries.data_hash` is the hash of confirmed data and `swr_queries.last_error` is the text of a failure. Until a column is decided, the pass sends the first page only, and §4.2 alone covers the rest. This is the one clause of the spec's paging rule that this page does not yet build.
+Opaque cursor strings are GraphQL-escaped and kept in per-store engine memory
+alongside the existing `LISTED` memory, with the authenticated viewer identity.
+No migration is necessary. A process restart starts from page one; a changed
+viewer resets both continuations. A failed/malformed read resets the sweep and
+never advances it or commits a partial page. A next-page flag without a cursor,
+a repeated cursor, or a missing continuation is an observable endpoint failure.
+Queries are fixed; changing their filters in a new binary also resets memory.
+Known-row aliases still confirm their actual membership; absence from a partial
+search page alone never clears membership.
+
+Research: [GitHub cursor pagination](https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api),
+accessed2026-11-13. Immediate all-page draining would increase requests per pass;
+a database cursor would introduce migration complexity without being needed for
+eventual discovery of a stable finite search. This is a reviewed implementation
+decision, not a claimed universal consensus. GitHub search itself exposes at most
+1000 results per search: this change does not implement query partitioning beyond
+that provider ceiling. Concurrent inserts/removals can move page boundaries;
+repeated sweeps and existing ID-based merges recover changes without treating
+unseen pages as complete snapshots. Tests cover205 authored/101 requested PRs,
+independent progression, malformed/repeated cursors, failures and account changes.
+
+**Historical:** the previous design always proposed a second page only and
+blocked cursor storage on a new text column. That arbitrary limit could never
+discover an unknown third-page PR; known-row aliases cannot discover unknown IDs.
 
 ### 3.4 Failure of the document
 
@@ -143,10 +174,11 @@ Each step is one function in `core/src/swr/source/github.rs`; the reader is `cor
    - a repository: `swr_repos`; the viewer: `swr_viewer`.
    An unchanged key opens no write transaction (D5). The status-only write of swr.md §6 (`error` back to `success`, a `revalidating` mutation settled to `done`) is the only write an unchanged key can make.
 6. **Merged and closed pull requests.** A header that reads `MERGED` or `CLOSED` sets `stale_after` NULL for its key (§5). A header that reads `MERGED` also closes the pull request's open `pr-ready` Inbox item in the same transaction, whichever path stores the merge (the poll's write or the header write of this pass). So a merge seen on poll recovery never leaves a stale item for E8's next reconcile (contract §2.2 "ROW LIFE"; E8 remains the backstop, which closes an item whose pull request is no longer open). A `CLOSED` pull request is stored `state` `closed`; its Workflow stays `open` (contract §3.8, "A PR closed without a merge", and the "Ready, never a draft" rule 4), so the Workflow's own rules decide the rest.
-7. **Record the rate limit** (§7.2) from `rateLimit`, and record the success of the endpoint (`record_ok`).
+7. **Record the rate limit** (§7.2) from `rateLimit`.
 8. **Settle** the `revalidating` mutations of the keys this pass read, whose `completed_at <= poll_started_at` (swr.md §10). A settled mutation's overlay goes; a mutation whose key the pass did not read stays overlaid.
 9. **Deploys** (§8), after the header writes, as the existing step 8 of contract §7.6.
-10. **Drain the outbox** for `github`: `claim_next` and `execute` (§9), unless the endpoint is paused (§7.2).
+10. **Record the success of the endpoint** (`record_ok`, swr.md §7), only after all effects of steps 5 through 9 have been committed. An error from any step leaves ok unrecorded and is surfaced as an endpoint error through `record_failure` (§7.1), which is the only way a pass failure is reported.
+11. **Drain the outbox** for `github`: `claim_next` and `execute` (§9), unless the endpoint is paused (§7.2).
 
 A pass that starts while a previous one still runs does not happen: the endpoint's `fetch_status` is `fetching` for the call (swr.md §16).
 
@@ -284,7 +316,7 @@ The list of step 1 is the one call every pass makes for each declared file, so i
 A stored row is sent as `If-None-Match` only when its `viewer_login` equals the viewer's login read this pass, because the actor filter of step 2 is part of the answer. Otherwise the list is sent without the header.
 
 - **200 OK.** The body (the JSON after the headers of `--include`) is parsed and steps 2 to 5 run. Only when they all succeed is the row upserted with the response's `ETag` and the viewer's login. A parse failure, or a failed call of that file, stores nothing, so the next pass sends the list unconditionally again.
-- **304 Not Modified.** The list is unchanged since the stored ETag. The body is not read or parsed. Steps 2 and 3 are skipped, so no run is changed and no `pending_deployments` call is made; the rows of the file stay as they are, and the stored ETag stays. Step 5's second rule still runs, because it reads the pull request's header and not the list: a row whose pull request is `closed` or `merged` gets `inactive_at` = `now`. A 304 costs zero rate-limit budget: GitHub does not count a conditional request answered with 304 against the primary limit (G12). It is still one call in the `deploys` count of the pass's measure (§5).
+- **304 Not Modified.** A conditional request (with `If-None-Match: <ETag>`) answered with HTTP 304 means the resource is unchanged since that ETag. The body is not read or parsed. Steps 2 and 3 are skipped, so no run is changed and no `pending_deployments` call is made; the rows of the file stay as they are, and the stored ETag stays. Step 5's second rule still runs, because it reads the pull request's header and not the list: a row whose pull request is `closed` or `merged` gets `inactive_at` = `now`. **HTTP 304 is never a failure**: it is the intended response to a conditional request, indicating that cached data is valid. The pass records success (`record_ok`), not an error. A 304 costs zero rate-limit budget: GitHub does not count a conditional request answered with 304 against the primary limit (G12). It is still one call in the `deploys` count of the pass's measure (§5).
 
 ### 8.2 A spent REST rate limit on a deploy call (pro-d564)
 
@@ -365,7 +397,7 @@ The tests this design needs, by the rule they pin:
 - **Single readers** (`readers_tests.rs`): no module outside `core/src/swr/` reads `pull_requests` for `checks`, `review_decision`, `state` or `head_oid` except through `effective_pr` or the pass; a grep test over the source fails on `Command::new("gh")` outside `core/src/host/runner.rs` and `core/src/pr/gh.rs`.
 - **Wake** (`wake_tests.rs`): a head change with green checks on a claimed pull request appends one `session-message`; the same head again appends none; a head change with checks not green appends none.
 - **Deploys** (`deploys_tests.rs`): an unchanged `(run_id, updated_at)` makes no `pending_deployments` call; a row whose pull request closed goes inactive.
-- **Checks reduction** (`status_tests.rs`, existing): `ChecksSummary::of` keeps the check-level `excused_labels` reduction of pro-d447 (A9). Its tests stay green. This branch predates the #920 merge on `main`; the rebase is the Job's first step, as the spec says.
+- **Checks reduction** (`status_tests.rs`, existing): `ChecksSummary::of` keeps the check-level `excused_labels` reduction of pro-d447 (A9), resolving `pr.excused_labels` from the PR's repo/owner policy. Its tests stay green. This branch predates the #920 merge on `main`; the rebase is the Job's first step, as the spec says.
 - **Cutover** (per file, §12): each deleted cache has no reader after its cutover, pinned by a test that the file path no longer appears in the source.
 
 ## 12. What dies
@@ -394,7 +426,7 @@ These are added to [swr.md §17](swr.md). Each is stated so a later Job can test
 - **G1. One document per pass, the candidates decided before the call.** The alias set is computed from the rows of the previous pass, so one call can carry it. Consequence: a pull request that left the open list is confirmed one pass later. (The spec's "absent from the searches" is read as "absent from the previous pass's searches" for this reason.)
 - **G2. The heavy cap of 25 and the `first` counts** (§3.1, §3.2) are guesses, unverified against GitHub's node limit.
 - **G3. Light fields added** to the spec's list: `labels`, `autoMergeRequest`, `latestOpinionatedReviews`, `reviewThreads(first:100)` for owned pull requests (§3.1, the reasons given there).
-- **G4. The cursor** for `authoredMore` needs a text column that no `swr_*` table has (§3.3). Open: the pass sends the first page only until it is decided (§14).
+- **G4 (superseded by QA #1121).** Cursor storage no longer needs a database column; §3.3 records bounded continuation pages and per-store engine memory.
 - **G5. The deploy approve's target key** is `github:deploy:<owner/repo>#<run_id>` (§9).
 - **G6. The Slack `post` op** is owned by the slack Workflow's `execute`; the github Workflow owns its target key and its `posting` patch (§9). The spec lists `post_comment` as the GitHub op; no command enqueues it yet, and it is listed so the set matches the spec (§9).
 - **G7. The rate floor pauses**: `remaining < 100` pauses until `resetAt`, which corrects swr.md §7 (§7.2).
@@ -412,7 +444,7 @@ Not decided by this page. Each is recorded so no Job guesses it.
 - **`run/pr-poll-now`** (contract §1.4, the immediate-poll request, pro-d392, pro-d394): its replacement is `cache::invalidate` on the `github:pr` keys plus a wake, which is the swr.md §16 rule. Not decided here; the Job that cuts over `pr-poll` decides it.
 - **`pull_requests.updated_at`** (pro-d68) is superseded by `swr_pr_detail.updated_at` for the heavy trigger. Dropping it is a breaking migration; not decided here.
 - **Storing `rateLimit.cost`** (§5): logged for now.
-- **The paging cursor** (§3.3, G4): a text column for the second search page. Decide whether the github Workflow's breaking migration adds `swr_queries.cursor`, or the page is skipped.
+- **Paging cursor (resolved by QA #1121):** §3.3 supersedes the proposed column with expendable engine memory and advancing continuation pages. Provider search partitioning above1000 remains outside that change.
 - **The superseding notes of this Job** (rule 4 and G7). swr.md §7 and contract §3.7 `pr-poll` say the old rule. They are annotated, not rewritten: the newer decision stands and the older text is marked superseded (AGENTS, "Recency wins").
 - **`pr view` when no detail is hydrated yet**: the design prints `detail` `null`. Whether the Lead should wait for it is not decided.
 - **`prune/mod.rs:179`** calls `gh` directly (§7.3). It is not an SWR reader; moving it is in this Plan's scope by rule 7, but its owner Job is not named here.
@@ -423,7 +455,7 @@ Not decided by this page. Each is recorded so no Job guesses it.
 ## Decision pro-d453 (Light read, Danger freeze)
 
 - A teammate's open pull request whose stored rollup is `failed` and whose labels (`labels_json`) match an excused label is hydrated (the `Heavy` set, within the cap) although it is not the User's own, and once for its head: the contexts are what excuse a failing Danger. The Light read has only the rollup state, so a later light node of the same head reduces the stored detail's contexts again under the policy hold instead of bringing `failed` back.
-- `poll_node` computes the policy hold once (`status::policy_hold`) and passes it to `ChecksSummary::of`, which excuses a failing `danger` CheckRun and a failing `Danger` StatusContext. The hold needs the excused label: a failing Danger without it stays failed (pro-d447).
+- `poll_node` computes the policy hold once (`status::policy_hold`) from the PR's repo/owner policy (contract §8.3) and passes it to `ChecksSummary::of`, which excuses a failing `danger` CheckRun and a failing `Danger` StatusContext. The hold matches the PR's labels against the policy's `pr.excused_labels` list (pro-d447): a failing Danger without a matching excused label stays failed.
 - The Inbox reader derives `checks_state` from the effective `checks` first (`passed` is `SUCCESS`, `failed` `FAILURE`, `pending` `PENDING`); only a row with `none` falls back to the detail's rollup. It takes the reviews from the Light read's `latestReviews` and the author from `author_login`.
 
 ## Expired reset deadlines on rate-limit failures (QA #1118)

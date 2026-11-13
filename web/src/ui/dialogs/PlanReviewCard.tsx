@@ -5,15 +5,6 @@ import type { Dialog, DialogResponse } from "../../protocol/domain.ts";
 import { Markdown } from "../chat/Markdown.tsx";
 import { Badge } from "../components/badge.tsx";
 import { Button } from "../components/button.tsx";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemFooter,
-  ItemMedia,
-  ItemTitle,
-} from "../components/item.tsx";
 import { ScrollArea } from "../components/scroll-area.tsx";
 import { Spinner } from "../components/spinner.tsx";
 import { Textarea } from "../components/textarea.tsx";
@@ -127,35 +118,29 @@ export function PlanReviewCard(props: {
   const hasBody = true;
 
   return (
-    <Item
-      variant="outline"
-      size="sm"
-      className="mx-4 mb-3 w-auto shrink-0"
-      render={
-        <section
-          aria-label="Plan review"
-          data-dialog="cpd_plan_review"
-          {...(readOnly ? { "data-readonly": "" } : {})}
-          onKeyDown={(e) => {
-            if (readOnly || e.key !== "Enter" || !(e.metaKey || e.ctrlKey))
-              return;
-            if (e.target instanceof HTMLTextAreaElement) return;
-            e.preventDefault();
-            if (!hasSummary) return;
-            respond("approve");
-          }}
-        />
-      }
+    <section
+      aria-label="Plan review"
+      data-dialog="cpd_plan_review"
+      {...(readOnly ? { "data-readonly": "" } : {})}
+      className="flex min-h-0 flex-1 flex-col"
+      onKeyDown={(e) => {
+        if (readOnly || e.key !== "Enter" || !(e.metaKey || e.ctrlKey)) return;
+        if (e.target instanceof HTMLTextAreaElement) return;
+        e.preventDefault();
+        if (!hasSummary) return;
+        respond("approve");
+      }}
     >
-        <ItemMedia variant="icon" data-part="phi">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 px-4 py-3">
+        <span data-part="phi" className="flex shrink-0 items-center [&_svg]:size-4">
           <RouteIcon />
-        </ItemMedia>
-        <ItemContent data-part="header">
-          <ItemTitle>
+        </span>
+        <div data-part="header" className="flex min-w-0 shrink-0 flex-1 flex-col gap-1">
+          <div className="flex items-center gap-1.5 text-sm">
             <span>Plan review ·</span>
             <h3 className="m-0 font-medium">{dialog.title}</h3>
-          </ItemTitle>
-          <ItemDescription>
+          </div>
+          <div className="text-xs text-muted-foreground">
             {review?.subtitle !== undefined ? (
               <span data-part="subtitle" className="font-mono">
                 {review.subtitle}
@@ -176,10 +161,10 @@ export function PlanReviewCard(props: {
                 {review.stats}
               </span>
             )}
-          </ItemDescription>
-        </ItemContent>
+          </div>
+        </div>
         {readOnly ? null : (
-          <ItemActions data-part="actions">
+          <div data-part="actions" className="flex shrink-0 flex-wrap items-center gap-2">
             {review?.onDiff && review.previous ? (
               <Button
                 type="button"
@@ -224,15 +209,16 @@ export function PlanReviewCard(props: {
               Approve &amp; lock{" "}
               <kbd className="font-mono text-[11px]">⌘⏎</kbd>
             </Button>
-          </ItemActions>
+          </div>
         )}
+      </div>
         {hasBody || (asking && !readOnly) ? (
-          <ItemFooter
+          <div
             data-part="decision-bar"
-            className="flex-col items-stretch gap-3 border-t pt-3"
+            className="flex min-h-0 flex-1 flex-col gap-3 border-t px-4 py-3"
           >
             {hasBody ? (
-              <div data-part="body-row" className="flex min-h-0 gap-3">
+              <div data-part="body-row" className="flex min-h-0 flex-1 gap-3">
                 {hasOthers ? (
                   <nav
                     aria-label="Plan sections"
@@ -276,7 +262,7 @@ export function PlanReviewCard(props: {
                     ))}
                   </nav>
                 ) : null}
-                <ScrollArea className="min-w-0 flex-1 [&>[data-slot=scroll-area-viewport]]:max-h-60">
+                <ScrollArea className="min-h-0 min-w-0 flex-1">
                 <div
                   data-part="body"
                   className="flex flex-col gap-4"
@@ -454,8 +440,8 @@ export function PlanReviewCard(props: {
                 </div>
               </div>
             ) : null}
-          </ItemFooter>
+          </div>
         ) : null}
-    </Item>
+    </section>
   );
 }

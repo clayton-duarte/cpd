@@ -288,11 +288,54 @@ describe("optimistic merge", () => {
     expect(ids(run(loaded(), merge))).toEqual([2, 3]);
   });
 
+  it("action_result_with_armed_true_does_not_start_removal_timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStore(loaded());
+      store.dispatch(merge);
+      store.dispatch(server({ type: "action.result", actionId: "a1", ok: true, output: { armed: true } }));
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(10_000);
+      expect(ids(store.getState())).toEqual([2, 3]);
+      expect(store.getState().optimistic["a1"]).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an ok action.result with output.queued is not failed by the 10 s confirm timer", () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStore(loaded());
+      store.dispatch(merge);
+      store.dispatch(server({ type: "action.result", actionId: "a1", ok: true, output: { queued: true } }));
+      vi.advanceTimersByTime(10_000);
+      expect(store.getState().optimistic["a1"]).toBeDefined();
+      expect(ids(store.getState())).toEqual([2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("merge_failure_rolls_back_row", () => {
     const removed = run(loaded(), merge);
     expect(ids(removed)).toEqual([2, 3]);
     const failed = run(removed, server({ type: "action.result", actionId: "a1", ok: false, error: err }));
     expect(ids(failed)).toEqual([1, 2, 3]);
+  });
+
+  it.each([false, true])("interrupting optimistic merges restores unknown rows and preserves confirmed ones (confirmed=%s)", (confirmed) => {
+    const store = createStore(loaded());
+    for (const [actionId, pull] of [["a1", "acme/api#3"], ["a2", "acme/api#4"]]) {
+      store.dispatch({ type: "actionStart", actionId: actionId! });
+      store.dispatch({ type: "actionOptimistic", actionId: actionId!, action: { kind: "pr.merge", planId: "p1", pull: pull! } });
+    }
+    if (confirmed) store.dispatch(server({ type: "action.result", actionId: "a2", ok: true, output: {} }));
+    store.dispatch({ type: "actionsInterrupted", actionIds: ["a1", "a2"], error: err });
+    expect(ids(store.getState())).toEqual(confirmed ? [1, 3] : [1, 2, 3]);
+    expect(store.getState().pendingActionIds).toEqual([]);
+    expect(store.getState().completedActionIds).toEqual(confirmed ? ["a2"] : []);
+    expect(Object.keys(store.getState().optimistic)).toEqual(confirmed ? ["a2"] : []);
   });
 
   it("merge_success_keeps_row_removed_until_refresh", () => {

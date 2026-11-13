@@ -85,6 +85,9 @@ pub struct AddArgs {
     /// With --adopt: the login of the pull request's author when the User is not the author (confirmed by the User first)
     #[arg(long = "confirm-author", value_name = "login", requires = "adopt")]
     confirm_author: Option<String>,
+    /// The bug this Workflow fixes, `b<k>`: it must have an issue; the pull request body ends with `Fixes #<N>`
+    #[arg(long, value_name = "id")]
+    bug: Option<String>,
     #[command(flatten)]
     plan: PlanArg,
 }

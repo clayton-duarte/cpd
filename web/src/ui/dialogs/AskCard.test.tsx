@@ -271,3 +271,94 @@ function submit(c: HTMLElement) {
     expect(responses).toEqual([]);
     unmount();
   });
+
+function custom(c: HTMLElement, i: number): HTMLInputElement {
+  const el = field(c, i).querySelector<HTMLInputElement>('input[type="text"][aria-label="Type something."]');
+  if (!el) throw new Error(`no custom field ${i}`);
+  return el;
+}
+
+const submitButton = (c: HTMLElement): HTMLButtonElement => {
+  const b = shown(c, "questionnaire-submit");
+  if (!b) throw new Error("no submit");
+  return b as HTMLButtonElement;
+};
+
+/** Types char by char, as a browser sends input events. */
+function typeKeys(el: HTMLInputElement, text: string) {
+  act(() => el.focus());
+  for (let n = 1; n <= text.length; n++) {
+    const key = text[n - 1] as string;
+    act(() => {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    });
+    type(el, text.slice(0, n));
+    act(() => {
+      el.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+    });
+  }
+}
+
+function answered(answers: unknown[]): DialogResponse[] {
+  return [{ method: "ask_user_question", outcome: "answered", result: { answers, cancelled: false } } as DialogResponse];
+}
+
+const TEXT = "my own answer, verbatim";
+
+it("custom answer enables submit and is delivered verbatim (single question, single select)", () => {
+  const { container, responses, unmount } = setup([q(0)]);
+  typeKeys(custom(container, 0), TEXT);
+  expect(custom(container, 0).value).toBe(TEXT);
+  expect(submitButton(container).disabled).toBe(false);
+  click(submitButton(container));
+  expect(responses).toEqual(
+    answered([{ questionIndex: 0, question: "Question 0?", kind: "custom", answer: TEXT }]),
+  );
+  unmount();
+});
+
+it("custom answer enables submit and is delivered verbatim (single question, multi select)", () => {
+  const { container, responses, unmount } = setup([q(0, { multiSelect: true })]);
+  typeKeys(custom(container, 0), TEXT);
+  expect(custom(container, 0).value).toBe(TEXT);
+  expect(submitButton(container).disabled).toBe(false);
+  click(submitButton(container));
+  expect(responses).toEqual(
+    answered([{ questionIndex: 0, question: "Question 0?", kind: "multi", selected: [], answer: TEXT }]),
+  );
+  unmount();
+});
+
+it("custom answers enable submit and are delivered verbatim (multi question, single select)", () => {
+  const { container, responses, unmount } = setup([q(0), q(1)]);
+  typeKeys(custom(container, 0), "first custom");
+  expect(shown(container, "questionnaire-next")?.hasAttribute("disabled")).toBe(false);
+  click(shown(container, "questionnaire-next") as HTMLElement);
+  typeKeys(custom(container, 1), TEXT);
+  expect(submitButton(container).disabled).toBe(false);
+  click(submitButton(container));
+  expect(responses).toEqual(
+    answered([
+      { questionIndex: 0, question: "Question 0?", kind: "custom", answer: "first custom" },
+      { questionIndex: 1, question: "Question 1?", kind: "custom", answer: TEXT },
+    ]),
+  );
+  unmount();
+});
+
+it("custom answers enable submit and are delivered verbatim (multi question, multi select)", () => {
+  const { container, responses, unmount } = setup([q(0, { multiSelect: true }), q(1, { multiSelect: true })]);
+  typeKeys(custom(container, 0), "first custom");
+  expect(shown(container, "questionnaire-next")?.hasAttribute("disabled")).toBe(false);
+  click(shown(container, "questionnaire-next") as HTMLElement);
+  typeKeys(custom(container, 1), TEXT);
+  expect(submitButton(container).disabled).toBe(false);
+  click(submitButton(container));
+  expect(responses).toEqual(
+    answered([
+      { questionIndex: 0, question: "Question 0?", kind: "multi", selected: [], answer: "first custom" },
+      { questionIndex: 1, question: "Question 1?", kind: "multi", selected: [], answer: TEXT },
+    ]),
+  );
+  unmount();
+});

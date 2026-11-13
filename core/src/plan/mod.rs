@@ -88,7 +88,7 @@ use crate::output::Output;
 pub use fingerprint::plan_fingerprint;
 pub use jobs::locked_fingerprint;
 pub(crate) use new::lead_message;
-pub use prs::{Pull, WorkflowRow};
+pub use prs::{Pull, WorkflowRow, pr_body};
 pub use review::{Closing, close_reviews};
 pub use row::{Phase, PlanRow};
 

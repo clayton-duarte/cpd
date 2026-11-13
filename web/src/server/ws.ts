@@ -30,6 +30,7 @@ export interface WsSocket {
   on(event: "message", listener: (data: unknown) => void): void;
   on(event: "pong", listener: () => void): void;
   on(event: "close", listener: () => void): void;
+  on(event: "error", listener: (error: unknown) => void): void;
 }
 
 /** The slice of the upgrade request the Origin check reads (the `ws` connection's `req`). */
@@ -238,6 +239,12 @@ export function createWsServer(deps: WsServerDeps): Disposable {
       pongSeen = true;
     });
     socket.on("close", finish);
+    socket.on("error", (error) => {
+      if (closed) return;
+      finish();
+      socket.terminate();
+      deps.onError?.(error);
+    });
     socket.on("message", (data) => {
       if (closed) return;
       let raw: unknown;
@@ -249,7 +256,7 @@ export function createWsServer(deps: WsServerDeps): Disposable {
       }
       const gate = typeof deps.started === "function" ? deps.started() : deps.started;
       void gate
-        .then(() => hub.handle(raw))
+        .then(() => { if (!closed) return hub.handle(raw); })
         .catch((error: unknown) => deps.onError?.(error));
     });
 

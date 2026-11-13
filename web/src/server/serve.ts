@@ -57,6 +57,36 @@ export function findStaticDir(): string {
   return distCandidate;
 }
 
+function sendStaticFile(req: http.IncomingMessage, res: http.ServerResponse, file: string, contentType: string, size?: number): void {
+  const headers = { 'Content-Type': contentType, ...(size === undefined ? {} : { 'Content-Length': size }) };
+  if (req.method === 'HEAD') {
+    res.writeHead(200, headers);
+    res.end();
+    return;
+  }
+  if (res.destroyed) return;
+  const reader = fs.createReadStream(file);
+  const stopReading = (): void => { reader.destroy(); };
+  res.once('close', stopReading);
+  reader.once('close', () => res.off('close', stopReading));
+  reader.once('error', (error) => {
+    console.error('cpd-web: static file read failed:', error.message);
+    reader.destroy();
+    if (res.destroyed) return;
+    if (res.headersSent) {
+      res.destroy();
+    } else {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal Server Error');
+    }
+  });
+  reader.once('open', () => {
+    if (res.destroyed) { reader.destroy(); return; }
+    res.writeHead(200, headers);
+    reader.pipe(res);
+  });
+}
+
 export async function createProdServer(options?: ServeOptions): Promise<http.Server> {
   const port = options?.port ?? PROD_PORT;
   const host = options?.host ?? PROD_HOST;
@@ -111,12 +141,7 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
         const indexPath = path.join(staticDir, 'index.html');
         fs.stat(indexPath, (indexErr, indexStats) => {
           if (!indexErr && indexStats.isFile()) {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            if (req.method === 'HEAD') {
-              res.end();
-            } else {
-              fs.createReadStream(indexPath).pipe(res);
-            }
+            sendStaticFile(req, res, indexPath, 'text/html; charset=utf-8');
           } else {
             res.writeHead(404, { 'Content-Type': 'text/plain' });
             res.end('Not Found');
@@ -127,16 +152,7 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
 
       const ext = path.extname(filePath).toLowerCase();
       const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
-      res.writeHead(200, {
-        'Content-Type': contentType,
-        'Content-Length': stats.size,
-      });
-
-      if (req.method === 'HEAD') {
-        res.end();
-      } else {
-        fs.createReadStream(filePath).pipe(res);
-      }
+      sendStaticFile(req, res, filePath, contentType, stats.size);
     });
   });
 

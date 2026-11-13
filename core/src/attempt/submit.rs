@@ -301,6 +301,16 @@ fn run_checks(
             crate::workflow::guard_refactor_tests(conn, plan, workflow, root, compare, sha)
         })?;
     }
+    if !policy.workflow.local_docs {
+        let added = crate::job::add::added_docs(root, compare, sha)?;
+        if !added.is_empty() {
+            return Err(crate::error::docs_forbidden(&format!(
+                "The diff adds {}",
+                added.join(", ")
+            ))
+            .with("paths", json!(added)));
+        }
+    }
     // The Job's Spec `touches` (§7.5, hs-n641): the same diff may not change a path outside them, unless a base merge
     // brought it, the repo's `[generated] paths` match it, or the Lead approved it (`job approve-touches`, read now so
     // an approval reaches a running Attempt).

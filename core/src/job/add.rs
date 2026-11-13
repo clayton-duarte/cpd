@@ -109,6 +109,15 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
                 .with("kind", kind.as_str()));
         }
     }
+    if kind == "docs" {
+        let docs_workflows = env.store.read(|conn| {
+            super::plan_phase(conn, &plan)?;
+            load_workflows(conn, &plan)
+        })?;
+        let workflow = args.workflow.select(&plan, &docs_workflows)?.key.clone();
+        env.store
+            .read(|conn| check_docs_allowed(conn, &env.home, &plan, workflow.as_str()))?;
+    }
     require_tier_and_spec(&args)?;
     let mut spec = args
         .spec
@@ -741,4 +750,61 @@ pub(crate) fn glob_matches(pattern: &str, path: &str) -> bool {
         &pattern.chars().collect::<Vec<_>>(),
         &path.chars().collect::<Vec<_>>(),
     )
+}
+
+/// A docs Job is refused when the policy of its Workflow's repo sets `workflow.local_docs = false`.
+pub(super) fn check_docs_allowed(
+    conn: &rusqlite::Connection,
+    home: &crate::home::CpdHome,
+    plan: &PlanId,
+    workflow: &str,
+) -> Result<(), CpdError> {
+    let workflow = crate::ids::WorkflowKey::parse(workflow)?;
+    if crate::pr::policy_of_workflow(conn, home, plan, &workflow)?
+        .workflow
+        .local_docs
+    {
+        Ok(())
+    } else {
+        Err(crate::error::docs_forbidden("A docs Job is refused"))
+    }
+}
+
+/// The `docs/**/*.md` paths the diff `compare...sha` adds. An addition is judged against the diff's own baseline, the
+/// merge base of `compare` and `sha`, and only for a path the submitted tree holds: a deletion is never an addition,
+/// whatever the Lead tip holds.
+pub(crate) fn added_docs(
+    root: &std::path::Path,
+    compare: &str,
+    sha: &str,
+) -> Result<Vec<String>, CpdError> {
+    let mut added = Vec::new();
+    let baseline = crate::git::run::run(root, &["merge-base", compare, sha])?;
+    let baseline = baseline.stdout.trim().to_owned();
+    for path in crate::git::tamper::changed_paths(root, compare, sha)? {
+        if !(path.starts_with("docs/") && path.ends_with(".md")) {
+            continue;
+        }
+        let in_sha = crate::git::run::run(
+            root,
+            &["rev-parse", "--verify", "--quiet", &format!("{sha}:{path}")],
+        )?
+        .code
+            == 0;
+        let in_base = crate::git::run::run(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{baseline}:{path}"),
+            ],
+        )?
+        .code
+            == 0;
+        if in_sha && !in_base {
+            added.push(path);
+        }
+    }
+    Ok(added)
 }

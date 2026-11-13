@@ -34,6 +34,19 @@ const setup = () => {
 };
 
 describe("connection", () => {
+  it("reselecting an errored session retries a transient failed attach", () => {
+    const { connection, transport, store } = setup();
+    connection.start();
+    transport.emitStatus("open");
+    connection.selectSession("s1");
+    transport.emitMessage({ type: "session.error", sessionId: "s1", error: { code: "host_unreachable", message: "offline" } });
+    expect(store.getState().session?.attached).toBe(false);
+    transport.sent.length = 0;
+    connection.selectSession("s1");
+    expect(transport.sent).toEqual([{ type: "session.attach", sessionId: "s1" }]);
+    expect(store.getState().session?.error).toBeNull();
+  });
+
   it("connect subscribes to the cockpit and reattaches the selected session", () => {
     const { transport, store, connection } = setup();
     connection.start();
@@ -360,4 +373,36 @@ describe("connection optimistic action", () => {
     d.transport.emitMessage(snapshot);
     expect(d.transport.sent).toEqual([]);
   });
+});
+
+it("interrupts multiple unconfirmed actions without replay and accepts a later confirmation once", () => {
+  const transport = new Fake(), scheduler = new FakeScheduler(), store = createStore();
+  const connection = createConnection({ transport, scheduler, store });
+  connection.start(); transport.emitStatus("open");
+  const first = connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#1" });
+  const second = connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#2" });
+  transport.emitStatus("closed");
+  const interrupted = store.getState();
+  scheduler.advance(500); transport.emitStatus("open");
+  transport.emitMessage({ type: "cockpit.snapshot", tree: { contexts: [], cursor: 1 }, plan: null,
+    inbox: { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 1 } });
+  expect(interrupted.pendingActionIds).toEqual([]);
+  expect(interrupted.completedActionIds).toEqual([]);
+  expect(interrupted.lastError?.message).toMatch(/outcome.*unknown/i);
+  expect(store.getState().pendingActionIds).toEqual([]);
+  expect(transport.sent.filter((m) => (m as {type:string}).type === "cockpit.action")).toHaveLength(2);
+  transport.emitMessage({ type: "action.result", actionId: first, ok: true, output: {} });
+  transport.emitMessage({ type: "action.result", actionId: first, ok: true, output: {} });
+  expect(store.getState().completedActionIds).toEqual([first]);
+  expect(store.getState().completedActionIds).not.toContain(second);
+  connection.close();
+});
+
+it("a synchronous failed action send retires its pending and optimistic state", () => {
+  const { connection, transport, store } = setup();
+  connection.start(); transport.emitStatus("open");
+  transport.send = () => { throw new Error("transport is not open"); };
+  expect(() => connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#1" })).toThrow("transport is not open");
+  expect(store.getState().pendingActionIds).toEqual([]);
+  expect(store.getState().completedActionIds).toEqual([]);
 });

@@ -89,8 +89,10 @@ export function createHubConnection(deps: HubDeps): HubConnection {
   };
 
   const attach = async (sessionId: string): Promise<void> => {
-    await detach();
+    const detaching = detach();
     const mine = generation;
+    await detaching;
+    if (generation !== mine || closed) return;
     let tracker: CompletionTracker | null = null;
     try {
       const resolved = deps.registry.resolve(sessionId);
@@ -211,10 +213,10 @@ export function createHubConnection(deps: HubDeps): HubConnection {
     },
     async close() {
       if (closed) return;
-      await detach();
       closed = true;
       subscription?.dispose();
       subscription = null;
+      await detach();
     },
   };
 }

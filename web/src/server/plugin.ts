@@ -290,7 +290,7 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
             socket.off("error", reject);
             resolve({
               write: (line) => { socket.write(line); },
-              end: () => { socket.end(); },
+              destroy: () => { socket.destroy(); },
               onData: (h) => { socket.on("data", h); return disposable(() => socket.off("data", h)); },
               onClose: (h) => {
                 let error: Error | null = null;

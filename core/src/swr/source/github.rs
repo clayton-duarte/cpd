@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use super::{Cx, ExecOutcome, QueryKey, Source};
 use crate::clock::timestamp;
 use crate::error::CpdError;
+use crate::home::CpdHome;
 use crate::pr::swr_read::{self, PollNode, PollPlan, PollRead};
 use crate::swr::outbox::{Coalesce, Mutation};
 use crate::swr::{cache, endpoint};
@@ -62,6 +63,15 @@ fn no_effects(store: &mut crate::store::Store, _now: OffsetDateTime) -> Result<V
 type Listed = HashMap<String, BTreeSet<(String, i64)>>;
 static LISTED: Mutex<Option<Listed>> = Mutex::new(None);
 
+/// Discovery progress is expendable engine memory, scoped by store and authenticated viewer.
+#[derive(Clone, Default)]
+struct SearchPages {
+    viewer: String,
+    authored_after: Option<String>,
+    reviews_after: Option<String>,
+}
+static SEARCH_PAGES: Mutex<Option<HashMap<String, SearchPages>>> = Mutex::new(None);
+
 /// The real `github` source (swr-github.md §4).
 #[derive(Default)]
 pub struct GithubSource {
@@ -80,6 +90,7 @@ struct Stored {
     hydrated: bool,
     /// The stored rollup is failed and a label is excused: the contexts are needed to excuse a Danger (pro-d447).
     held_failure: bool,
+    labels: Vec<String>,
     hydrated_at: Option<OffsetDateTime>,
 }
 
@@ -95,6 +106,26 @@ fn pr_key(repo: &str, number: i64) -> String {
 }
 
 impl GithubSource {
+    /// `pr.excused_labels` of `repo`'s own repo/owner policy (as `pr::poll` resolves it per Workflow), plus the source's own.
+    fn excused_for(&self, home: &CpdHome, repo: &str) -> Result<Vec<String>, CpdError> {
+        use crate::policy::{PolicyKey, resolve_unowned_row};
+        let bad = || {
+            CpdError::new(
+                crate::error::ErrorCode::Usage,
+                format!("{repo:?} is not an owner/name repo."),
+            )
+            .with("repo", repo)
+        };
+        let (owner, name) = repo.split_once('/').ok_or_else(bad)?;
+        let key = PolicyKey::Repo(
+            crate::ids::OwnerLogin::parse(owner)?,
+            crate::ids::RepoName::parse(name)?,
+        );
+        let mut labels = resolve_unowned_row(home, &key)?.policy.pr.excused_labels;
+        labels.extend(self.excused_labels.iter().cloned());
+        Ok(labels)
+    }
+
     /// The rows chosen before the call (swr-github.md §4.1, §3.2).
     fn plan(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<PollPlan, CpdError> {
         let memory = {
@@ -104,6 +135,7 @@ impl GithubSource {
                 .and_then(|m| m.get(&cx.store.path().display().to_string()))
                 .cloned()
         };
+        let home = cx.home;
         let stored: Vec<Stored> = cx.store.read(|c| {
             let mut stmt = c.prepare(
                 "SELECT pr.repo, pr.number,
@@ -131,25 +163,28 @@ impl GithubSource {
                             own,
                             created_at,
                             hydrated: has && same,
-                            held_failure: failed
-                                && swr_read::policy_hold(&labels, &self.excused_labels),
+                            held_failure: failed,
+                            labels,
                             hydrated_at: cache::parse(r.get(4)?).ok().flatten(),
                         },
                         own,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(rows
-                .into_iter()
-                .map(|(mut s, own)| {
+            let mut out = Vec::with_capacity(rows.len());
+            for (mut s, own) in rows {
+                s.held_failure = s.held_failure
+                    && swr_read::policy_hold(&s.labels, &self.excused_for(home, &s.repo)?);
+                {
                     // Only the User's own pull requests (authored or owned) are hydrated, and a teammate's whose failed rollup
                     // may hide an excused Danger (read again only when its head moved).
                     if !own && !s.held_failure {
                         s.hydrated = true;
                     }
-                    s
-                })
-                .collect())
+                    out.push(s);
+                }
+            }
+            Ok(out)
         })?;
         let mut heavy: Vec<&Stored> = stored.iter().filter(|s| !s.hydrated).collect();
         heavy.sort_by_key(|s| (!s.own, s.hydrated_at));
@@ -239,7 +274,16 @@ impl GithubSource {
             })
             .map(str::to_owned)
             .collect();
+        let pages = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&cx.store.path().display().to_string()))
+            .cloned()
+            .unwrap_or_default();
         Ok(PollPlan {
+            authored_after: pages.authored_after,
+            reviews_after: pages.reviews_after,
             heavy,
             absent,
             meta,
@@ -268,7 +312,7 @@ impl GithubSource {
             cx.home.root(),
             &plan,
             &cx.config.inbox.bot_reviewers,
-            &self.excused_labels,
+            &|repo| self.excused_for(cx.home, repo),
         );
         let read = match read {
             Ok(read) => read,
@@ -288,14 +332,46 @@ impl GithubSource {
         if read.remaining < RATE_FLOOR {
             endpoint::pause_until(cx.store, "github", reset)?;
         }
-        endpoint::record_ok(cx.store, "github", now)?;
-        self.commit(cx, &plan, read, now, poll_started_at)
+        let mut next = SearchPages {
+            viewer: read.viewer.clone(),
+            authored_after: read.authored_after.clone(),
+            reviews_after: read.reviews_after.clone(),
+        };
+        let store = cx.store.path().display().to_string();
+        // @me changed accounts: the old opaque cursor belongs to a different search.
+        let previous = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&store))
+            .cloned();
+        if previous.is_some_and(|p| p.viewer != next.viewer) {
+            next.authored_after = None;
+            next.reviews_after = None;
+        }
+        // A successful read is not enough: deploys and every commit step must succeed too.
+        match self.commit(cx, &plan, read, now, poll_started_at) {
+            Ok(effects) => {
+                endpoint::record_ok(cx.store, "github", now)?;
+                SEARCH_PAGES
+                    .lock()
+                    .expect("search pages")
+                    .get_or_insert_with(HashMap::new)
+                    .insert(store, next);
+                Ok(effects)
+            }
+            Err(e) => self.failed(cx, now, e),
+        }
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
     /// until its future stored reset plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
     /// pauses its own poll; it is not an error.
     fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
+        // A failed read or commit restarts discovery rather than retaining an invalid/incomplete sweep.
+        if let Some(pages) = SEARCH_PAGES.lock().expect("search pages").as_mut() {
+            pages.remove(&cx.store.path().display().to_string());
+        }
         let flag = |name: &str| {
             e.details()
                 .get(name)
@@ -490,7 +566,8 @@ impl GithubSource {
                 .and_then(|j| serde_json::from_str(&j).ok()))
             })?;
             if let Some(detail) = &stored {
-                swr_read::excuse_from_detail(node, detail, &self.excused_labels);
+                let excused = self.excused_for(cx.home, repo)?;
+                swr_read::excuse_from_detail(node, detail, &excused);
             }
             let node = &*node;
             let stored_hash: Option<String> = cx.store.read(|c| {
