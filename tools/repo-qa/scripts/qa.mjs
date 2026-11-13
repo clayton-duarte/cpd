@@ -1,0 +1,153 @@
+#!/usr/bin/env node
+// GitHub is the creation ledger. Config and optional run files contain intent only.
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const fields = (value, names, what) => {
+  if (!object(value) || Object.keys(value).some((key) => !names.includes(key))) throw new Error(`Invalid ${what} fields`);
+};
+const limits = (value) => {
+  fields(value, ["issues", "prs"], "limits");
+  if (![value.issues, value.prs].every((n) => Number.isSafeInteger(n) && n >= 0)) throw new Error("Limits must be nonnegative integers");
+  return Object.freeze({ issues: value.issues, prs: value.prs });
+};
+const nonempty = (v) => typeof v === "string" && v.trim() !== "";
+const id = (v) => typeof v === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(v);
+const remaining = (caps, counts) => Object.fromEntries(Object.entries(caps).map(([k, n]) => [k, Math.max(0, n - counts[k])]));
+
+export function validateConfig(value) {
+  fields(value, ["version", "scope", "timezone", "limits", "repositories"], "config");
+  if (value.version !== 1 || !id(value.scope) || !nonempty(value.timezone)) throw new Error("Config needs version 1, a scope identifier and an IANA timezone");
+  new Intl.DateTimeFormat("en-CA", { timeZone: value.timezone });
+  if (!Array.isArray(value.repositories) || value.repositories.length === 0) throw new Error("Config needs a repository allowlist");
+  const repos = value.repositories.map((repo) => {
+    fields(repo, ["name", "base"], "repository");
+    if (typeof repo.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(repo.name)
+        || !nonempty(repo.base) || repo.base.startsWith("-") || /\s/.test(repo.base)) throw new Error("Repository needs OWNER/REPO and an explicit base branch");
+    return Object.freeze({ name: repo.name, base: repo.base });
+  });
+  if (new Set(repos.map((r) => r.name.toLowerCase())).size !== repos.length) throw new Error("Duplicate repository in config");
+  return Object.freeze({ version: 1, scope: value.scope, timezone: value.timezone, limits: limits(value.limits), repositories: Object.freeze(repos) });
+}
+
+export function validateRun(value, now = new Date()) {
+  fields(value, ["version", "id", "started_at", "limits", "authorization"], "run");
+  if (value.version !== 1 || !id(value.id) || !nonempty(value.authorization)
+      || typeof value.started_at !== "string" || !Number.isFinite(Date.parse(value.started_at))
+      || Date.parse(value.started_at) > now.getTime()) throw new Error("Run needs version 1, id, past/current started_at and authorization reference");
+  return Object.freeze({ ...value, limits: limits(value.limits) });
+}
+
+export function github(args, input) {
+  return JSON.parse(execFileSync("gh", ["api", "--hostname", "github.com", ...args], {
+    input: input === undefined ? undefined : JSON.stringify(input),
+    encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
+  }));
+}
+
+export function createGuard(input) {
+  const config = validateConfig(input);
+  const REPOS = config.repositories.map((r) => r.name);
+  const MARKER = `<!-- ${config.scope}:v1 -->`;
+  const batchMarker = (batch) => `<!-- ${config.scope}-batch:${batch} -->`;
+  const runMarker = (run) => `<!-- ${config.scope}-run:${run} -->`;
+  const formatter = new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone, year: "numeric", month: "2-digit", day: "2-digit" });
+  const day = (value) => {
+    const parts = Object.fromEntries(formatter.formatToParts(new Date(value)).map((p) => [p.type, p.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  };
+
+  function status(api = github, now = new Date(), batch = null, runInput = null) {
+    const today = day(now);
+    if (batch !== null && (typeof batch !== "string" || !/^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{0,39}$/.test(batch) || !batch.startsWith(`${today}-`))) {
+      throw new Error("QA_BATCH must be a dated batch identifier for today's configured timezone");
+    }
+    const run = runInput === null ? null : validateRun(runInput, now);
+    // A conservative two-day day lookback; long runs extend it to their start.
+    // Floor before subtracting a second because GitHub creation timestamps have second precision.
+    const runStart = run === null ? Infinity : Math.floor(Date.parse(run.started_at) / 1000) * 1000 - 1000;
+    const since = new Date(Math.min(now.getTime() - 48 * 3600_000, runStart)).toISOString();
+    const counts = { issues: 0, prs: 0 };
+    const dayCounts = { issues: 0, prs: 0 };
+    const runCounts = { issues: 0, prs: 0 };
+    for (const repo of REPOS) {
+      const seen = new Set();
+      for (let page = 1; ; page++) {
+        const items = api([`repos/${repo}/issues?state=all&since=${encodeURIComponent(since)}&per_page=100&page=${page}`]);
+        if (!Array.isArray(items)) throw new Error(`Invalid pagination response for ${repo}`);
+        const previousSize = seen.size;
+        for (const item of items) {
+          if (!item || !Number.isInteger(item.number) || typeof item.created_at !== "string"
+              || !Number.isFinite(Date.parse(item.created_at)) || !(item.body === null || typeof item.body === "string")) {
+            throw new Error(`Invalid issue response for ${repo}`);
+          }
+          if (seen.has(item.number)) continue;
+          seen.add(item.number);
+          if (!item.body?.includes(MARKER)) continue;
+          const kind = item.pull_request ? "prs" : "issues";
+          if (run !== null && item.body.includes(runMarker(run.id))) runCounts[kind]++;
+          if (day(item.created_at) === today) {
+            dayCounts[kind]++;
+            if (batch === null || item.body.includes(batchMarker(batch))) counts[kind]++;
+          }
+        }
+        if (items.length < 100) break;
+        if (seen.size === previousSize) throw new Error(`Pagination made no progress for ${repo}`);
+      }
+    }
+    const dailyRemaining = remaining(config.limits, counts);
+    const runRemaining = run === null ? null : remaining(run.limits, runCounts);
+    const effective = Object.fromEntries(Object.entries(dailyRemaining).map(([k, n]) => [k, Math.min(n, runRemaining?.[k] ?? Infinity)]));
+    return { scope: config.scope, day: today, timezone: config.timezone, batch, repositories: REPOS,
+      counts, day_counts: dayCounts, limits: config.limits, daily_remaining: dailyRemaining,
+      run: run === null ? null : { ...run, counts: runCounts, remaining: runRemaining }, remaining: effective,
+      can_create_issue: effective.issues > 0, can_create_pr: effective.prs > 0 };
+  }
+
+  function run(args, api = github, read = (file) => readFileSync(file, "utf8"), batch = null, descriptor = null) {
+    const [command, repo, ...rest] = args;
+    if (command === "status" && args.length === 1) return { exit: 0, result: status(api, new Date(), batch, descriptor) };
+    if (!["issue", "pr"].includes(command) || !REPOS.includes(repo)
+        || rest.length !== (command === "issue" ? 2 : 3) || rest.some((s) => !nonempty(s))) {
+      throw new Error("Usage: qa.mjs [--config FILE] [--run FILE] status | issue OWNER/REPO TITLE BODY_FILE | pr OWNER/REPO HEAD TITLE BODY_FILE");
+    }
+    const [head, title, file] = command === "pr" ? rest : [undefined, ...rest];
+    const body = read(file);
+    if (!nonempty(body)) throw new Error("Body file must not be empty");
+    const budget = status(api, new Date(), batch, descriptor);
+    if (!(command === "issue" ? budget.can_create_issue : budget.can_create_pr)) return { exit: 3, result: { ...budget, refused: command } };
+    const markers = [MARKER, ...(batch === null ? [] : [batchMarker(batch)]), ...(descriptor === null ? [] : [runMarker(descriptor.id)])];
+    const payload = { title, body: `${markers.join("\n")}\n\n${body}` };
+    if (command === "pr") Object.assign(payload, { head, base: config.repositories.find((r) => r.name === repo).base, draft: false });
+    const result = api([`repos/${repo}/${command === "pr" ? "pulls" : "issues"}`, "--method", "POST", "--input", "-"], payload);
+    return { exit: 0, result: { number: result.number, url: result.html_url, repository: repo, kind: command } };
+  }
+  return { config, REPOS, MARKER, batchMarker, runMarker, day, status, run };
+}
+
+export function cli(args, { configFile = "qa.config.json", batch = process.env.QA_BATCH ?? null } = {}) {
+  try {
+    let runFile = null;
+    const seen = new Set();
+    while (args[0]?.startsWith("--")) {
+      const flag = args.shift();
+      if (!["--config", "--run"].includes(flag) || seen.has(flag) || !nonempty(args[0]) || args[0].startsWith("--")) throw new Error("Expected unique --config FILE or --run FILE before the command");
+      seen.add(flag);
+      const file = args.shift();
+      if (flag === "--config") configFile = file;
+      else runFile = file;
+    }
+    const guard = createGuard(JSON.parse(readFileSync(configFile, "utf8")));
+    const descriptor = runFile === null ? null : validateRun(JSON.parse(readFileSync(runFile, "utf8")));
+    const { exit, result } = guard.run(args, github, undefined, batch, descriptor);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = exit;
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({ error: error.message, creation_allowed: false })}\n`);
+    process.exitCode = 1;
+  }
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) cli(process.argv.slice(2));

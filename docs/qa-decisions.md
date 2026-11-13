@@ -3,8 +3,9 @@
 Provenance: the User's QA Protocol design conversation, 2026-11-13. These are
 explicit User decisions unless described as implementation choices below.
 Setup research and acceptance criteria: [issue #1115](https://github.com/clayton-duarte/cpd/issues/1115).
-The Protocol and scripts are proposed for User review through this PR; the
-QA loop remains inactive until merge and an explicit start instruction.
+The original Protocol was adopted in PR #1116 and the 20/10 limits in PR #1132.
+Portable extraction is proposed in issue #1148; no new QA run starts during this
+distillation. Each run still needs the User's explicit start/resume instruction.
 
 ## User decisions
 
@@ -32,6 +33,10 @@ QA loop remains inactive until merge and an explicit start instruction.
 | QA-20 | Name this document the QA Protocol; CPD calls collections of procedures and methods Protocols. | User clarification, 2026-11-13; glossary and ADR-0018 record the vocabulary and standalone execution. |
 | QA-21 | The User may explicitly reset today's allowance by starting a named dated batch while preserving all prior resources and aggregate totals. | User instruction, 2026-11-13 ([authorization record](https://github.com/clayton-duarte/cpd/issues/1115#issuecomment-6854012406)). Record authorization in GitHub; no autonomous resets or marker removal. |
 | QA-22 | Permanent limits are now 20 new issues and 10 new PRs, shared across CPD/dotfiles, per Toronto day or explicitly reset batch. | User instruction, 2026-11-13; supersedes QA-07's numeric limits. The currently requested reset uses the new limits. |
+| QA-23 | Make the method reproducible by a fresh agent in any repository using a self-contained kit, explicit project config/profile and durable GitHub handoffs. | User request after the measured pilot, 2026-11-13; implementation proposal and acceptance criteria in [#1148](https://github.com/clayton-duarte/cpd/issues/1148). No new loop, scheduler or live-host authority. |
+| QA-24 | Distinguish iteration, User-started run, daily allowance and explicit reset batch; enforce optional lower run caps from GitHub run markers. | Distillation of the 10/5 measurement run versus permanent 20/10 limits; intent-only run descriptors are not a local creation ledger. Existing attribution is preserved. |
+| QA-25 | Record the measured 10-issue/5-PR run as approximately a little over one weekly allowance percentage point, based on User dashboard readings. | User observed 80% before, 79% at start and 78% after; rounded readings are not exact telemetry or a guaranteed weekly throughput. [Run record](qa-runs/2026-11-13.md). |
+| QA-26 | Adopt the open Agent Skills package layout with a manual Markdown entry, one generic implementation, configurable repo/base/timezone/scope/caps and a CPD compatibility entry point. | Researched implementation choice for User review; [portable pattern sources](../tools/repo-qa/references/RESEARCH.md). Discovery differs by agent; no universal auto-install claim. |
 
 ## Adopted patterns and evidence
 
@@ -141,3 +146,34 @@ fail before API access. Starting a batch is an explicit User policy exception,
 not an automatic response to exhaustion. This is a User operating decision,
 not a claim about industry consensus. Existing REST/pagination and atomic body
 marker evidence above supports the mechanism; tests pin scoping and boundaries.
+
+### Distillation and cold-start reproducibility
+
+The portable source is `tools/repo-qa/`; CPD policy is `qa.config.json` plus the
+CPD profile. The existing `scripts/qa.mjs` entry and historical markers remain.
+The generic Protocol owns common procedures once; project facts, decisions and
+run retrospectives remain in CPD docs. Adopters configure their repository/base,
+permissions and User-approved grouping rather than inheriting private CPD facts.
+One serialized operator still owns a shared group. No distributed service or
+provider-specific memory was introduced.
+
+The cold-start experiment copies the whole kit into an unrelated temporary
+location, uses another repo/base/timezone, invokes fresh Node processes from a
+different working directory, and substitutes a fake GitHub CLI. It verifies
+atomic literal markers, restart recovery and independent run/day refusals.
+Malformed/unverifiable inputs fail closed. A two-day ordinary REST lookback
+replaces the Toronto-specific 26-hour optimization; exact timezone day filtering
+preserves counts, while a long run extends listings to its immutable start.
+
+Run descriptors store authorization/ID/start/limits only. GitHub markers and
+all-state REST listings are the ledger; copied counts in handoffs are snapshots.
+Changing ID/start or scope to regain allowance is forbidden. A reset does not
+reset a run cap. The script cannot authenticate prose permission references,
+coordinate concurrent writers or prevent deliberate bypass; these limits are
+explicit, rather than claims of automatic governance.
+
+Today showed why reproducers must survive the workspace, why a fake boundary
+alone does not prove the real caller permits a bug, why CI state must be current,
+and why unrelated test failures need a base comparison. Those lessons now appear
+in the generic procedure and handoff template. Earlier issue comments remain the
+durable rationale; [the run record](qa-runs/2026-11-13.md) indexes the evidence.
