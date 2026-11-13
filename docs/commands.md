@@ -213,7 +213,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `tests_error` | 1 | a `test` or `impl` Job's submit: the repo's `[test-commands]` commands could not run (killed at `gate_minutes`, killed by a signal, `sh` not startable, `hook_invalid`; `list` included); the Worker asks the Lead. `details` as above |
 | `tests_tampered` | 3 | an `impl` Job's submit (§6.1) changed a path the `test_files` of a `test` Job it needs guard and the Lead has not approved (§5.9); `details.paths`, `details.jobs` |
 | `touches_violation` | 3 | a Job's submit (§6.1) changed a path outside its Spec `touches` (§7.5), unless the repo's `[generated] paths` (§8.3), a base merge, or the Lead approved it (§5.9a); `details.paths`, `details.touches`, `details.generated` |
-| `touches_unchanged` | 3 | a Job's submit (§6.1) declares `touches` but no declared touch file is changed; the Attempt stays `running` for retry; the Lead may waive a path with `cpd job approve-untouched <job> --path <p> --reason "<why>"` (§5.9a), recording the reason visibly to the User; `details.paths` the unchanged declared touches |
+| `touches_unchanged` | 3 | a Job's submit (§6.1) declares `touches` but no declared touch file is changed; the Attempt stays `running` for retry; the Lead may waive a path with `cpd job approve-untouched <job> --path <p> --reason "<why>"` (§5.9b), recording the reason visibly to the User; `details.paths` the unchanged declared touches |
 | `lead_branch_moved` | 3 | a merge detail, not a code any command returns: the merge of an `open` or `update` Job (contract §7.4 step 5) found the Lead Branch's tip not in HEAD and ends the Attempt `failed` / `merge_conflict` with the detail `lead_branch_moved: <message>` (a ladder cause: the next Attempt starts from the newer tip). Still declared, so it stays in this table; submit never refuses with it |
 | `head_moved` | 3 | `review submit` (§31.1) found the pull request's current head is not `--head`; `details` `{workflow, expected, actual}`, both SHAs lowercase; nothing was posted (pro-d169) |
 | `open_job_live` | 3 | `pr open` (§9.1) found the Workflow's `open` Job `draft`, `queued` or `running`; `details.job` (hs-d573) |
@@ -2195,6 +2195,34 @@ Effects: **rows**, one transaction: `jobs.touches_approved` becomes the union of
 
 Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
 
+### 5.9b `job approve-untouched`
+
+```
+cpd job approve-untouched <job> --path <p> [--path <p> …] --reason <text> [--plan <id>]
+```
+
+The Lead's approval for a Job whose declared `touches` have no diff (b69; contract §2.2 "Job kinds", §7.5). The touches guard refuses a submit (§6.1) when a declared touch file is unchanged; a Worker who needs to submit despite an unchanged touch asks the Lead (`cpd ask`), who decides and, to allow it, runs this. **The Lead only**, through `CPD_ATTEMPT` (hs-d497): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). That is all the check there is: the command is **unauthenticated, like `cpd answer`** (a Worker that unsets the variable gets through) and the approval is visible afterwards in the `job-edited` Event (`fields: ["untouched_approved"]`, with the `--reason`).
+
+| Flag | Meaning |
+|---|---|
+| `<job>` | the Job |
+| `--path <p>` | repeated: a path, or a directory prefix, that the check (§7.5) refuses because it is unchanged. The command validates no path against the touches list: what the check refuses is what the Lead approves |
+| `--reason <text>` | why (§1.5); it is in the Event's `text` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_ATTEMPT` is not set | `not_a_lead` | 3 |
+| the Job exists | `job_not_found` | 4 |
+| its status is `queued`, `running` or `failed` (a draft is not checked, an ended one never will be) | `illegal_transition` | 3 |
+
+Effects: **rows**, one transaction: `jobs.untouched_approved` becomes the union of its old value and the paths. **Event** `job-edited` `{fields: ["untouched_approved"]}`, its `text` naming the paths and the reason. It takes effect at the Job's next check, a running Attempt's included (contract §7.7). `untouched_approved` is not a Locked field and is in no fingerprint (§2.3). And, when the Plan's working Lead runs it, it names the PR as the Lead's Workflow (§1.3).
+
+```json
+{"ok": true, "job": {"key": "docs-a1", "status": "running", "kind": "work"}, "approved": ["docs/research/"], "fields": ["untouched_approved"]}
+```
+
+Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
+
 ### 5.10 `job addendum`
 
 ```
@@ -2257,6 +2285,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | at least one commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits` | 3 |
 | the tamper check passes (§7.5; a protected path whose Attempt version equals the Lead tip's or `origin/<base>`'s, as a base merge brings it, is allowed); `details.paths` lists the protected paths touched that are not allowed | `gate_tampered` | 3 |
 | the touches guard passes (§7.5): a path outside the Job's Spec `touches` is refused, unless a base merge brought it, the repo's `[generated] paths` (§8.3) match it, or the Lead approved it with `job approve-touches` (§5.9a); `details.paths`, `details.touches`, `details.generated` (contract §7.5, §7.7) | `touches_violation` | 3 |
+| every declared touch is changed (§7.5): a Job's declared `touches` must each have a diff, else the submit is refused, unless the Lead approved it with `job approve-untouched` (§5.9b); `details.paths` the unchanged touches (contract §7.5, §7.7) | `touches_unchanged` | 3 |
 | (kind `impl`) it changes no path guarded by the `test_files` of a `test` Job it needs, unless `job approve-tests` (§5.9) approved it; `details.paths`, `details.jobs` (contract §7.5, §7.7) | `tests_tampered` | 3 |
 | (kind `test`) every `test_files` entry matches a path the Job changed (`git diff --name-only --no-renames <lead branch>...HEAD`); `details.paths` lists the entries that match none | `test_files_missing` | 3 |
 | (kinds `test`, `impl`) the Workflow's repo policy has `[test-commands]` (none when there is no repo file or the file lacks the table) | `tests_unconfigured` | 3 |
