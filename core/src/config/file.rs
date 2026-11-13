@@ -65,6 +65,7 @@ pub struct Config {
     pub watch: Watch,
     pub swr: Swr,
     pub inbox: Inbox,
+    pub pr: Pr,
     pub events: Events,
     pub tmux: Tmux,
     /// The `[presets.<name>]` tables of config.toml (contract §8.2 "`[presets.<name>]`"), by name; none by default.
@@ -209,6 +210,12 @@ pub struct Inbox {
     pub slack_user_id: String,
     /// GitHub logins whose reviews do not count as a human's (hermes `BOT_REVIEWERS`).
     pub bot_reviewers: Vec<String>,
+}
+
+/// The `[pr]` table: `rereview_bots` are the bots the engine asks to re-review after a push (pro-d588). STUB.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Pr {
+    pub rereview_bots: Vec<String>,
 }
 
 const DEFAULT_BOT_REVIEWERS: [&str; 3] = [
@@ -534,6 +541,9 @@ impl Config {
             watch,
             swr,
             inbox,
+            pr: Pr {
+                rereview_bots: vec![],
+            },
             events,
             tmux,
             presets,

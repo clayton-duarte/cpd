@@ -1,0 +1,135 @@
+//! The bot re-review comment (pro-d588, b71): the engine queues it through the `swr_mutations` outbox, once per
+//! (plan, workflow, head_sha), only for bots that reviewed and are in `pr.rereview_bots`.
+
+use std::path::Path;
+
+use super::rereview::{Push, comment_text, post};
+use crate::config::Config;
+use crate::home::CpdHome;
+use crate::store::Store;
+use crate::swr::source::github_write::target_of;
+
+const CODEX: &str = "chatgpt-codex-connector[bot]";
+const CLAUDE: &str = "mission-lane-claude-code-assistant";
+
+fn store(dir: &tempfile::TempDir) -> Store {
+    let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
+    Store::open(&home, 5000).unwrap()
+}
+
+fn now() -> time::OffsetDateTime {
+    time::macros::datetime!(2026-01-01 00:00 UTC)
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| (*s).to_owned()).collect()
+}
+
+fn push<'a>(sha: &'a str, reviewers: &'a [String], configured: &'a [String]) -> Push<'a> {
+    Push {
+        plan: "p1",
+        workflow: "w1",
+        repo: "acme/shop",
+        number: 7,
+        head_sha: sha,
+        reviewers,
+        configured,
+    }
+}
+
+/// (target_key, op_kind, body) of every github comment mutation.
+fn comments(store: &mut Store) -> Vec<(String, String, String)> {
+    store
+        .read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT target_key, op_kind, vars_json FROM swr_mutations WHERE system = 'github' AND op_kind = 'comment' ORDER BY id",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    let vars: serde_json::Value =
+                        serde_json::from_str(&r.get::<_, String>(2)?).unwrap();
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        vars["body"].as_str().unwrap_or_default().to_owned(),
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+#[test]
+fn rereview_posts_once_per_push_for_reviewing_bot() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = store(&dir);
+    let (reviewers, configured) = (names(&[CODEX]), names(&[CLAUDE, CODEX]));
+    let asked = post(&mut s, now(), &push("aaa", &reviewers, &configured)).unwrap();
+    assert_eq!(asked, names(&[CODEX]));
+    let rows = comments(&mut s);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, target_of("acme/shop", 7));
+}
+
+#[test]
+fn rereview_skips_bot_that_did_not_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = store(&dir);
+    let (reviewers, configured) = (names(&["alice"]), names(&[CLAUDE, CODEX]));
+    let asked = post(&mut s, now(), &push("aaa", &reviewers, &configured)).unwrap();
+    assert!(asked.is_empty());
+    assert!(comments(&mut s).is_empty());
+}
+
+#[test]
+fn rereview_skips_bot_not_in_configured_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = store(&dir);
+    let (reviewers, configured) = (names(&[CODEX, "other-bot[bot]"]), names(&[CLAUDE]));
+    let asked = post(&mut s, now(), &push("aaa", &reviewers, &configured)).unwrap();
+    assert!(asked.is_empty());
+    assert!(comments(&mut s).is_empty());
+}
+
+#[test]
+fn rereview_rerun_same_head_posts_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = store(&dir);
+    let (reviewers, configured) = (names(&[CODEX]), names(&[CODEX]));
+    post(&mut s, now(), &push("aaa", &reviewers, &configured)).unwrap();
+    let again = post(&mut s, now(), &push("aaa", &reviewers, &configured)).unwrap();
+    assert!(again.is_empty());
+    assert_eq!(comments(&mut s).len(), 1);
+    // A new push is a new comment.
+    let next = post(&mut s, now(), &push("bbb", &reviewers, &configured)).unwrap();
+    assert_eq!(next, names(&[CODEX]));
+    assert_eq!(comments(&mut s).len(), 2);
+}
+
+#[test]
+fn rereview_comment_text_exact() {
+    assert_eq!(
+        comment_text(CODEX),
+        "@chatgpt-codex-connector[bot] review specifically whether your previous findings are addressed in the latest commits. Identify which are fixed, partially fixed, or still outstanding, and explain anything remaining."
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = store(&dir);
+    let (reviewers, configured) = (names(&[CLAUDE]), names(&[CLAUDE]));
+    post(&mut s, now(), &push("aaa", &reviewers, &configured)).unwrap();
+    assert_eq!(comments(&mut s)[0].2, comment_text(CLAUDE));
+    assert!(comment_text(CLAUDE).starts_with("@mission-lane-claude-code-assistant review"));
+}
+
+#[test]
+fn config_rereview_bots_default_and_override() {
+    let base = "version = 1\nmachine = \"m1\"\n";
+    let (config, _) = Config::parse(base, Path::new("config.toml")).unwrap();
+    assert_eq!(config.pr.rereview_bots, names(&[CLAUDE, CODEX]));
+    let (config, _) = Config::parse(
+        &format!("{base}[pr]\nrereview_bots = [\"x-bot\"]\n"),
+        Path::new("config.toml"),
+    )
+    .unwrap();
+    assert_eq!(config.pr.rereview_bots, names(&["x-bot"]));
+}

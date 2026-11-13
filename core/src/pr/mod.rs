@@ -51,6 +51,8 @@ mod query_tests;
 #[cfg(test)]
 mod rate_limit_tests;
 #[cfg(test)]
+mod rereview_tests;
+#[cfg(test)]
 mod settings_cache_tests;
 
 pub mod approval;
@@ -75,6 +77,7 @@ mod push;
 pub(crate) mod rebase;
 mod reply;
 mod repost;
+pub mod rereview;
 mod rerun;
 pub mod review;
 pub mod swr_read;
