@@ -295,6 +295,14 @@ fn api_with_include(
             .with("reason", "timeout")
     })?;
     let (status, headers, body) = split_http_response(&out.stdout);
+    // A 304 to a conditional request is "unchanged", whatever gh's exit code says.
+    if status == Some(304) {
+        return Ok(ApiResponse {
+            status,
+            etag: None,
+            body,
+        });
+    }
     match out.exit {
         Some(0) => {
             let etag = headers
