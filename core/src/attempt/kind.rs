@@ -99,7 +99,15 @@ pub(super) fn check(
 ) -> Result<(), CpdError> {
     let (all, job) = fresh(env, plan, &job.key)?;
     let tests = if job.kind == "impl" {
-        guard::of(&all, &job).tests
+        let own = guard::of(&all, &job);
+        // A refactor Workflow has no `test` Job: its `impl` Job runs the tests of the coverage Workflow it stands on.
+        match (&job.workflow, own.jobs.is_empty()) {
+            (Some(workflow), true) => env
+                .store
+                .read(|conn| crate::workflow::base_coverage_tests(conn, plan, workflow))?
+                .unwrap_or(own.tests),
+            _ => own.tests,
+        }
     } else {
         guard::own(&job).0
     };
@@ -125,7 +133,15 @@ pub(super) fn check(
     let Some(commands) = policy.test_commands.clone() else {
         return Err(unconfigured(&job.key));
     };
-    if tests.is_empty() {
+    let refactor_impl = job.kind == "impl"
+        && match &job.workflow {
+            Some(workflow) => env
+                .store
+                .read(|conn| crate::workflow::base_coverage_tests(conn, plan, workflow))?
+                .is_some(),
+            None => false,
+        };
+    if tests.is_empty() && !refactor_impl {
         // An `impl` Job's tests are its `test` Jobs': with none, `run` would be told no test and might run them all (hs-d338).
         return Err(CpdError::new(
             ErrorCode::TestJobRequired,

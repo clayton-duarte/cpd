@@ -166,6 +166,73 @@ pub fn run_workflow(command: WorkflowCommand) -> Result<Output, CpdError> {
     }
 }
 
+/// The named tests an `impl` Job of a refactor Workflow runs when its Workflow has no `test` Job: those of the `test`
+/// Jobs of the coverage Workflow it stands on (the one whose Lead Branch is its base, or a merged one of the repo).
+/// `None` when the Job's Workflow is not a refactor; `Some` (possibly empty: the repo's whole suite) when it is.
+pub(crate) fn base_coverage_tests(
+    conn: &rusqlite::Connection,
+    plan: &crate::ids::PlanId,
+    workflow: &str,
+) -> Result<Option<Vec<String>>, CpdError> {
+    use rusqlite::OptionalExtension;
+    let Some((repo, base)): Option<(String, String)> = conn
+        .query_row(
+            "SELECT repo, base FROM workflows WHERE plan = ?1 AND key = ?2 AND shape = 'refactor'",
+            [plan.as_str(), workflow],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let mut keys = conn.prepare(
+        "SELECT key FROM workflows WHERE plan = ?1 AND shape = 'coverage' AND repo = ?2 AND (lead_branch = ?3 OR status = 'merged')",
+    )?;
+    let coverage: Vec<String> = keys
+        .query_map(rusqlite::params![plan.as_str(), repo, base], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut tests: Vec<String> = Vec::new();
+    for job in crate::plan::jobs::load(conn, plan)? {
+        if job.kind != "test"
+            || job.status == "cancelled"
+            || !job.workflow.as_ref().is_some_and(|w| coverage.contains(w))
+        {
+            continue;
+        }
+        for name in crate::job::guard::own(&job).0 {
+            if !tests.contains(&name) {
+                tests.push(name);
+            }
+        }
+    }
+    Ok(Some(tests))
+}
+
+/// The paths `base...head` deletes or renames away (a rename counts as a deletion of its source).
+pub(crate) fn deleted_paths(
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>, CpdError> {
+    let range = format!("{base}...{head}");
+    let out = crate::git::run::run(
+        root,
+        &["diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", &range],
+    )?;
+    if out.code != 0 {
+        return Err(CpdError::new(
+            crate::error::ErrorCode::GitFailed,
+            format!("Could not list the deleted paths of {range}."),
+        ));
+    }
+    Ok(out
+        .stdout
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 /// Enforce test immutability on refactor diffs, including declared test-file globs.
 pub(crate) fn guard_refactor_tests(
     conn: &rusqlite::Connection,
@@ -183,9 +250,20 @@ pub(crate) fn guard_refactor_tests(
     if shape != "refactor" {
         return Ok(());
     }
+    let repo: String = conn.query_row(
+        "SELECT repo FROM workflows WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), workflow],
+        |row| row.get(0),
+    )?;
+    // Declared test paths bind this repository only: another repo's Workflow may name the same glob for its own files.
+    let mut in_repo = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND repo = ?2")?;
+    let in_repo: Vec<String> = in_repo
+        .query_map(rusqlite::params![plan.as_str(), repo], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
     let jobs = crate::plan::jobs::load(conn, plan)?;
     let patterns: Vec<&str> = jobs
         .iter()
+        .filter(|j| j.workflow.as_ref().is_some_and(|w| in_repo.contains(w)))
         .filter_map(|j| j.test_files.as_ref())
         .filter_map(|v| v.as_array())
         .flatten()
@@ -293,7 +371,13 @@ impl CoverageReport {
         }
         Ok(())
     }
-    pub(crate) fn check(&self, current: &Self, touched: &[String]) -> Result<(), CpdError> {
+    /// `removed`: the paths `touched` that no longer exist (deleted or renamed away): their coverage left with them, it did not go missing.
+    pub(crate) fn check(
+        &self,
+        current: &Self,
+        touched: &[String],
+        removed: &[String],
+    ) -> Result<(), CpdError> {
         let below = if let Some(base_files) = &self.files {
             let current_files = current.files.as_ref().ok_or_else(|| {
                 CpdError::new(
@@ -304,7 +388,7 @@ impl CoverageReport {
             touched.iter().any(
                 |path| match (base_files.get(path), current_files.get(path)) {
                     (Some(base), Some(now)) => now.line < base.line || now.branch < base.branch,
-                    (Some(_), None) => true,
+                    (Some(_), None) => !removed.contains(path),
                     _ => false,
                 },
             )

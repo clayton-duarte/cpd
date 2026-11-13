@@ -443,7 +443,8 @@ fn coverage_gate(
     let repo = std::path::Path::new(&workflow.repo);
     let current = crate::workflow::measure_coverage(repo, plan, &workflow.key, sha, command)?;
     let touched = crate::git::tamper::changed_paths(repo, &base, sha)?;
-    baseline.check(&current, &touched)
+    let removed = crate::workflow::deleted_paths(repo, &base, sha)?;
+    baseline.check(&current, &touched, &removed)
 }
 
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
