@@ -196,3 +196,38 @@ fn submit_accepts_a_test_job_that_keeps_and_adds_tests() {
     assert!(rig.submit().is_ok());
     assert_eq!(rig.attempt("status").as_deref(), Some("merging"));
 }
+
+#[test]
+fn unicode_before_an_assertion_does_not_panic_or_hide_it() {
+    let src = "#[test]\nfn a() { let café = 1; assert_eq!(café, 1); }\n";
+    assert_eq!(test_cases(src)[0].assertions, 1);
+}
+
+#[test]
+fn comments_and_literals_cannot_replace_assertions() {
+    let base = "#[test]\nfn a() { assert!(true); }\n";
+    for body in [
+        "// assert!(true);\n",
+        "/* assert!(true); */",
+        "let s = \"assert!(true)\";",
+        "let s = r#\"assert!(true)\"#;",
+    ] {
+        let head = format!("#[test]\nfn a() {{\n{body}\n}}\n");
+        assert!(refused(base, &head, &[]), "{body}");
+    }
+    let src =
+        "/*\n#[test]\nfn fake() { assert!(true); }\n*/\n#[test]\nfn real() { assert!(true); }";
+    assert_eq!(test_cases(src).len(), 1);
+    assert_eq!(test_cases(src)[0].name, "real");
+}
+
+#[test]
+fn quoted_and_commented_braces_do_not_close_cases() {
+    for body in ["let ch = '}';", "// }", "/* } */", "let s = r#\"\"}\"#;"] {
+        let src = format!("#[test]\nfn a() {{\n{body}\nassert!(true);\n}}\n");
+        assert_eq!(test_cases(&src)[0].assertions, 1, "{body}");
+    }
+    let js =
+        "test('a', () => {\n const s = '}';\n const t = `expect(1) }`;\n expect(1).toBe(1);\n});\n";
+    assert_eq!(test_cases(js)[0].assertions, 1);
+}

@@ -325,9 +325,9 @@ fn count_assertions(s: &str) -> usize {
             i += 1;
             continue;
         }
-        if s[i..].starts_with("expect(") {
+        if b[i..].starts_with(b"expect(") {
             n += 1;
-        } else if s[i..].starts_with("assert") {
+        } else if b[i..].starts_with(b"assert") {
             let mut j = i;
             while j < b.len() && word(b[j]) {
                 j += 1;
@@ -343,27 +343,97 @@ fn count_assertions(s: &str) -> usize {
     n
 }
 
-/// The `{` and `}` of `s` outside double-quoted strings, as (opens, closes).
-fn braces(s: &str) -> (i32, i32) {
-    let (mut open, mut close, mut quoted, mut escaped) = (0, 0, false, false);
-    for c in s.chars() {
-        if quoted {
-            match (escaped, c) {
-                (true, _) => escaped = false,
-                (false, '\\') => escaped = true,
-                (false, '"') => quoted = false,
-                _ => {}
+/// Replace comments and literals with spaces while retaining offsets and newlines. The declaration scanner uses
+/// the original text for JS titles, but only code contributes braces or assertions. Rust lifetimes stay code.
+fn code_only(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = bytes.to_vec();
+    let rust = src.contains("#[test") || src.contains("#[tokio::test");
+    let mut i = 0;
+    while i < bytes.len() {
+        let start = i;
+        if bytes[i..].starts_with(b"//") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
             }
+        } else if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            let mut depth = 1;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        } else if bytes[i] == b'r' && {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] == b'#' {
+                j += 1;
+            }
+            j < bytes.len() && bytes[j] == b'"'
+        } {
+            let mut quote = i + 1;
+            while bytes[quote] == b'#' {
+                quote += 1;
+            }
+            let hashes = quote - i - 1;
+            i = quote + 1;
+            while i < bytes.len() {
+                if bytes[i] == b'"'
+                    && bytes
+                        .get(i + 1..i + 1 + hashes)
+                        .is_some_and(|s| s.iter().all(|b| *b == b'#'))
+                {
+                    i += 1 + hashes;
+                    break;
+                }
+                i += 1;
+            }
+        } else if matches!(bytes[i], b'"' | b'\'' | b'`') {
+            let quote = bytes[i];
+            // A Rust lifetime has no closing quote after the character. A char literal does.
+            if rust && quote == b'\'' && bytes.get(i + 1) != Some(&b'\\') {
+                let next = src[i + 1..].chars().next().map_or(0, char::len_utf8);
+                if bytes.get(i + 1 + next) != Some(&b'\'') {
+                    i += 1;
+                    continue;
+                }
+            }
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                } else if bytes[i] == quote {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+        } else {
+            i += 1;
             continue;
         }
-        match c {
-            '"' => quoted = true,
-            '{' => open += 1,
-            '}' => close += 1,
-            _ => {}
+        for b in &mut out[start..i] {
+            if *b != b'\n' && *b != b'\r' {
+                *b = b' ';
+            }
         }
     }
-    (open, close)
+    String::from_utf8(out).expect("masking whole literals preserves UTF-8")
+}
+
+/// Braces in code whose comments and literals have been masked.
+fn braces(s: &str) -> (i32, i32) {
+    (
+        s.bytes().filter(|b| *b == b'{').count() as i32,
+        s.bytes().filter(|b| *b == b'}').count() as i32,
+    )
 }
 
 struct Frame {
@@ -382,8 +452,9 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
     let mut stack: Vec<Frame> = Vec::new();
     let mut depth = 0;
     let mut rust_test = false;
-    for line in src.lines() {
-        let mut t = line.trim_start();
+    let code = code_only(src);
+    for (line, masked) in src.lines().zip(code.lines()) {
+        let mut t = masked.trim_start();
         while t.starts_with("#[") {
             let Some(end) = t.find(']') else { break };
             if t.starts_with("#[test") || t.starts_with("#[tokio::test") {
@@ -396,7 +467,8 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
         }
         let depth_before = depth;
         let mut fresh = false;
-        if let Some(found) = opener(t, rust_test) {
+        let original = &line[line.len() - t.len()..];
+        if let Some(found) = opener(original, rust_test) {
             let (label, sep, case) = match found {
                 Opener::Case(name) => {
                     rust_test = false;
