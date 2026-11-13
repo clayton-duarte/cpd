@@ -41,6 +41,21 @@ pub(super) trait Boundary {
     ) -> Result<String, CpdError>;
 }
 
+/// True when the Job's Attempt was stopped for a test replacement (a pending or
+/// complete intent exists): the driver's A9 cleanup must then keep the Lead
+/// Branch on the Worker's commit instead of resetting it to `base_sha` (b63).
+pub(crate) fn stopped_for_replacement(
+    conn: &Connection,
+    plan: &PlanId,
+    job: &str,
+) -> Result<bool, CpdError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM test_replacements WHERE plan = ?1 AND source = ?2 AND state IN ('pending', 'complete'))",
+        params![plan.as_str(), job],
+        |r| r.get(0),
+    )?)
+}
+
 /// Re-seal a Job's fingerprint when only recorded replace-test redirects of
 /// its needs explain the drift; refuse otherwise (`reseal_unexplained`).
 pub(super) fn reseal(
@@ -303,6 +318,9 @@ pub(super) fn replace(
         })?;
     }
     boundary.stop(env, plan, request)?;
+    // b63: the stop keeps the Worker's commit on the Lead Branch (the driver's A9
+    // cleanup skips the reset for a replaced Job), so selectors validated above
+    // already read the Worker's commit.
     let sha = boundary.start(env, plan, request)?;
     env.store.write("job replace-test", |tx| {
         if intent(tx, plan, request)?.as_deref() == Some("complete") { return Ok(()); }
