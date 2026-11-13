@@ -78,6 +78,7 @@ export type StoreAction =
   | { type: "dismissPending"; clientSubmissionId: string }
   | { type: "actionOptimistic"; actionId: string; action: CockpitAction }
   | { type: "actionStart"; actionId: string }
+  | { type: "actionsInterrupted"; actionIds: readonly string[]; error: WireError }
   | { type: "dismissError" }
   | { type: "serverBatch"; messages: ServerMessage[] };
 
@@ -254,25 +255,8 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
     }
     case "cockpit.error":
       return { ...state, cockpit: { ...state.cockpit, error: message.error } };
-    case "action.result": {
-      const pendingActionIds = state.pendingActionIds.filter((id) => id !== message.actionId);
-      const record = state.optimistic[message.actionId];
-      const { [message.actionId]: _settled, ...optimistic } = state.optimistic;
-      const settled = { ...state, pendingActionIds, optimistic };
-      if (message.ok) {
-        return {
-          ...settled,
-          optimistic: state.optimistic,
-          completedActionIds: settled.completedActionIds.includes(message.actionId)
-            ? settled.completedActionIds
-            : [...settled.completedActionIds, message.actionId],
-        };
-      }
-      const rolledBack = record !== undefined
-        ? { ...settled, cockpit: { ...settled.cockpit, inbox: syncOptimisticInbox(record.before, optimistic) } }
-        : settled;
-      return { ...rolledBack, lastError: message.error };
-    }
+    case "action.result":
+      return settleAction(state, message.actionId, message);
     case "pong":
       return state;
     default: {
@@ -283,6 +267,26 @@ function reduceServer(state: AppState, message: ServerMessage): AppState {
       return reduceSession(state, state.session, message);
     }
   }
+}
+
+function settleAction(state: AppState, actionId: string, outcome: { ok: true } | { ok: false; error: WireError }): AppState {
+  const pendingActionIds = state.pendingActionIds.filter((id) => id !== actionId);
+  const record = state.optimistic[actionId];
+  const { [actionId]: _settled, ...optimistic } = state.optimistic;
+  const settled = { ...state, pendingActionIds, optimistic };
+  if (outcome.ok) {
+    return {
+      ...settled,
+      optimistic: state.optimistic,
+      completedActionIds: settled.completedActionIds.includes(actionId)
+        ? settled.completedActionIds
+        : [...settled.completedActionIds, actionId],
+    };
+  }
+  const rolledBack = record !== undefined
+    ? { ...settled, cockpit: { ...settled.cockpit, inbox: syncOptimisticInbox(record.before, optimistic) } }
+    : settled;
+  return { ...rolledBack, lastError: outcome.error };
 }
 
 /** Every writer of the tree goes through here: a live-to-archived selection leaves for the next live session. */
@@ -362,6 +366,12 @@ function reduceCore(state: AppState, action: StoreAction): AppState {
         ...state,
         session: { ...state.session, pending: state.session.pending.filter((p) => p.clientSubmissionId !== action.clientSubmissionId) },
       };
+    case "actionsInterrupted": {
+      const interrupted = new Set(action.actionIds);
+      // Undo newer optimistic edits first: their saved before-state includes older edits.
+      return [...state.pendingActionIds].reverse().reduce((current, id) => interrupted.has(id)
+        ? settleAction(current, id, { ok: false, error: action.error }) : current, state);
+    }
     case "actionStart":
       return {
         ...state,

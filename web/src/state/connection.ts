@@ -1,5 +1,5 @@
 import type { CockpitAction, SettingsChanges } from "../protocol/cockpit.ts";
-import { WebError, toWireError, type ConfigureChange, type DialogResponse, type WhenBusy, type WireImage } from "../protocol/domain.ts";
+import { WebError, toWireError, type ConfigureChange, type DialogResponse, type WhenBusy, type WireImage, type WireError } from "../protocol/domain.ts";
 import type { Disposable, Scheduler, Transport } from "../protocol/runtime.ts";
 import type { ClientMessage, ServerMessage } from "../protocol/wire.ts";
 import type { Store } from "./store.ts";
@@ -158,6 +158,10 @@ export function createConnection(options: ConnectionOptions): Connection {
   };
 
   const send = (message: ClientMessage): void => transport.send(message);
+  const interruptActions = (error: WireError, actionIds = store.getState().pendingActionIds): void => {
+    if (actionIds.length > 0) store.dispatch({ type: "actionsInterrupted", actionIds, error });
+  };
+  const unknownOutcome = (): WireError => ({ code: "internal", message: "Connection lost before action confirmation; outcome is unknown. Inspect current state before retrying.", details: { reason: "outcome_unknown" } });
   const selected = (): string => {
     const id = store.getState().selectedSessionId;
     if (id === null) throw new WebError("not_attached", "no session is selected");
@@ -241,6 +245,7 @@ export function createConnection(options: ConnectionOptions): Connection {
     timer?.dispose();
     clearResubscribe();
     store.dispatch({ type: "connection", status: "reconnecting", retryAttempt: attempt });
+    interruptActions(unknownOutcome());
     const delay = Math.min(backoff.maxMs, backoff.baseMs * 2 ** attempt);
     attempt++;
     timer = scheduler.after(delay, () => {
@@ -316,7 +321,8 @@ export function createConnection(options: ConnectionOptions): Connection {
       const actionId = newId();
       store.dispatch({ type: "actionStart", actionId });
       if (action.kind === "pr.merge") store.dispatch({ type: "actionOptimistic", actionId, action });
-      send({ type: "cockpit.action", actionId, action });
+      try { send({ type: "cockpit.action", actionId, action }); }
+      catch (error) { interruptActions(toWireError(error), [actionId]); throw error; }
       return actionId;
     },
     readLogs() {
@@ -337,6 +343,7 @@ export function createConnection(options: ConnectionOptions): Connection {
       dropBuffer();
       dropEchoTimers();
       store.dispatch({ type: "connection", status: "closed" });
+      interruptActions(unknownOutcome());
       transport.close();
     },
   };

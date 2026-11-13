@@ -16,6 +16,7 @@ text = ""
 
 [workflow]
 jira_required = false
+local_docs = true
 text = ""
 
 [pr.feedback]

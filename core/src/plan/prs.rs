@@ -75,6 +75,18 @@ impl WorkflowRow {
     }
 }
 
+/// The body of a Workflow's pull request: its stored description and, for a Workflow linked to a bug (`workflows.bug_id`), a last line
+/// `Fixes #<N>` (the issue is on the Workflow's repo `repo`, `<owner>/<name>`) or `Fixes <owner>/<repo>#<N>` (another repo), so the merge
+/// closes the issue. `bug_issue` is the bug's issue URL.
+pub fn pr_body(description: &str, bug_issue: Option<&str>, repo: &str) -> String {
+    match bug_issue.and_then(|issue| crate::protocol::fixes_line(issue, repo)) {
+        Some(line) if !description.lines().any(|l| l.trim() == line) => {
+            format!("{}\n\n{line}", description.trim_end())
+        }
+        _ => description.to_owned(),
+    }
+}
+
 #[cfg(test)]
 impl WorkflowRow {
     /// A Workflow of the fields the fingerprint, `plan render` and `--workflow` selection read.
@@ -284,5 +296,20 @@ mod tests {
             ("web", "waiting", None, &["api".to_owned()][..])
         );
         assert!(web.pull.is_none() && web.pull_request.is_none());
+    }
+
+    /// A Workflow whose bug's issue is on its own repo ends its PR body with `Fixes #<N>`; another repo's issue is `Fixes <owner>/<repo>#<N>`.
+    #[test]
+    fn pr_body_links_bug_issue() {
+        let issue = "https://github.com/clayton-duarte/cpd/issues/1156";
+        assert_eq!(
+            super::pr_body("## What and why\nX", Some(issue), "clayton-duarte/cpd"),
+            "## What and why\nX\n\nFixes #1156"
+        );
+        assert_eq!(
+            super::pr_body("Body", Some(issue), "acme/api"),
+            "Body\n\nFixes clayton-duarte/cpd#1156"
+        );
+        assert_eq!(super::pr_body("Body", None, "acme/api"), "Body");
     }
 }
