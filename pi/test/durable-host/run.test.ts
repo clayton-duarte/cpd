@@ -376,8 +376,8 @@ test("a cpd-chat User prompt with a valid webui token clears a tripped host", { 
   const token = "t".repeat(64);
   const home = mkdtempSync(join(tmpdir(), "durable-host-guard-"));
   try {
-    mkdirSync(join(home, "run"));
-    writeFileSync(join(home, "run", "webui-token"), token, { mode: 0o600 });
+    mkdirSync(join(home, "run", "webui-tokens"), { recursive: true });
+    writeFileSync(join(home, "run", "webui-tokens", `${process.pid}.token`), token, { mode: 0o600 });
     await withHost({ sessionOver: { loop_guard_turns: 1 }, config: { ...CONFIG, home } }, async (r) => {
       await tripped(r);
       const verified = r.connect();

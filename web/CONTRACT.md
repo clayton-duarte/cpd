@@ -2549,6 +2549,8 @@ Both test suites pass cleanly under Vitest.
 
 Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
 
+The durable host verifier now reads the per-PID directory on every submit (#1140), validates positive PID names and liveness (including EPERM), and compares nonempty token bytes in constant time. The obsolete shared file cannot authenticate a host prompt. Missing/unreadable files fail verification; removing a file revokes its token on the next check.
+
 ### 27.1 Who writes a token
 
 - Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
