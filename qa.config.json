@@ -2,10 +2,7 @@
   "version": 1,
   "scope": "cpd-repo-qa",
   "timezone": "America/Toronto",
-  "limits": {
-    "issues": 20,
-    "prs": 10
-  },
+  "limits": null,
   "repositories": [
     {
       "name": "clayton-duarte/cpd",
@@ -19,5 +16,9 @@
       "name": "clayton-duarte/skills",
       "base": "main"
     }
-  ]
+  ],
+  "weekly_allowance": {
+    "min_remaining_percent": 50,
+    "max_age_seconds": 60
+  }
 }
