@@ -86,6 +86,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "slack_user_id": "",
                 "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
             },
+            "pr": {"rereview_bots": ["mission-lane-claude-code-assistant", "chatgpt-codex-connector[bot]"]},
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"},
             "experimental": {"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true, "durable_leads": false}
@@ -338,6 +339,8 @@ stuck_job_minutes = 1
 team_channel = "C1"
 slack_user_id = "U1"
 bot_reviewers = ["a"]
+[pr]
+rereview_bots = ["b"]
 [events]
 poll_ms = 20
 [tmux]

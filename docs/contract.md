@@ -1964,6 +1964,9 @@ CREATE TABLE pull_requests (
   labels_json     TEXT,                                           -- migration `pr-light-cache`: the label names of the Light read (a JSON array); NULL = not polled since
   merge_armed     INTEGER NOT NULL DEFAULT 0 CHECK (merge_armed IN (0, 1)),      -- migration `20261107T2330-pr-merge-armed` (commands.md §9.10): 1 when `pr merge` refused a behind head and armed an automatic merge, cleared when the pull request merges, closes or is cancelled
   base_contained  INTEGER,                                        -- migration `20261107T2331-pr-base-contained` (§2.2 "Ready to merge"): the persisted containment flag, 1 when the head contains the current default-branch head, 0 when it does not, NULL when unknown; set and refreshed by the poll (§7.6), never for a stacked pull request
+  open_threads    TEXT,                                           -- migration `20261113T1000-pr-open-threads` (pro-d588): JSON array of the review thread ids GitHub still shows unresolved at the last comments read, answered threads included; NULL = not read since
+  reviewers       TEXT,                                           -- migration `20261113T1000-pr-open-threads`: JSON array of the logins that authored review comments, comments or reviews; NULL = not read since
+  rereview_head   TEXT,                                           -- migration `20261113T1000-pr-open-threads`: the head the bot re-review pass last saw with a configured bot in `reviewers`; NULL = none yet
   -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
@@ -1995,6 +1998,7 @@ CREATE TABLE workflows (
   description        TEXT CHECK (description IS NULL OR length(description) BETWEEN 1 AND 65536),   -- migration `pr-description` (pro-d93..pro-d96, §4.5; an ADD COLUMN, so after `head_ref`): the PR's description, a Markdown body; non-empty after trimming is checked at the boundary; null only for a PR made before it
   jira               TEXT,   -- migration `pr-jira` (pro-d127, B1, §4.5; an ADD COLUMN, so after `description`): the PR's Jira ticket, a key matching `^[A-Z][A-Z0-9]+-[0-9]+$` (checked at the boundary by the `Jira` type); null until one is set; not a Locked field, outside the plan fingerprint
   repair             TEXT CHECK (repair IS NULL OR json_valid(repair)),   -- migration `workflow-repair` (pro-d465, §4.5; an ADD COLUMN, so after `jira`): the repair marker of §7.6 "The repair marker", JSON `{"pid", "start", "command"}`, its shape checked at the boundary (`RepairMarker`); null when no repair runs; not a Locked column
+  bug_id             TEXT REFERENCES bug_records(id),   -- migration `bug-issue` (an ADD COLUMN, so after `repair`): the bug the Workflow fixes; null when none
   PRIMARY KEY (plan, key),
   UNIQUE (plan, lead_branch),
   CHECK ((status IN ('waiting', 'cancelled')) = (lead_worktree IS NULL)),
@@ -2879,6 +2883,7 @@ CREATE TABLE bug_records (
   reported_at     TEXT NOT NULL,
   closed_at       TEXT,
   closed_by       TEXT,
+  issue           TEXT,
   CHECK ((mitigation IS NULL) = (mitigated_at IS NULL)),
   CHECK (mitigated_by IS NULL OR mitigation IS NOT NULL),
   CHECK ((status = 'closed') = (closed_at IS NOT NULL)),
@@ -6809,6 +6814,9 @@ team_channel = ""          # Slack channel id of the team review channel, "C02JU
 slack_user_id = ""         # the User's Slack user id, "U04DB4MTUMR" for the User: names them in mentions and reactions; set with team_channel
 bot_reviewers = ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]  # GitHub logins whose reviews do not count as a human's (hermes BOT_REVIEWERS)
 
+[pr]
+rereview_bots = ["mission-lane-claude-code-assistant", "chatgpt-codex-connector[bot]"]  # GitHub logins the engine asks to re-review after a push (pro-d588); separate from inbox.bot_reviewers
+
 [events]
 poll_ms = 200                # events follow (§5.4)
 
@@ -6868,6 +6876,7 @@ turn_question_guard = true   # the switch of the turn-question-guard Experimenta
 | `inbox.slack_user_id` | text | `""` | `""` or `^U[A-Z0-9]+$`; **both** `inbox.team_channel` and `inbox.slack_user_id` set or both empty, else `config_invalid` (the claim and mention rules cannot run without the User's id) |
 | `inbox.review_context` | retired (pro-d338) | none | not a key any more: `inbox claim` always targets `codereview` (§2.2 "Permanent Contexts", commands.md §21.7). The config migration `drop-inbox-review-context` (§8.1) removes the `review_context` line of `[inbox]`; after it, a config that still sets the key is `config_invalid` (an unknown key) |
 | `inbox.bot_reviewers` | [text] | the three above | non-empty strings; GitHub logins (hermes `classify.BOT_REVIEWERS`, `classify.py:58-62`) |
+| `pr.rereview_bots` | [text] | the two above | non-empty strings; GitHub logins of the bots the engine asks to re-review after a push (pro-d588, §7.6); an owner/repository `[pr] rereview_bots` overrides it per Workflow |
 | `events.poll_ms` | int | `200` | 20–10000 |
 | `swr.gc_days` | int | `7` | integer ≥ 1, else `config_invalid` (`details.key`). The gcTime of the SWR cache, in days, set in the `[swr]` table: a row whose `inactive_at` is older than this and that has no active observer is deleted by `gc::sweep` (§4.7; `docs/architecture/swr.md` §4) |
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
