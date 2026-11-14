@@ -251,11 +251,12 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261112T1600-workflow-prereqs",
             "20261113T0800-bug-issue",
             "20261113T0801-bug-issue-backfill",
+            "20261113T0802-job-test-removal-approved",
         ]
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261113T0801-bug-issue-backfill")
+        Some("20261113T0802-job-test-removal-approved")
     );
 }
 

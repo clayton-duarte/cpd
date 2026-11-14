@@ -2070,6 +2070,7 @@ CREATE TABLE jobs (
   summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),  -- an explore Job's bounded summary (§2.2 "Explore Jobs"); NOT NULL exactly when an explore Job is merged; added by the migration explore-kinds
   touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),  -- the paths the Lead approved a Job to change beyond its Spec `touches` (§2.2, §7.5); NOT Locked, in no fingerprint; added by the migration job-touches-approved
   waiting_on          TEXT,
+  test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),  -- the test case names the Lead approved a Job to remove or weaken (§2.2, §7.5); NOT Locked, in no fingerprint; added by the migration job-test-removal-approved
   UNIQUE (plan, key),
   FOREIGN KEY (plan, workflow) REFERENCES "workflows"(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
