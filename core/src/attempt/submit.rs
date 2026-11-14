@@ -338,7 +338,9 @@ fn run_checks(
     }
     let written = git::tamper::written_paths(root, base, sha, &compare_with)?;
     // The test files the Attempt wrote keep their test cases and assertions (b70), unless the Lead approved the removal.
-    kind::tests_kept(env, plan, key, root, base, sha, &written)?;
+    // Removals are checked before footprint filtering: returning to upstream's absence must not erase Lead tests.
+    let candidates = git::tamper::changed_paths(root, base, sha)?;
+    kind::tests_kept(env, plan, key, root, base, sha, &candidates)?;
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff

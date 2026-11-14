@@ -133,6 +133,10 @@ pub(super) struct Spec<'a> {
     pub(super) base_ahead: &'a [(&'a str, &'a str)],
     /// Whether the Attempt's commit is the merge of the base's tip (a base merge), or its own commit on the branch point.
     pub(super) brings_base: bool,
+    /// Files added by an earlier Job on the Lead Branch.
+    pub(super) lead_only: &'a [(&'a str, &'a str)],
+    /// Paths deleted by this Attempt.
+    pub(super) deleted: &'a [&'a str],
 }
 
 impl<'a> Default for Spec<'a> {
@@ -144,6 +148,8 @@ impl<'a> Default for Spec<'a> {
             changed: &[],
             base_ahead: &[],
             brings_base: false,
+            lead_only: &[],
+            deleted: &[],
         }
     }
 }
@@ -180,8 +186,25 @@ pub(super) fn rig(spec: Spec<'_>) -> Rig {
     for (path, text) in BASE {
         repo.write(path, text);
     }
-    let base = repo.commit("base");
+    let main_base = repo.commit("base");
     repo.branch("cpd/pay/api");
+    // An earlier Job's commit on the Lead Branch: the Attempt branches from it, `main` does not have it.
+    let mut start = BASE.to_vec();
+    start.extend(spec.lead_only.iter().copied());
+    let base = if spec.lead_only.is_empty() {
+        main_base.clone()
+    } else {
+        let mut u = universe.lock().unwrap();
+        let lead = commit(
+            &mut u,
+            repo.id(),
+            std::slice::from_ref(&main_base),
+            &start,
+            "earlier job",
+        );
+        u.set_ref(repo.id(), "refs/heads/cpd/pay/api", &lead, "earlier job");
+        lead
+    };
     // The base branch may move ahead: a commit over the branch point that the Attempt does not have.
     if !spec.base_ahead.is_empty() {
         let mut ahead = BASE.to_vec();
@@ -190,18 +213,19 @@ pub(super) fn rig(spec: Spec<'_>) -> Rig {
         let tip = commit(
             &mut u,
             repo.id(),
-            std::slice::from_ref(&base),
+            std::slice::from_ref(&main_base),
             &ahead,
             "the base moved",
         );
         u.set_ref(repo.id(), "refs/heads/main", &tip, "the base moved");
     }
     // The Attempt: its own commit, or the merge of the base's tip.
-    let mut tree = BASE.to_vec();
+    let mut tree = start;
     if spec.brings_base {
         tree.extend(spec.base_ahead.iter().copied());
     }
     tree.extend(spec.changed.iter().copied());
+    tree.retain(|(path, _)| !spec.deleted.contains(path));
     let tree = overlay(tree);
     {
         let mut u = universe.lock().unwrap();
