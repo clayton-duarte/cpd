@@ -22,6 +22,7 @@ export type PlanReviewPort = {
   readText(file: string): Promise<string>;
   write(entry: { kind: string; data: Record<string, unknown>; model: readonly unknown[] }): Promise<unknown>;
   entries(): Promise<readonly unknown[]>;
+  notifyDecision?(text: string, data: Record<string, unknown>): Promise<void>;
   dialogs: Dialogs;
   held: held.HeldApi;
 };
@@ -100,18 +101,17 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
     const done: ReviewEntry = { ...entry, status: verdict ? "approved" : "rejected" };
     abortDialog(entry.review);
     await port.write({ kind: ENTRY_TYPE, data: entryData(done), model: [] });
-    await port.write({
-      kind: DECISION_TYPE,
-      data: {
+    const data = {
         plan: entry.plan,
         review: entry.review,
         approved: verdict,
         current,
         ...(text !== undefined ? { feedback: text } : {}),
         ...(elsewhere ? { decided_elsewhere: true } : {}),
-      },
-      model: [{ role: "user", content: decisionText(entry.review, verdict, text, current, elsewhere ? ELSEWHERE_CHAT_NOTE : undefined) }],
-    });
+      };
+    const content = decisionText(entry.review, verdict, text, current, elsewhere ? ELSEWHERE_CHAT_NOTE : undefined);
+    if (port.notifyDecision) await port.notifyDecision(content, data);
+    else await port.write({ kind: DECISION_TYPE, data, model: [{ role: "user", content }] });
   }
 
   /** The dialog of a pending chat review, detached (review.ts `showDialog`): select; Approve decides, Change opens the editor and decides with the note. A decline leaves the entry pending and sends the `stillWaiting` notice. */

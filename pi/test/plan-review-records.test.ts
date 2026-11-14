@@ -4,6 +4,7 @@ import { reviewsFromEntries } from "../lib/plan-review.ts";
 import { createPlanReview } from "../durable-host/plan-review.ts";
 import { createHeld } from "../durable-host/held.ts";
 import { createDialogs } from "../durable-host/dialogs.ts";
+import { withHost } from "./durable-host/rig.ts";
 
 test("durable review records reconcile pending and externally decided reviews", () => {
   const record = (status: string) => ({
@@ -74,4 +75,18 @@ test("restart reconciles an already-approved review instead of reopening its dia
   await flow.open("r1", "start");
   assert.equal(held.heldCount(), 0);
   assert.equal(reviewsFromEntries(records, "p1").reviews.get("r1")?.status, "approved");
+});
+
+test("the production host starts a Lead turn for an approval recovered at startup", { timeout: 20_000 }, async () => {
+  await withHost({
+    stored: [{ kind: "cpd-plan-review", model: [], data: { plan: "p1", review: "r1", surface: "chat", status: "pending" } }],
+    answers: { "plan-show": { review: { id: "r1", status: "approved", current: true } } },
+  }, async (r) => {
+    await r.up();
+    const decision = r.submitted.find(input => input.entry.kind === "cpd-plan-decision");
+    assert.ok(decision, "recovery must submit a turn, not only silently write the decision");
+    assert.match(String(decision.content), /APPROVED/);
+    assert.equal(decision.entry.data.approved, true);
+    assert.equal(r.submitted.filter(input => input.entry.kind === "cpd-plan-decision").length, 1);
+  });
 });

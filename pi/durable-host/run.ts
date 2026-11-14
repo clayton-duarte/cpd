@@ -331,6 +331,16 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       readText: readPlanFile,
       write: (entry) => conversation.write({ type: "write", entry }),
       entries: () => conversation.entries(),
+      notifyDecision: async (content, data) => {
+        await submit({
+          content,
+          requestId: `plan-decision:${plan}:${String(data.review)}`,
+          whenBusy: "followUp",
+          entry: { kind: "cpd-plan-decision", data },
+          verified: true,
+          reply: true,
+        });
+      },
       dialogs,
       held,
     });
