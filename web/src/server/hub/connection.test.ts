@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { ServerMessage } from "../../protocol/wire.ts";
 import { WebError } from "../../protocol/domain.ts";
+import { createDedupStore } from "./dedup.ts";
 import { createHubConnection, type HubDeps } from "./connection.ts";
 
 type Handle = Awaited<ReturnType<HubDeps["backends"]["pi"]["attach"]>>;
@@ -46,7 +47,7 @@ class FakeBackend {
 
 const refOf = (id: string, runner: "pi" | "durable") => ({ id, key: id, runner, role: "worker", state: "idle", title: null });
 
-const setup = (opts: { ready?: Promise<void> } = {}) => {
+const setup = (opts: { ready?: Promise<void>; dedup?: HubDeps["dedup"] } = {}) => {
   const sent: ServerMessage[] = [];
   const listeners: Listener[] = [];
   let subscriptions = 0;
@@ -82,7 +83,7 @@ const setup = (opts: { ready?: Promise<void> } = {}) => {
   };
   const pi = new FakeBackend();
   const durable = new FakeBackend();
-  const hub = createHubConnection({ cockpit, registry, backends: { pi, durable } as unknown as HubDeps["backends"], send: (m) => sent.push(m) });
+  const hub = createHubConnection({ ...(opts.dedup === undefined ? {} : { dedup: opts.dedup }), cockpit, registry, backends: { pi, durable } as unknown as HubDeps["backends"], send: (m) => sent.push(m) });
   return {
     hub, sent, pi, durable, listeners, selected, actions,
     setSnapshot: (s: typeof snap) => { snap = s; },
@@ -95,6 +96,18 @@ const setup = (opts: { ready?: Promise<void> } = {}) => {
 const sessionMsg = (type: string, extra: Record<string, unknown> = {}) => ({ type, sessionId: "pi-1", ...extra });
 
 describe("hub connection", () => {
+  it("a repeated actionId replays the stored result without running the action again", async () => {
+    const t = setup();
+    const msg = { type: "cockpit.action", actionId: "dup", action: { kind: "inbox.dismiss", itemId: 4 } };
+    await t.hub.handle(msg);
+    await t.hub.handle(msg);
+    expect(t.actions).toHaveLength(1);
+    expect(t.sent.filter((m) => m.type === "action.result")).toEqual([
+      { type: "action.result", actionId: "dup", ok: true, output: { stdout: "ok" } },
+      { type: "action.result", actionId: "dup", ok: true, output: { stdout: "ok" } },
+    ]);
+  });
+
   it("invalid client messages are rejected with a typed error", async () => {
     const t = setup();
     await t.hub.handle("not an object");
@@ -261,7 +274,7 @@ describe("hub connection", () => {
     handle.failWith = new Error("disk full");
     await t.hub.handle(sessionMsg("dialog.respond", { dialogId: "call:q1", response }));
     expect(t.sent).toMatchObject([
-      { type: "session.error", sessionId: "pi-1", error: { code: "internal", message: "disk full" } },
+      { type: "session.error", sessionId: "pi-1", clientSubmissionId: "call:q1", error: { code: "internal", message: "disk full" } },
     ]);
     handle.failWith = null;
     await t.hub.handle(sessionMsg("dialog.respond", { dialogId: "call:q1", response }));
@@ -293,6 +306,16 @@ describe("hub connection", () => {
       expect(t.actions).toEqual([{ kind: "plan.archive", planId: "p1" }, { kind: "plan.archive", planId: "p1" }]);
       expect(handle.calls.filter(([n]) => n === "submit")).toEqual([]);
       expect(t.sent.filter((m) => m.type === "session.error")).toEqual([]);
+    });
+
+    it("a successful /q is acknowledged, and a replay is acknowledged again without archiving twice", async () => {
+      const t = setup();
+      await attachTo(t, "lead-1");
+      await submit(t, "lead-1", "c1", "/q");
+      await submit(t, "lead-1", "c1", "/q");
+      expect(t.actions).toEqual([{ kind: "plan.archive", planId: "p1" }]);
+      const ack = { type: "session.submitAck", sessionId: "lead-1", clientSubmissionId: "c1", queued: false };
+      expect(t.sent).toEqual([ack, ack]);
     });
 
     it("a refused archive of /q is reported and never submits to the model", async () => {
@@ -413,4 +436,54 @@ it("a closing hub ignores new work while backend disposal waits", async () => {
   release();
   await closing;
   expect(t.selected).toEqual([]);
+});
+
+it("replays session acknowledgements across connections without repeating the operation", async () => {
+  let saved: string | undefined;
+  const storage = { read: () => saved, write: (s: string) => { saved = s; } };
+  const first = setup({ dedup: createDedupStore({ storage, cap: 10 }) });
+  await first.hub.handle({ type: "session.attach", sessionId: "pi-1" });
+  const attached = first.pi.attaches[0]!;
+  const submit = { type: "session.submit", sessionId: "pi-1", clientSubmissionId: "persisted", text: "hello", images: [], whenBusy: "followUp" };
+  attached.handle.submit = async () => { attached.emit({ type: "session.submitAck", sessionId: "pi-1", clientSubmissionId: "persisted", queued: true, submissionId: 42 }); };
+  await first.hub.handle(submit);
+  attached.handle.respond = async () => { attached.emit({ type: "session.dialogResolved", sessionId: "pi-1", dialogId: "dialog", outcome: "answered" }); };
+  const dialog = { type: "dialog.respond", sessionId: "pi-1", dialogId: "dialog", response: { method: "cpd_plan_review", outcome: "approve" } };
+  await first.hub.handle(dialog);
+  const second = setup({ dedup: createDedupStore({ storage, cap: 10 }) });
+  await second.hub.handle({ type: "session.attach", sessionId: "pi-1" });
+  await second.hub.handle(submit);
+  await second.hub.handle(dialog);
+  expect(second.pi.attaches[0]!.handle.calls).toEqual([]);
+  expect(second.sent).toContainEqual({ type: "session.submitAck", sessionId: "pi-1", clientSubmissionId: "persisted", queued: true, submissionId: 42 });
+  expect(second.sent).toContainEqual({ type: "session.dialogResolved", sessionId: "pi-1", dialogId: "dialog", outcome: "answered" });
+});
+
+it("a failed cockpit action can be retried with the same ID", async () => {
+  const t = setup();
+  let fail = true;
+  t.setActionResult(async () => { if (fail) throw new Error("temporary failure"); return { stdout: "done" }; });
+  const action = { type: "cockpit.action", actionId: "retry", action: { kind: "inbox.dismiss", itemId: 4 } };
+  await t.hub.handle(action);
+  fail = false;
+  await t.hub.handle(action);
+  expect(t.actions).toHaveLength(2);
+  expect(t.sent.at(-1)).toMatchObject({ type: "action.result", actionId: "retry", ok: true });
+});
+
+it("a completed action stays deduplicated when persistence fails", async () => {
+  let fail = true;
+  const dedup = createDedupStore({ cap: 10, storage: {
+    read: () => undefined,
+    write: () => { if (fail) { fail = false; throw new Error("disk full"); } },
+  } });
+  const t = setup({ dedup });
+  const action = { type: "cockpit.action", actionId: "disk-full", action: { kind: "inbox.dismiss", itemId: 4 } };
+  await t.hub.handle(action);
+  await t.hub.handle(action);
+  expect(t.actions).toHaveLength(1);
+  expect(t.sent.filter((m) => m.type === "action.result")).toEqual([
+    expect.objectContaining({ actionId: "disk-full", ok: true }),
+    expect.objectContaining({ actionId: "disk-full", ok: true }),
+  ]);
 });
