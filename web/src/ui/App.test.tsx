@@ -202,3 +202,17 @@ describe("App", () => {
     expect(ta!.disabled).toBe(true);
   });
 });
+
+
+it("places an outage banner in a separate layout row before pane controls", () => {
+  const { transport, container } = start();
+  act(() => transport.emitMessage({ ...snapshot, inbox: { ...snapshot.inbox, engineRunning: false } }));
+  const banner = container.querySelector('[data-part="engine-banner-row"]');
+  const shell = container.querySelector('[data-shell]');
+  expect(banner).not.toBeNull();
+  expect(banner?.parentElement).toBe(shell?.parentElement);
+  expect(banner?.className).not.toContain("fixed");
+  expect(banner?.compareDocumentPosition(shell!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  act(() => transport.emitMessage(snapshot));
+  expect(container.querySelector('[data-part="engine-banner-row"]')).toBeNull();
+});
