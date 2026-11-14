@@ -396,7 +396,12 @@ fn decide(
     // Only the chain may need the merged open Job: what was named by hand is checked alone.
     check_needs_available(&all, plan, &wanted.needs)?;
     if !draft {
-        check_test_job_required(&all, plan, &job)?;
+        if !workflows
+            .iter()
+            .any(|w| w.key.as_str() == job.workflow_str() && w.shape == "refactor")
+        {
+            check_test_job_required(&all, plan, &job)?;
+        }
         check_needs_not_draft(&all, plan, &job)?;
         job.fingerprint = Some(locked_fingerprint(&job));
     }

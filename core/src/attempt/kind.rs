@@ -9,16 +9,36 @@ use serde_json::{Value, json};
 use super::Env;
 use crate::config::RepoTests;
 use crate::error::{CpdError, ErrorCode};
-use crate::git::hooks::{Log, run_command};
+use crate::git::hooks::{Log, command_variables, render_template, run_command};
 use crate::git::{self, HookOutcome, Operation};
 use crate::ids::{AttemptId, PlanId};
 use crate::job::guard;
 use crate::plan::jobs::{self, Job};
 use crate::policy::Policy;
 
-/// Whether the Job's kind has the checks of this module.
-pub(super) fn has_checks(job: &Job) -> bool {
-    matches!(job.kind.as_str(), "test" | "impl")
+/// Whether the Job is a `work` Job of a coverage Workflow: it names no test, and must leave the suite building and passing.
+fn coverage_work(env: &mut Env, plan: &PlanId, job: &Job) -> Result<bool, CpdError> {
+    let (true, Some(workflow)) = (job.kind == "work", &job.workflow) else {
+        return Ok(false);
+    };
+    env.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND shape = 'coverage')",
+            [plan.as_str(), workflow.as_str()],
+            |r| r.get::<_, bool>(0),
+        )?)
+    })
+}
+
+/// Whether the Job has the checks of this module: a `test` or `impl` Job, or a `work` Job of a coverage Workflow when the policy has `[test-commands]`.
+pub(super) fn has_checks(
+    env: &mut Env,
+    plan: &PlanId,
+    job: &Job,
+    policy: &Policy,
+) -> Result<bool, CpdError> {
+    Ok(matches!(job.kind.as_str(), "test" | "impl")
+        || (policy.test_commands.is_some() && coverage_work(env, plan, job)?))
 }
 
 /// The Job as stored now, with its siblings: `test_approved` is read when a check runs, so an approval reaches an Attempt that is running.
@@ -118,6 +138,8 @@ struct Ran {
     outcome: HookOutcome,
     tail: Option<String>,
     log: String,
+    /// stdout alone of the command.
+    stdout: String,
 }
 
 /// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then the
@@ -137,7 +159,15 @@ pub(super) fn check(
 ) -> Result<(), CpdError> {
     let (all, job) = fresh(env, plan, &job.key)?;
     let tests = if job.kind == "impl" {
-        guard::of(&all, &job).tests
+        let own = guard::of(&all, &job);
+        // A refactor Workflow has no `test` Job: its `impl` Job runs the tests of the coverage Workflow it stands on.
+        match (&job.workflow, own.jobs.is_empty()) {
+            (Some(workflow), true) => env
+                .store
+                .read(|conn| crate::workflow::base_coverage_tests(conn, plan, workflow))?
+                .unwrap_or(own.tests),
+            _ => own.tests,
+        }
     } else {
         guard::own(&job).0
     };
@@ -163,7 +193,15 @@ pub(super) fn check(
     let Some(commands) = policy.test_commands.clone() else {
         return Err(unconfigured(&job.key));
     };
-    if tests.is_empty() {
+    let refactor_impl = job.kind == "impl"
+        && match &job.workflow {
+            Some(workflow) => env
+                .store
+                .read(|conn| crate::workflow::base_coverage_tests(conn, plan, workflow))?
+                .is_some(),
+            None => false,
+        };
+    if tests.is_empty() && !refactor_impl && job.kind != "work" {
         // An `impl` Job's tests are its `test` Jobs': with none, `run` would be told no test and might run them all (hs-d338).
         return Err(CpdError::new(
             ErrorCode::TestJobRequired,
@@ -175,7 +213,12 @@ pub(super) fn check(
         .with("job", job.key.as_str())
         .with("jobs", json!(Vec::<String>::new())));
     }
-    run_tests(env, plan, id, &job, &tests, &commands, root, lead)
+    let changed = if job.kind == "impl" && commands.related.is_some() {
+        git::tamper::changed_paths(root, diff_base, sha)?
+    } else {
+        Vec::new()
+    };
+    run_tests(env, plan, id, &job, &tests, &changed, &commands, root, lead)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -185,6 +228,7 @@ fn run_tests(
     id: &AttemptId,
     job: &Job,
     tests: &[String],
+    changed: &[String],
     commands: &RepoTests,
     root: &Path,
     lead: &str,
@@ -207,6 +251,7 @@ fn run_tests(
             Ok(Ran {
                 outcome: result.outcome,
                 tail: result.tail,
+                stdout: result.stdout,
                 log: if wrote {
                     log.display().to_string()
                 } else {
@@ -249,6 +294,60 @@ fn run_tests(
         ));
     }
 
+    // related (an `impl` Job): the tests of the changed files join the named ones, before `list` checks the union; a discovery failure is the Gate's.
+    let all = if job.kind == "impl" {
+        let context = command_variables(root, &operation)?;
+        let mut diagnostics = (None, String::new(), None);
+        gate_tests(
+            commands.related.as_deref(),
+            changed,
+            tests,
+            &context,
+            &mut |command| {
+                let raw = format!("{{% raw %}}{command}{{% endraw %}}");
+                match go("related", &raw, &[], Log::Truncate) {
+                    Ok(ran) => {
+                        diagnostics.0 = ran.tail;
+                        diagnostics.1 = ran.log;
+                        let exit = match ran.outcome {
+                            HookOutcome::Passed => 0,
+                            HookOutcome::Failed { exit, .. } => exit,
+                            HookOutcome::Error(why) => {
+                                diagnostics.2 = Some(why.to_string());
+                                -1
+                            }
+                        };
+                        RelatedRun {
+                            exit,
+                            stdout: ran.stdout,
+                        }
+                    }
+                    Err(e) => {
+                        diagnostics.2 = Some(e.to_string());
+                        RelatedRun {
+                            exit: -1,
+                            stdout: String::new(),
+                        }
+                    }
+                }
+            },
+        )
+        .map_err(|e| {
+            e.with("job", job.key.as_str())
+                .with("tail", diagnostics.0)
+                .with(
+                    "log",
+                    if diagnostics.1.is_empty() {
+                        Value::Null
+                    } else {
+                        json!(diagnostics.1)
+                    },
+                )
+                .with("reason", diagnostics.2)
+        })?
+    } else {
+        tests.to_vec()
+    };
     // list, once per named test: non-zero means no test has that name.
     if let Some(list) = &commands.list {
         let log = log_of("list");
@@ -269,9 +368,9 @@ fn run_tests(
             })?;
         let mut unknown = Vec::new();
         let mut last = None;
-        for name in tests {
+        for name in all.as_slice() {
             let ran = go("list", list, &[("test", json!(name))], Log::Append)?;
-            if let Some(e) = error("list", &ran, tests) {
+            if let Some(e) = error("list", &ran, &all) {
                 return Err(e);
             }
             if matches!(ran.outcome, HookOutcome::Failed { .. }) {
@@ -284,17 +383,31 @@ fn run_tests(
                 .ok()
                 .map(|t| git::tail(&t, git::TAIL_LINES));
             let ran = Ran { tail, ..ran };
+            let (named, found) = split_unknown(tests, &unknown);
+            if named.is_empty() {
+                return Err(refuse(
+                    ErrorCode::GateRelatedFailed,
+                    format!(
+                        "The repo's [test-commands] `related` printed a name that no test has: {}; the repo's `list` said so (details.log).",
+                        found.join(", ")
+                    ),
+                    &ran,
+                    &all,
+                ));
+            }
             return Err(refuse(
                 ErrorCode::TestsNotFound,
                 format!(
                     "No test has the name: {}. Fix the name or the test, commit, and submit again; the repo's `list` said so (details.log).",
-                    unknown.join(", ")
+                    named.join(", ")
                 ),
                 &ran,
-                &unknown,
+                &named,
             ));
         }
     }
+
+    let tests = all.as_slice();
 
     // run: a `test` Job's named tests must fail, an `impl` Job's must pass.
     let run = go(
@@ -313,7 +426,7 @@ fn run_tests(
             &run,
             tests,
         )),
-        ("impl", HookOutcome::Failed { exit, .. }) => Err(refuse(
+        ("impl" | "work", HookOutcome::Failed { exit, .. }) => Err(refuse(
             ErrorCode::TestsFailed,
             format!("The named tests still fail (exit {exit}): fix the code, not the tests, commit, and submit again; the tail is in details.tail."),
             &run,
@@ -321,4 +434,59 @@ fn run_tests(
         )),
         _ => Ok(()),
     }
+}
+
+/// The names `list` rejected, as (the Job's named tests, the ones `related` found): a named one is `tests_not_found`,
+/// one only `related` found is `gate_related_failed`.
+pub(crate) fn split_unknown(named: &[String], unknown: &[String]) -> (Vec<String>, Vec<String>) {
+    unknown.iter().cloned().partition(|n| named.contains(n))
+}
+
+/// What the repo's `related` command ended as.
+pub(crate) struct RelatedRun {
+    pub exit: i32,
+    /// What the command printed to stdout: a JSON array of test names.
+    pub stdout: String,
+}
+
+/// The tests the Gate runs: the changed tests, unioned with what `related` (the `[test-commands]` key, with `{{ files }}`
+/// the changed files, and the hook's other variables from `context`) prints as a JSON array on stdout; a non-zero exit or output that is not that array is `gate_related_failed`. No `related` is the changed tests alone.
+pub(crate) fn gate_tests(
+    related: Option<&str>,
+    changed_files: &[String],
+    changed_tests: &[String],
+    context: &serde_json::Map<String, Value>,
+    run: &mut dyn FnMut(&str) -> RelatedRun,
+) -> Result<Vec<String>, CpdError> {
+    let mut tests = changed_tests.to_vec();
+    let Some(template) = related else {
+        return Ok(tests);
+    };
+    let failed = |message: String| CpdError::new(ErrorCode::GateRelatedFailed, message);
+    // The hook's variables, and `files`: the changed files, which a list renders shell-escaped and space-joined.
+    let mut vars = context.clone();
+    vars.insert("files".to_owned(), json!(changed_files));
+    let command = render_template(template, &vars).map_err(|e| {
+        failed(format!(
+            "The repo's [test-commands] `related` cannot run: {e}"
+        ))
+    })?;
+    let ran = run(&command);
+    if ran.exit != 0 {
+        return Err(failed(format!(
+            "The repo's [test-commands] `related` failed (exit {}): `{command}`.",
+            ran.exit
+        )));
+    }
+    let found: Vec<String> = serde_json::from_str(ran.stdout.trim()).map_err(|e| {
+        failed(format!(
+            "The repo's [test-commands] `related` must print a JSON array of test names, as [\"a\", \"b\"]: {e}."
+        ))
+    })?;
+    for name in found {
+        if !tests.contains(&name) {
+            tests.push(name);
+        }
+    }
+    Ok(tests)
 }

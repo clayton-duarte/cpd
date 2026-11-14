@@ -6,7 +6,9 @@ use serde_json::json;
 
 use super::open::{agent, hold_refused};
 use super::row::PlanWorkflows;
-use super::{Args, Env, gate, hide_untracked, illegal_phase, require_clean_lead, workflow_policy};
+use super::{
+    Args, Env, gate_measured, hide_untracked, illegal_phase, require_clean_lead, workflow_policy,
+};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
 use crate::output::Output;
@@ -43,11 +45,24 @@ fn push_held(args: Args) -> Result<Output, CpdError> {
         std::path::Path::new(&workflow.repo),
         &format!("refs/heads/{branch}"),
     )?;
+    env.store.read(|conn| {
+        crate::workflow::guard_refactor_tests_allowing(
+            conn,
+            &id,
+            key.as_str(),
+            std::path::Path::new(&workflow.repo),
+            &workflow.base,
+            &sha,
+            &[workflow.base.as_str()],
+        )
+    })?;
+    // Measured here, once per push: the local Gate below does not measure it again.
+    super::coverage_gate(&env, &policy, &id, workflow, &sha)?;
     if policy.gate.workflow == Gate::Local {
         require_clean_lead(&lead, &id, workflow)?;
         git::sync_lead(&lead, &branch)?;
         let hidden = hide_untracked(&lead)?;
-        let gated = gate(
+        let gated = gate_measured(
             &env,
             &policy,
             &id,
@@ -75,7 +90,12 @@ fn push_held(args: Args) -> Result<Output, CpdError> {
         require_pushable(&plan, &args)?;
         super::rebase::refuse_running_conn(tx, &id, &key, "do the push")?;
 
-        let to_push = match crate::merge::reconcile(&lead, &branch, &remote_branch, &sha)? {
+        let to_push = match crate::merge::reconcile(&lead, &branch, &remote_branch, &sha, &mut |_, candidate| {
+            crate::workflow::guard_refactor_tests_allowing(
+                tx, &id, key.as_str(), std::path::Path::new(&workflow.repo),
+                &workflow.base, candidate, &[workflow.base.as_str()],
+            )
+        })? {
             crate::merge::Reconciled::Push(to_push) => to_push,
             crate::merge::Reconciled::Contained(remote) => return Ok((false, remote)),
             crate::merge::Reconciled::Conflict { remote, files } => {

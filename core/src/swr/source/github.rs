@@ -153,7 +153,7 @@ impl GithubSource {
                         pr.authored = 1 OR EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pr.id AND w.status = 'open'),
                         pr.review_requested = 1,
                         d.hydrated_at, d.head_oid IS pr.head_oid AND d.updated_at IS pr.gh_updated_at, d.repo IS NOT NULL,
-                        pr.checks = 'failed', pr.labels_json, pr.created_at
+                        pr.checks IN ('failed', 'pending'), pr.labels_json, pr.created_at
                  FROM pull_requests pr LEFT JOIN swr_pr_detail d ON d.repo = pr.repo AND d.number = pr.number
                  WHERE pr.state = 'open' AND pr.archived = 0 ORDER BY pr.id",
             )?;
@@ -336,15 +336,55 @@ impl GithubSource {
         if endpoint::get(cx.store, "github")?.is_some_and(|row| endpoint::is_paused(&row, now)) {
             return no_effects(cx.store, now);
         }
-        let plan = self.plan(cx, now)?;
+        let mut plan = self.plan(cx, now)?;
         let poll_started_at = now;
-        let read = swr_read::poll_once(
-            &*cx.ports.runner,
-            cx.home.root(),
-            &plan,
-            &cx.config.inbox.bot_reviewers,
-            &|repo| self.excused_for(cx.home, repo),
-        );
+        let poll = |plan: &PollPlan| {
+            swr_read::poll_once(
+                &*cx.ports.runner,
+                cx.home.root(),
+                plan,
+                &cx.config.inbox.bot_reviewers,
+                &|repo| self.excused_for(cx.home, repo),
+            )
+        };
+        let mut read = poll(&plan);
+        // b77: one document carries the searches and every heavy/absent/meta alias, so one alias GitHub cannot answer (an
+        // empty or cut body) failed the whole pass and left every row stale. The searches alone (the Light rows: rollup,
+        // head, `updatedAt`) are read again, committed, and the first failure is still the endpoint's.
+        let mut first_failure: Option<CpdError> = None;
+        if let Err(e) = &read {
+            let rate_limited = e
+                .details()
+                .get("rate_limited")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !rate_limited
+                && !(plan.heavy.is_empty() && plan.absent.is_empty() && plan.meta.is_empty())
+            {
+                let light = PollPlan {
+                    authored_after: plan.authored_after.clone(),
+                    reviews_after: plan.reviews_after.clone(),
+                    heavy: Vec::new(),
+                    absent: Vec::new(),
+                    meta: Vec::new(),
+                };
+                match poll(&light) {
+                    Ok(light_read) => {
+                        first_failure = read.err();
+                        read = Ok(light_read);
+                        plan = light;
+                    }
+                    // A rate-limited retry is the endpoint's rate limit; any other retry failure keeps the original error.
+                    Err(retry)
+                        if retry.details().get("rate_limited").and_then(Value::as_bool)
+                            == Some(true) =>
+                    {
+                        read = Err(retry);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
         let read = match read {
             Ok(read) => read,
             Err(e) => return self.failed(cx, now, e),
@@ -382,15 +422,19 @@ impl GithubSource {
         }
         // A successful read is not enough: deploys and every commit step must succeed too.
         match self.commit(cx, &plan, read, now, poll_started_at) {
-            Ok(effects) => {
-                endpoint::record_ok(cx.store, "github", now)?;
-                SEARCH_PAGES
-                    .lock()
-                    .expect("search pages")
-                    .get_or_insert_with(HashMap::new)
-                    .insert(store, next);
-                Ok(effects)
-            }
+            Ok(effects) => match first_failure {
+                // The rows are fresh, but the document that failed is not forgotten: ok stays unrecorded.
+                Some(e) => self.failed(cx, now, e),
+                None => {
+                    endpoint::record_ok(cx.store, "github", now)?;
+                    SEARCH_PAGES
+                        .lock()
+                        .expect("search pages")
+                        .get_or_insert_with(HashMap::new)
+                        .insert(store, next);
+                    Ok(effects)
+                }
+            },
             Err(e) => self.failed(cx, now, e),
         }
     }
@@ -609,10 +653,11 @@ impl GithubSource {
                 .ok()
                 .and_then(|j| serde_json::from_str(&j).ok()))
             })?;
+            let excused = self.excused_for(cx.home, repo)?;
             if let Some(detail) = &stored {
-                let excused = self.excused_for(cx.home, repo)?;
                 swr_read::excuse_from_detail(node, detail, &excused);
             }
+            swr_read::hold_unknown_failure(node, stored.as_ref(), &excused);
             let node = &*node;
             let stored_hash: Option<String> = cx.store.read(|c| {
                 Ok(c.query_row(

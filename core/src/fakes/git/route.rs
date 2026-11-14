@@ -1119,21 +1119,35 @@ fn diff(c: &mut Ctx, args: &[String]) -> Run {
     let toks = scan(
         "diff",
         args,
-        &["--quiet", "--name-only", "--no-renames", "-z", "--cached"],
+        &[
+            "--quiet",
+            "--name-only",
+            "--name-status",
+            "--no-renames",
+            "-M",
+            "-z",
+            "--cached",
+        ],
         &["--diff-filter="],
     )?;
     let flags = flags(&toks);
     let mut only_unmerged = false;
+    let mut only_renamed = false;
     for flag in &flags {
         match flag.strip_prefix("--diff-filter=") {
             Some("U") => only_unmerged = true,
+            Some("R") => only_renamed = true,
             Some(_) => return Err(format!("diff {flag}")),
             None => {}
         }
     }
     let quiet = flags.contains(&"--quiet");
-    if !quiet && !flags.contains(&"--name-only") {
-        return Err("diff (without --name-only or --quiet)".to_owned());
+    let status = flags.contains(&"--name-status");
+    if only_renamed && !(status && flags.contains(&"-M")) {
+        return Err("diff --diff-filter=R (without -M --name-status)".to_owned());
+    }
+    if !quiet && !flags.contains(&"--name-only") && !status {
+        return Err("diff (without --name-only, --name-status or --quiet)".to_owned());
     }
     let pos = positionals(&toks);
     let wt = match c.worktree() {
@@ -1141,6 +1155,7 @@ fn diff(c: &mut Ctx, args: &[String]) -> Run {
         Err(out) => return Ok(out),
     };
     let index = c.u.effective_index(&wt);
+    let mut renames: Option<(BTreeMap<String, Oid>, BTreeMap<String, Oid>)> = None;
     let names: BTreeSet<String> = if only_unmerged {
         unmerged(&index).into_keys().collect()
     } else if flags.contains(&"--cached") {
@@ -1216,7 +1231,10 @@ fn diff(c: &mut Ctx, args: &[String]) -> Run {
                         .into_iter()
                         .collect()
                 };
-                changed_between(&tree(&from), &tree(&b))
+                let (from, to) = (tree(&from), tree(&b));
+                let names = changed_between(&from, &to);
+                renames = Some((from, to));
+                names
             }
             [spec] => match c.tree_of(spec) {
                 Ok(tree) => work_against(c.u, &wt, &tree),
@@ -1232,6 +1250,22 @@ fn diff(c: &mut Ctx, args: &[String]) -> Run {
     };
     if quiet {
         return Ok(Out::silent(if names.is_empty() { 0 } else { 1 }));
+    }
+    if only_renamed {
+        let Some((from, to)) = renames else {
+            return Err("diff --diff-filter=R (without a revision range)".to_owned());
+        };
+        // Exact renames only: a removed path whose blob reappears at an added path.
+        let mut added: Vec<(&String, &Oid)> =
+            to.iter().filter(|(p, _)| !from.contains_key(*p)).collect();
+        let mut out = String::new();
+        for (old, blob) in from.iter().filter(|(p, _)| !to.contains_key(*p)) {
+            if let Some(i) = added.iter().position(|(_, b)| *b == blob) {
+                let (new, _) = added.remove(i);
+                out.push_str(&format!("R100\0{old}\0{new}\0"));
+            }
+        }
+        return Ok(Out::ok(out));
     }
     let end = if flags.contains(&"-z") { '\0' } else { '\n' };
     Ok(Out::ok(

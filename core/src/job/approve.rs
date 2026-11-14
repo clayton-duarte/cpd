@@ -89,6 +89,19 @@ fn decide(
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?.clone();
+    if let Some(workflow) = &job.workflow {
+        let refactor: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND shape = 'refactor')",
+            [plan.as_str(), workflow.as_str()],
+            |row| row.get(0),
+        )?;
+        if refactor {
+            return Err(CpdError::new(
+                ErrorCode::TestChangeForbidden,
+                "Tests cannot be approved for a refactor; amend the coverage workflow instead.",
+            ));
+        }
+    }
     if job.kind != "impl" {
         return Err(CpdError::new(
             ErrorCode::NotAnImplJob,

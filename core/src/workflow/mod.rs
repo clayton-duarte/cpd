@@ -168,3 +168,301 @@ pub fn run_workflow(command: WorkflowCommand) -> Result<Output, CpdError> {
         WorkflowCommand::Prereq(cmd) => prereq::run(cmd),
     }
 }
+
+/// The named tests an `impl` Job of a refactor Workflow runs when its Workflow has no `test` Job: those of the `test`
+/// Jobs of the coverage Workflow it stands on (the one whose Lead Branch is its base, or a merged one of the repo).
+/// `None` when the Job's Workflow is not a refactor; `Some` (possibly empty: the repo's whole suite) when it is.
+pub(crate) fn base_coverage_tests(
+    conn: &rusqlite::Connection,
+    plan: &crate::ids::PlanId,
+    workflow: &str,
+) -> Result<Option<Vec<String>>, CpdError> {
+    use rusqlite::OptionalExtension;
+    let Some((repo, base)): Option<(String, String)> = conn
+        .query_row(
+            "SELECT repo, base FROM workflows WHERE plan = ?1 AND key = ?2 AND shape = 'refactor'",
+            [plan.as_str(), workflow],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let mut keys = conn.prepare(
+        "SELECT key FROM workflows WHERE plan = ?1 AND shape = 'coverage' AND repo = ?2 AND (lead_branch = ?3 OR status = 'merged')",
+    )?;
+    let coverage: Vec<String> = keys
+        .query_map(rusqlite::params![plan.as_str(), repo, base], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut tests: Vec<String> = Vec::new();
+    for job in crate::plan::jobs::load(conn, plan)? {
+        if job.kind != "test"
+            || job.status == "cancelled"
+            || !job.workflow.as_ref().is_some_and(|w| coverage.contains(w))
+        {
+            continue;
+        }
+        for name in crate::job::guard::own(&job).0 {
+            if !tests.contains(&name) {
+                tests.push(name);
+            }
+        }
+    }
+    Ok(Some(tests))
+}
+
+/// The `paths` that do not exist in the tree of `head`: deleted, or renamed away.
+pub(crate) fn absent_paths(
+    root: &std::path::Path,
+    head: &str,
+    paths: &[String],
+) -> Result<Vec<String>, CpdError> {
+    let out = crate::git::run::run(root, &["ls-tree", "-r", "--name-only", "-z", head])?;
+    if out.code != 0 {
+        return Err(CpdError::new(
+            crate::error::ErrorCode::GitFailed,
+            format!("Could not list the files of {head}."),
+        ));
+    }
+    let present: std::collections::HashSet<&str> = out.stdout.split('\0').collect();
+    Ok(paths
+        .iter()
+        .filter(|p| !present.contains(p.as_str()))
+        .cloned()
+        .collect())
+}
+
+/// The `(old, new)` path pairs `base...head` renames (`git diff -M --diff-filter=R --name-status -z`).
+pub(crate) fn renamed_paths(
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<(String, String)>, CpdError> {
+    let range = format!("{base}...{head}");
+    let out = crate::git::run::run(
+        root,
+        &[
+            "diff",
+            "-M",
+            "--diff-filter=R",
+            "--name-status",
+            "-z",
+            &range,
+        ],
+    )?;
+    if out.code != 0 {
+        return Err(CpdError::new(
+            crate::error::ErrorCode::GitFailed,
+            format!("Could not list the renames of {range}: {}", out.stderr),
+        ));
+    }
+    // Entries are `R<score>\0old\0new\0`.
+    let mut fields = out.stdout.split('\0').filter(|f| !f.is_empty());
+    let mut pairs = Vec::new();
+    while let Some(status) = fields.next() {
+        if let (true, Some(old), Some(new)) =
+            (status.starts_with('R'), fields.next(), fields.next())
+        {
+            pairs.push((old.to_owned(), new.to_owned()));
+        }
+    }
+    Ok(pairs)
+}
+
+/// Enforce test immutability on refactor diffs, including declared test-file globs.
+pub(crate) fn guard_refactor_tests(
+    conn: &rusqlite::Connection,
+    plan: &crate::ids::PlanId,
+    workflow: &str,
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+) -> Result<(), CpdError> {
+    guard_refactor_tests_allowing(conn, plan, workflow, root, base, head, &[])
+}
+
+/// [`guard_refactor_tests`], except the test changes `head` inherits unchanged from a ref of `allowed` (the Workflow's base,
+/// whose amended coverage tests a base merge or a rebase brings in): those are not the refactor's own.
+pub(crate) fn guard_refactor_tests_allowing(
+    conn: &rusqlite::Connection,
+    plan: &crate::ids::PlanId,
+    workflow: &str,
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+    allowed: &[&str],
+) -> Result<(), CpdError> {
+    let shape: String = conn.query_row(
+        "SELECT shape FROM workflows WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), workflow],
+        |row| row.get(0),
+    )?;
+    if shape != "refactor" {
+        return Ok(());
+    }
+    let repo: String = conn.query_row(
+        "SELECT repo FROM workflows WHERE plan = ?1 AND key = ?2",
+        [plan.as_str(), workflow],
+        |row| row.get(0),
+    )?;
+    // Declared test paths bind this repository only: another repo's Workflow may name the same glob for its own files.
+    let mut in_repo = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND repo = ?2")?;
+    let in_repo: Vec<String> = in_repo
+        .query_map(rusqlite::params![plan.as_str(), repo], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    let jobs = crate::plan::jobs::load(conn, plan)?;
+    let patterns: Vec<&str> = jobs
+        .iter()
+        .filter(|j| j.workflow.as_ref().is_some_and(|w| in_repo.contains(w)))
+        .filter_map(|j| j.test_files.as_ref())
+        .filter_map(|v| v.as_array())
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .collect();
+    let paths: Vec<_> = crate::git::tamper::written_paths(root, base, head, allowed)?
+        .into_iter()
+        .filter(|p| {
+            p.ends_with("_test.rs")
+                || p.ends_with(".test.ts")
+                || p.split('/').any(|part| part == "tests")
+                || patterns
+                    .iter()
+                    .any(|pattern| crate::git::tamper::touches_matches(pattern, p))
+        })
+        .collect();
+    if !paths.is_empty() {
+        return Err(crate::error::CpdError::new(
+            crate::error::ErrorCode::TestChangeForbidden,
+            format!("Refactor workflows cannot change test files: {}. Amend the coverage workflow instead.", paths.join(", ")),
+        ).with("paths", serde_json::json!(paths)));
+    }
+    Ok(())
+}
+
+/// Run a configured coverage command at an immutable commit in a temporary worktree.
+pub(crate) fn measure_coverage(
+    repo: &std::path::Path,
+    plan: &crate::ids::PlanId,
+    key: &WorkflowKey,
+    commit: &str,
+    command: &str,
+) -> Result<CoverageReport, CpdError> {
+    use crate::error::ErrorCode;
+    // Do not collide with an enclosing `pr rebase` worktree for this workflow.
+    let scratch_key = WorkflowKey::parse(if key.as_str() == "cpd-coverage" {
+        "cpd-coverage-2"
+    } else {
+        "cpd-coverage"
+    })
+    .map_err(|e| CpdError::bad_row(e.to_string()))?;
+    let worktree = crate::git::RebaseWorktree::add(repo, plan, &scratch_key, commit)?;
+    let call = crate::host::runner::Call {
+        tool: "coverage".into(),
+        program: "sh".into(),
+        args: vec!["-c".into(), command.into()],
+        envs: vec![],
+        cwd: Some(worktree.path().to_path_buf()),
+        deadline: std::time::Duration::from_secs(3600),
+        stdin: None,
+        stderr_to: None,
+    };
+    let output = crate::ports::Ports::current().runner.run(&call);
+    worktree.remove()?;
+    let output = output.map_err(|e| {
+        CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            format!("Coverage measurement failed: {e:?}"),
+        )
+    })?;
+    if !output.status.success() {
+        return Err(CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            "Coverage measurement failed.",
+        ));
+    }
+    let report: CoverageReport = serde_json::from_slice(&output.stdout).map_err(|e| {
+        CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            format!("Invalid coverage report: {e}"),
+        )
+    })?;
+    report.validate()?;
+    Ok(report)
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct CoverageReport {
+    line: f64,
+    branch: f64,
+    files: Option<std::collections::BTreeMap<String, CoverageMetrics>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct CoverageMetrics {
+    line: f64,
+    branch: f64,
+}
+
+impl CoverageReport {
+    fn validate(&self) -> Result<(), CpdError> {
+        let valid = |line: f64, branch: f64| {
+            line.is_finite() && branch.is_finite() && line >= 0.0 && branch >= 0.0
+        };
+        if !valid(self.line, self.branch)
+            || self
+                .files
+                .as_ref()
+                .is_some_and(|files| files.values().any(|v| !valid(v.line, v.branch)))
+        {
+            return Err(CpdError::new(
+                crate::error::ErrorCode::CoverageBelowBaseline,
+                "Invalid coverage values.",
+            ));
+        }
+        Ok(())
+    }
+    /// `renamed`: `(old, new)` pairs; the new path must keep the old path's baseline, and the aggregate must hold.
+    /// `removed`: the paths `touched` that no longer exist (deleted or renamed away): their coverage left with them, it did not go missing.
+    pub(crate) fn check(
+        &self,
+        current: &Self,
+        touched: &[String],
+        removed: &[String],
+        renamed: &[(String, String)],
+    ) -> Result<(), CpdError> {
+        let below = if let Some(base_files) = &self.files {
+            let current_files = current.files.as_ref().ok_or_else(|| {
+                CpdError::new(
+                    crate::error::ErrorCode::CoverageBelowBaseline,
+                    "Coverage report omitted per-file data.",
+                )
+            })?;
+            let lowered = |base: &CoverageMetrics, now: &CoverageMetrics| {
+                now.line < base.line || now.branch < base.branch
+            };
+            let renamed_below = renamed.iter().any(|(old, new)| {
+                base_files
+                    .get(old)
+                    .is_some_and(|base| current_files.get(new).is_none_or(|now| lowered(base, now)))
+            }) || (!renamed.is_empty()
+                && (current.line < self.line || current.branch < self.branch));
+            renamed_below
+                || touched.iter().any(|path| {
+                    match (base_files.get(path), current_files.get(path)) {
+                        (Some(base), Some(now)) => lowered(base, now),
+                        (Some(_), None) => !removed.contains(path),
+                        _ => false,
+                    }
+                })
+        } else {
+            current.line < self.line || current.branch < self.branch
+        };
+        if below {
+            return Err(CpdError::new(
+                crate::error::ErrorCode::CoverageBelowBaseline,
+                "Refactor coverage is below the baseline.",
+            ));
+        }
+        Ok(())
+    }
+}
