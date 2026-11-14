@@ -38,6 +38,14 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   const subscribers = new Set<() => void>();
   let connection: ConnectionState = "connecting";
   let loaded = false;
+  let persistent = true;
+  // The entries map remains usable when browser storage is denied, full, or later unavailable.
+  const persist = async (write: () => Promise<void>): Promise<void> => {
+    if (!persistent) return;
+    try { await write(); } catch { persistent = false; }
+  };
+  const put = (entry: OutboxEntry) => persist(() => deps.storage.put(entry));
+  const remove = (id: string) => persist(() => deps.storage.remove(id));
   let active = false;
   let running: Promise<void> = Promise.resolve();
   let snapshot: OutboxEntry[] | null = null;
@@ -54,9 +62,13 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     loaded = true;
     notify();
   };
-  const initial = deps.storage.load();
-  const ready: Promise<void> = Array.isArray(initial) ? Promise.resolve() : initial.then(merge);
-  if (Array.isArray(initial)) merge(initial);
+  const ready = (() => {
+    try {
+      const initial = deps.storage.load();
+      if (Array.isArray(initial)) { merge(initial); return Promise.resolve(); }
+      return initial.then(merge, () => { persistent = false; merge([]); });
+    } catch { persistent = false; merge([]); return Promise.resolve(); }
+  })();
 
   const sorted = (): OutboxEntry[] =>
     [...entries.values()].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
@@ -66,7 +78,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     entry.state = "sending";
     delete entry.error;
     notify();
-    const stored = deps.storage.put({ ...entry });
+    const stored = put({ ...entry });
     let result: SendResult;
     try {
       result = await deps.send({ ...entry });
@@ -75,7 +87,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       if (entries.has(entry.id)) {
         entry.state = "queued";
         notify();
-        await deps.storage.put({ ...entry });
+        await put({ ...entry });
       }
       return;
     }
@@ -84,12 +96,12 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     if (result.ok) {
       entries.delete(entry.id);
       notify();
-      await deps.storage.remove(entry.id);
+      await remove(entry.id);
     } else {
       entry.state = "failed";
       entry.error = result.error;
       notify();
-      await deps.storage.put({ ...entry });
+      await put({ ...entry });
     }
   }
 
@@ -124,7 +136,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       const entry: OutboxEntry = { ...input, state: "queued", createdAt: input.createdAt ?? deps.now() };
       entries.set(entry.id, entry);
       notify();
-      const stored = deps.storage.put({ ...entry });
+      const stored = put({ ...entry });
       return Promise.all([stored, flush()]).then(() => undefined);
     },
     flush,
@@ -139,7 +151,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     async discard(id) {
       entries.delete(id);
       notify();
-      await deps.storage.remove(id);
+      await remove(id);
     },
     async retry(id) {
       const entry = entries.get(id);
@@ -147,7 +159,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       entry.state = "queued";
       delete entry.error;
       notify();
-      await deps.storage.put({ ...entry });
+      await put({ ...entry });
       await flush();
     },
     subscribe(fn) {
@@ -159,7 +171,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
 
 /** Browser/runtime pieces an id needs; injected so tests use no real crypto or time. */
 export interface IdEnv {
-  crypto?: { randomUUID?: () => string; getRandomValues?: <T extends ArrayBufferView>(a: T) => T } | undefined;
+  crypto?: { randomUUID?: () => string; getRandomValues?: (a: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer> } | undefined;
   now: () => number;
   random: () => number;
 }
