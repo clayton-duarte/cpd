@@ -718,6 +718,22 @@
     },
     "required": []
   },
+  "job approve-test-removal": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--reason": true,
+      "--test": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--reason",
+      "--test"
+    ]
+  },
   "job approve-tests": {
     "flags": {
       "--help": false,

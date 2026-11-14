@@ -211,7 +211,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `shape_violation`, `shape_incomplete` | 3 | the Workflow's stored shape (§9.4, contract §2.2 "Job kinds", hs-d497): `job add` or `job edit --kind` gave a kind the shape does not allow (`details` `{workflow, shape, kind, allowed}`; for an `open` Workflow `{plan, workflow, status: "open", shape, kind, allowed: ["work"]}`, whatever the shape); a `tdd` Workflow has no `test` or no `impl` Job that is not `cancelled`, at `plan review`, `plan lock` or `job cancel` typed by the Lead (`details` `{workflow, missing}`); **`workflow cancel` and `plan cancel` never refuse it**: cancelling a Workflow or a Plan is never refused by the shape check (§5.3, §9.6, §4.12, hs-d573) |
 | `draft_parked` | 3 | a draft that contract §2.2 "A parked draft" calls illegal would be written after the lock (pro-d404): `job add --draft` or `job edit` (§5.1, §5.2) of a draft whose Workflow waits for another Workflow, or whose needs chain, through drafts, to a queued, running or failed Job; or `workflow add` (§9.4) after the lock with no `--jobs`, for a Workflow that is not adopted, waiting or not. `details` `{plan, job, workflow, needs}` (`{plan, workflow, jobs}` for `workflow add`, `jobs` the template's Job keys). The message names the legal forms |
 | `tests_error` | 1 | a `test` or `impl` Job's submit: the repo's `[test-commands]` commands could not run (killed at `gate_minutes`, killed by a signal, `sh` not startable, `hook_invalid`; `list` included); the Worker asks the Lead. `details` as above |
-| `tests_removed` | 3 | a `test` or `impl` Job's submit (§6.1) removed an existing test case or lowered its assertion count, relative to the base, unless the Lead approved it (§5.9b); `details` `{job, tests}` where `tests` lists the changed test names; the approval is recorded in an Event and visible to the User |
+| `tests_removed` | 3 | a Job's submit (§6.1) removed an existing test case or lowered its assertion count in a test file it wrote, relative to the base (tests are matched by scoped identity: Rust module path, JS describe suite), unless the Lead approved it (§5.9b); `details` `{job, path, tests}` where `tests` lists the changed test identities; the approval is recorded in an Event and visible to the User |
 | `tests_tampered` | 3 | an `impl` Job's submit (§6.1) changed a path the `test_files` of a `test` Job it needs guard and the Lead has not approved (§5.9); `details.paths`, `details.jobs` |
 | `touches_violation` | 3 | a Job's submit (§6.1) changed a path outside its Spec `touches` (§7.5), unless the repo's `[generated] paths` (§8.3), a base merge, or the Lead approved it (§5.9a); `details.paths`, `details.touches`, `details.generated` |
 | `lead_branch_moved` | 3 | a merge detail, not a code any command returns: the merge of an `open` or `update` Job (contract §7.4 step 5) found the Lead Branch's tip not in HEAD and ends the Attempt `failed` / `merge_conflict` with the detail `lead_branch_moved: <message>` (a ladder cause: the next Attempt starts from the newer tip). Still declared, so it stays in this table; submit never refuses with it |
@@ -268,7 +268,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd job approve-touches` (§5.9a) | Lead | no | no |
-| `cpd job approve-test-removal` (§5.9b) | Lead | no | no |
+| `cpd job approve-test-removal` (§5.9c) | Lead | no | no |
 | `cpd job addendum` (§5.10) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd plan check` (§4.16) | Manager, Lead | no | no |
@@ -2221,18 +2221,18 @@ Effects: **rows**, one transaction: `jobs.touches_approved` becomes the union of
 
 Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
 
-### 5.9b `job approve-test-removal`
+### 5.9c `job approve-test-removal`
 
 ```
 cpd job approve-test-removal <job> --test <name> [--test <name> …] --reason <text> [--plan <id>]
 ```
 
-The Lead's approval for a `test` or `impl` Job to remove an existing test case or lower its assertion count (b70; contract §2.2 "Job kinds", §7.5). A test Job's submit is refused `tests_removed` (§6.1) when it removes a test case or lowers its assertion count from the base. A Worker that must remove or weaken a test asks the Lead (`cpd ask`); the Lead decides and, to allow it, runs this. **The Lead only**, through `CPD_ATTEMPT` (hs-d497): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). That is all the check there is: the command is **unauthenticated, like `cpd answer`** (a Worker that unsets the variable gets through) and the approval is visible afterwards in the `job-edited` Event (`fields: ["test_removal_approved"]`, with the `--reason`). The Lead's reason is recorded in the Event and visible to the User.
+The Lead's approval for a Job to remove an existing test case or lower its assertion count (b70; contract §2.2 "Job kinds", §7.5). A Job's submit is refused `tests_removed` (§6.1) when it removes a test case or lowers its assertion count from the base. A Worker that must remove or weaken a test asks the Lead (`cpd ask`); the Lead decides and, to allow it, runs this. **The Lead only**, through `CPD_ATTEMPT` (hs-d497): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). That is all the check there is: the command is **unauthenticated, like `cpd answer`** (a Worker that unsets the variable gets through) and the approval is visible afterwards in the `job-edited` Event (`fields: ["test_removal_approved"]`, with the `--reason`). The Lead's reason is recorded in the Event and visible to the User.
 
 | Flag | Meaning |
 |---|---|
-| `<job>` | the `test` or `impl` Job |
-| `--test <name>` | repeated: a test case name that the check (§7.5) refuses (removed or weakened) |
+| `<job>` | the Job, of any kind that runs the check |
+| `--test <name>` | repeated: a test case that the check (§7.5) refuses (removed or weakened): its bare name, or its scoped identity (`mod::name`, `suite > name`) |
 | `--reason <text>` | why (§1.5); recorded in the Event's `text` and visible to the User |
 | `--plan <id>` | the Plan (§1.3) |
 
@@ -2240,7 +2240,6 @@ The Lead's approval for a `test` or `impl` Job to remove an existing test case o
 |---|---|---|
 | `CPD_ATTEMPT` is not set | `not_a_lead` | 3 |
 | the Job exists | `job_not_found` | 4 |
-| its kind is `test` or `impl` | `illegal_transition` | 3 |
 | its status is `queued`, `running` or `failed` | `illegal_transition` | 3 |
 
 Effects: **rows**, one transaction: `jobs.test_removal_approved` becomes the union of its old value and the test names. **Event** `job-edited` `{fields: ["test_removal_approved"]}`, its `text` naming the tests and the reason, recorded and visible to the User. It takes effect at the Job's next check, a running Attempt's included (contract §7.7). `test_removal_approved` is not a Locked field and is in no fingerprint (§2.3). And, when the Plan's working Lead runs it, it names the Workflow as the Lead's Workflow (§1.3).

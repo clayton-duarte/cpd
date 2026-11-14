@@ -14,6 +14,9 @@
 #[cfg(test)]
 #[path = "approve_touches_tests.rs"]
 mod approve_touches_tests;
+#[cfg(test)]
+#[path = "test_removal_approve_tests.rs"]
+mod test_removal_approve_tests;
 
 #[cfg(test)]
 mod docs_forbidden_tests;
@@ -23,6 +26,7 @@ mod incident_tests;
 pub(crate) mod add;
 mod addendum;
 pub(crate) mod approve;
+pub use approve::approved_test_removals;
 mod approve_touches;
 pub(crate) mod cancel;
 mod chain;
@@ -85,6 +89,8 @@ pub enum Command {
     ApproveTests(ApproveArgs),
     /// The Lead approves a Job to change a path outside its touches (§5.9a)
     ApproveTouches(ApproveTouchesArgs),
+    /// The Lead approves a Job to remove or weaken existing tests (§5.9c)
+    ApproveTestRemoval(ApproveTestRemovalArgs),
     /// The Lead waives a declared touch that has no diff (§5.9b)
     ApproveUntouched(ApproveTouchesArgs),
     /// Add information to a Job without changing its Spec (§5.10)
@@ -259,6 +265,21 @@ pub struct ApproveArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ApproveTestRemovalArgs {
+    /// The Job
+    #[arg(value_name = "job")]
+    key: JobKey,
+    /// A test case name the removed-tests check refuses: its bare name or its scoped identity (repeatable)
+    #[arg(long = "test", value_name = "name", required = true)]
+    tests: Vec<String>,
+    /// Why
+    #[arg(long, value_name = "text")]
+    reason: Text,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ApproveTouchesArgs {
     /// The Job
     #[arg(value_name = "job")]
@@ -319,6 +340,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Urgent(args) => urgent::urgent(args),
         Command::ApproveTests(args) => approve::approve(args),
         Command::ApproveTouches(args) => approve_touches::approve(args),
+        Command::ApproveTestRemoval(args) => approve::approve_test_removal(args),
         Command::ApproveUntouched(args) => approve::approve_untouched(args),
         Command::Addendum(args) => addendum::addendum(args),
         Command::Dispatch(args) => driver::dispatch(args),

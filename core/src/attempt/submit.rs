@@ -338,14 +338,15 @@ fn run_checks(
         .with("touches", json!(touches))
         .with("generated", json!(policy.generated.paths)));
     }
+    // The written files (§7.3), once for the b69 and the b70 check.
+    let written = written(root, branch, &lead, &base_refs, base, sha)?;
     // Every declared touch needs a diff (b69), unless the Lead waived it; `open`, `update` and explore Jobs are exempt.
     if !check.skipped() {
-        let changed = written(root, branch, &lead, &base_refs, base, sha)?;
         let mut unchanged: Vec<String> = Vec::new();
         for entry in &touches {
             if !waived.contains(entry)
                 && !unchanged.contains(entry)
-                && !changed
+                && !written
                     .iter()
                     .any(|p| git::tamper::touches_matches(entry, p))
             {
@@ -364,6 +365,8 @@ fn run_checks(
             .with("touches", json!(touches)));
         }
     }
+    // The test files the Attempt wrote keep their test cases and assertions (b70), unless the Lead approved the removal.
+    kind::tests_kept(env, plan, key, root, base, sha, &written)?;
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
@@ -371,7 +374,7 @@ fn run_checks(
     if kind::has_checks(env, plan, job, &policy)? {
         kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
     }
-    written(root, branch, &lead, &base_refs, base, sha)
+    Ok(written)
 }
 
 /// The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's

@@ -567,6 +567,7 @@ pub(crate) fn setup_mac_pro_drifted_store(env: &impl HasCpdHome) {
            touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),
            waiting_on          TEXT CHECK (waiting_on IS NULL OR waiting_on IN ('lead', 'user') OR waiting_on LIKE 'explore:%'),
            touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),
+          test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),
            UNIQUE (plan, key),
            FOREIGN KEY (plan, workflow) REFERENCES \"workflows\"(plan, key),
            CHECK (status <> 'draft' OR fingerprint IS NULL),
@@ -954,9 +955,10 @@ fn repair_leaves_pending_waiver_migration_to_add_its_column() {
     let h = home(&env);
     setup_mac_pro_drifted_store(&env);
     let conn = Connection::open(h.db()).unwrap();
-    conn.execute_batch("ALTER TABLE jobs DROP COLUMN touches_waived;
+    conn.execute_batch("ALTER TABLE jobs DROP COLUMN test_removal_approved;
+        ALTER TABLE jobs DROP COLUMN touches_waived;
         DROP TRIGGER schema_migrations_no_delete;
-        DELETE FROM schema_migrations WHERE name = '20261113T0804-job-touches-waived';
+        DELETE FROM schema_migrations WHERE name IN ('20261113T0804-job-touches-waived', '20261113T0805-job-test-removal-approved');
         CREATE TRIGGER schema_migrations_no_delete BEFORE DELETE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;").unwrap();
     drop(conn);
     let result = repair(
