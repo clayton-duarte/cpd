@@ -452,3 +452,248 @@ mod tests {
         common::refused(&run, "base_coverage_required", 3);
     }
 }
+
+/// Job-merge publication of a refactor: a reconciled (diverged-remote) commit is validated before it is pushed.
+mod reconciled_publication {
+    use super::TESTS_TABLE;
+    use crate::common::fx::Fx;
+    use cpd_core::config::{Catalog, Config, TierModel};
+    use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+    use cpd_core::home::CpdHome;
+    use cpd_core::ids::{AttemptId, PlanId};
+    use cpd_core::merge::{self, Attempt, Ctx, End};
+    use cpd_core::store::Store;
+    use serde_json::{Value, json};
+    use std::path::Path;
+    use std::time::Duration;
+
+    const BASELINE: &str = r#"{"line": 90.0, "branch": 80.0}"#;
+
+    fn metrics(_: &Attempt) -> Option<Value> {
+        Some(json!({"turns": 7}))
+    }
+
+    struct Rig {
+        fx: Fx,
+        home: CpdHome,
+        config: Config,
+        catalog: Catalog,
+        repo: std::path::PathBuf,
+        origin: std::path::PathBuf,
+    }
+
+    /// A refactor Workflow `repo` (lead branch `cpd/pay`) pushed to a bare `origin`, with an `update` Attempt in `merging`
+    /// that wrote `resolved.txt`, and the remote branch advanced by someone else writing `remote_path`.
+    fn rig(measure: bool, remote_path: &str) -> (Rig, AttemptId) {
+        let fx = Fx::with_ports();
+        let repo = fx.git_repo("pay").canonicalize().unwrap();
+        let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+        std::fs::write(
+            home.config(),
+            format!(
+                "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n",
+                fx.env.tmux_socket()
+            ),
+        )
+        .unwrap();
+        let config = Config::load(&home).unwrap();
+        let model = |m: &str| TierModel {
+            model: m.to_owned(),
+            efforts: vec![0, 1, 2, 3, 4, 5],
+        };
+        let catalog = Catalog {
+            j: TierModel {
+                model: String::new(),
+                efforts: Vec::new(),
+            },
+            pi_version: "1.2.0".to_owned(),
+            o: model("p/opus"),
+            s: model("p/sonnet"),
+            h: model("p/haiku"),
+            g: model("p/gemini"),
+        };
+        let origin = fx.env.root().join("origins").join("pay.git");
+        fx.git(
+            fx.env.root(),
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        fx.github_origin(&repo);
+        fx.local_origin(&repo, &origin);
+        fx.git(&repo, &["push", "-q", "origin", "main"]);
+        let rig = Rig {
+            fx,
+            home,
+            config,
+            catalog,
+            repo,
+            origin,
+        };
+        let policy = if measure {
+            format!("{TESTS_TABLE}\n[coverage-commands]\nmeasure = \"mock-coverage\"\n")
+        } else {
+            String::new()
+        };
+        rig.fx.env.repo_policy("acme", "repo", &policy);
+        let plan = PlanId::parse("pay").unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: rig.fx.env.root().join("lead.log"),
+        };
+        let lead = rig
+            .fx
+            .scoped(|| create_lead_worktree(&rig.repo, &plan, "main", &setup))
+            .unwrap()
+            .path;
+        let base = rig.fx.git(&rig.repo, &["rev-parse", "main"]);
+        let attempt = AttemptId::parse("up-repo-a1").unwrap();
+        let made = rig
+            .fx
+            .scoped(|| create_attempt_worktree(&rig.repo, &lead, &plan, &attempt, &setup))
+            .unwrap();
+        std::fs::write(made.path.join("resolved.txt"), "resolved\n").unwrap();
+        rig.fx.git(&made.path, &["add", "-A"]);
+        rig.fx.git(&made.path, &["commit", "-q", "-m", "resolve"]);
+        let sha = rig.fx.git(&made.path, &["rev-parse", "HEAD"]);
+        rig.store()
+            .write("fixture", |tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                       VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+                     INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at, shape)
+                       VALUES ('pay', 'repo', '{repo}', 'repo', 'main', 'dispatch', 'cpd/pay', '{lead}', 'Refactor', 'd', cpd_txn(), 't', 't', 'refactor');
+                     INSERT INTO refactor_coverage_baselines (plan, workflow, base_sha, report)
+                       VALUES ('pay', 'repo', '{base}', '{BASELINE}');
+                     INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, kind, fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'repo', 'up-repo', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 1, 'update', '{fp}', cpd_txn(), 't');
+                     INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, submitted_sha, submitted_at, started_at, driver_pid)
+                       VALUES ('pay', 'up-repo-a1', 'up-repo', 1, 'S2', 'ladder', 'merging', '{branch}', '{wt}', '{attempt_base}', '{sha}', 't', 't', 4242);",
+                    repo = rig.repo.display(),
+                    lead = lead.display(),
+                    fp = "f".repeat(64),
+                    branch = made.branch,
+                    wt = made.path.display(),
+                    attempt_base = made.base_sha,
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+        // Publish the Lead Branch, then someone else advances the remote.
+        rig.fx
+            .git(&lead, &["push", "-q", "-u", "origin", "cpd/pay"]);
+        let clone = rig.fx.env.root().join("clone");
+        rig.fx.git(
+            rig.fx.env.root(),
+            &[
+                "clone",
+                "-q",
+                rig.origin.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        rig.fx.git(&clone, &["config", "user.name", "someone"]);
+        rig.fx
+            .git(&clone, &["config", "user.email", "someone@cpd.invalid"]);
+        rig.fx.git(&clone, &["checkout", "-q", "cpd/pay"]);
+        if let Some(dir) = Path::new(remote_path).parent() {
+            std::fs::create_dir_all(clone.join(dir)).unwrap();
+        }
+        std::fs::write(clone.join(remote_path), "remote\n").unwrap();
+        rig.fx.git(&clone, &["add", "-A"]);
+        rig.fx.git(&clone, &["commit", "-q", "-m", "remote"]);
+        rig.fx.git(&clone, &["push", "-q", "origin", "cpd/pay"]);
+        (rig, attempt)
+    }
+
+    impl Rig {
+        fn store(&self) -> Store {
+            Store::open(&self.home, 5000).unwrap()
+        }
+
+        fn remote_sha(&self) -> String {
+            self.fx
+                .git(&self.origin, &["rev-parse", "refs/heads/cpd/pay"])
+        }
+
+        fn merge(&self, attempt: &AttemptId) -> End {
+            let ctx = Ctx {
+                home: &self.home,
+                config: &self.config,
+                catalog: &self.catalog,
+                source: "attempt run",
+                metrics: &metrics,
+                classifier: cpd_core::merge::no_verdict_classifier(),
+            };
+            self.fx
+                .scoped(|| {
+                    merge::merge(
+                        &mut self.store(),
+                        &ctx,
+                        &PlanId::parse("pay").unwrap(),
+                        attempt,
+                    )
+                })
+                .unwrap()
+                .end
+        }
+    }
+
+    /// A remote commit that edits a test file makes the reconciled commit change tests: nothing is pushed.
+    #[test]
+    fn reconciled_commit_with_test_edits_is_refused() {
+        let (rig, attempt) = rig(false, "tests/remote.rs");
+        let moved = rig.remote_sha();
+
+        let End::Failed { detail, .. } = rig.merge(&attempt) else {
+            panic!("the merge must fail its push")
+        };
+
+        assert!(detail.contains("cannot change test files"), "{detail}");
+        assert_eq!(
+            rig.remote_sha(),
+            moved,
+            "the reconciled commit was not pushed"
+        );
+    }
+
+    /// A reconciled commit that measures below the baseline is not pushed.
+    #[test]
+    fn reconciled_commit_with_lower_coverage_is_refused() {
+        let (rig, attempt) = rig(true, "src/remote.rs");
+        let moved = rig.remote_sha();
+        let runner = (*rig.fx.fakes.runner).clone();
+        use cpd_core::host::runner::Reply;
+        let _ = runner
+            .once(
+                "sh",
+                |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                Reply::ok(BASELINE),
+            )
+            .once(
+                "sh",
+                |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                Reply::ok(r#"{"line": 50.0, "branch": 40.0}"#),
+            );
+
+        let End::Failed { detail, .. } = rig.merge(&attempt) else {
+            panic!("the merge must fail its push")
+        };
+
+        assert!(detail.contains("push_failed"), "{detail}");
+        assert_eq!(
+            rig.remote_sha(),
+            moved,
+            "the reconciled commit was not pushed"
+        );
+    }
+}
