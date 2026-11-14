@@ -249,8 +249,8 @@ pub(crate) fn list_in(env: &mut Env, args: ListArgs) -> Result<Output, CpdError>
         (None, None)
     } else {
         (
-            model::engine_down_since(home)?,
-            model::engine_restart_reason(home)?,
+            model::engine_down_since(home).ok().flatten(),
+            model::engine_restart_reason(home).ok().flatten(),
         )
     };
     if !running && !manager && !args.closed && args.context.is_none() {
@@ -951,6 +951,18 @@ mod tests {
             fields["engine"],
             json!({"running": false, "down_since": "2026-01-01T12:34:56Z", "restart_reason": "install"})
         );
+        std::fs::write(env.home.run_dir().join("cpd-install.json"), "{").unwrap();
+        let Output::Success(fields) = list_in(&mut env, args()).unwrap() else {
+            panic!("success")
+        };
+        assert_eq!(fields["engine"]["restart_reason"], Value::Null);
+        std::fs::remove_file(model::engine_stop_stamp(&env.home)).unwrap();
+        std::fs::create_dir(model::engine_stop_stamp(&env.home)).unwrap();
+        let Output::Success(fields) = list_in(&mut env, args()).unwrap() else {
+            panic!("success")
+        };
+        assert_eq!(fields["engine"]["down_since"], Value::Null);
+        assert_eq!(fields["engine"]["running"], false);
         std::fs::create_dir_all(env.home.watch_lock().parent().unwrap()).unwrap();
         let lock = std::fs::File::create(env.home.watch_lock()).unwrap();
         assert!(crate::lock::try_lock(&lock).unwrap());
