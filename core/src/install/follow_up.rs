@@ -10,6 +10,7 @@ use std::time::Duration;
 use super::Install;
 use crate::home::CpdHome;
 use crate::host::runner::NO_DEADLINE;
+use crate::host::spawn::{Pid, Signal};
 use crate::host::tmux;
 use crate::ports::Ports;
 
@@ -17,6 +18,8 @@ use crate::ports::Ports;
 const TMUX_DEADLINE: Duration = Duration::from_secs(10);
 /// The step of that wait.
 const LOCK_STEP: Duration = Duration::from_millis(250);
+/// The longest the install waits for the prepared WebUI to listen, and the step of that wait.
+const WEBUI_READY_WAIT: Duration = Duration::from_secs(120);
 
 /// What a finished call left: its exit (`-1` when it did not start), stdout and stderr.
 struct Done {
@@ -185,12 +188,90 @@ impl FollowUps<'_> {
         }
     }
 
+    /// The pid the old WebUI recorded in `run/webui.pid`, if any.
+    fn old_webui_pid(&self) -> Option<Pid> {
+        let text =
+            std::fs::read_to_string(self.install.cpd_home.run_dir().join("webui.pid")).ok()?;
+        text.trim().parse().ok().map(Pid)
+    }
+
+    /// `cpd webui --prepare`: starts the new WebUI beside the old one; its pid. A failure is reported and the old
+    /// WebUI is left to the new engine's own supervision.
+    fn prepare_webui(&mut self) -> Result<Option<Pid>, ()> {
+        let prepared = self.cpd(&["webui", "--prepare"]);
+        // A successful prepare that says nothing has no WebUI to hand over: the engine supervises it as before.
+        if prepared.ok() && prepared.stdout.trim().is_empty() {
+            return Ok(None);
+        }
+        let reply = prepared
+            .ok()
+            .then(|| serde_json::from_str::<serde_json::Value>(&prepared.stdout).ok())
+            .flatten();
+        let pid = reply
+            .as_ref()
+            .and_then(|v| v.get("pid")?.as_u64())
+            .and_then(|p| u32::try_from(p).ok());
+        // A valid `{"ok":true}` reply naming no prepared instance has nothing to hand over either.
+        let nothing_to_hand_over = reply.as_ref().is_some_and(|v| {
+            v.get("ok").and_then(serde_json::Value::as_bool) == Some(true) && v.get("pid").is_none()
+        });
+        match pid {
+            Some(pid) => Ok(Some(Pid(pid))),
+            None if nothing_to_hand_over => Ok(None),
+            None => {
+                self.fail(format!(
+                    "cpd webui --prepare: {} {}; the old WebUI keeps serving",
+                    describe(&prepared.stdout),
+                    prepared.stderr
+                ));
+                Err(())
+            }
+        }
+    }
+
+    /// Waits (on the clock, bounded) for `cpd webui --ready`, then and only then stops the old WebUI.
+    fn hand_off_webui(&mut self, old: Option<Pid>, new: Pid) {
+        let mut waited = Duration::ZERO;
+        loop {
+            let ready = self.cpd(&["webui", "--ready"]);
+            let is_ready = ready.ok()
+                && serde_json::from_str::<serde_json::Value>(&ready.stdout)
+                    .ok()
+                    .and_then(|v| v.get("ready")?.as_bool())
+                    == Some(true);
+            if is_ready {
+                break;
+            }
+            if waited >= WEBUI_READY_WAIT {
+                self.fail(format!(
+                    "install_failed: the new WebUI (pid {}) was not ready after {}s; the old WebUI keeps serving",
+                    new.0,
+                    WEBUI_READY_WAIT.as_secs()
+                ));
+                return;
+            }
+            self.ports.clock.sleep(LOCK_STEP);
+            waited += LOCK_STEP;
+        }
+        if let Some(old) = old.filter(|old| *old != new)
+            && let Err(e) = self.ports.spawn.signal(old, Signal::Term)
+        {
+            self.fail(format!("cannot stop the old WebUI (pid {}): {e}", old.0));
+        }
+    }
+
     /// Retires the old engine and starts the new one.
     fn restart_engine(&mut self, conf: &TmuxConf) {
         let _ = writeln!(
             self.err,
             "restarting the running engine (cpd watch) to run the new binary"
         );
+        // Prepare the new WebUI beside the old one, which keeps serving until the hand-off (pro-d592).
+        let old_webui = self.old_webui_pid();
+        let prepared = match self.prepare_webui() {
+            Ok(prepared) => prepared,
+            Err(()) => return,
+        };
         let mark = self.cpd(&["watch", "--mark-restart"]);
         if !mark.ok() {
             self.fail(format!(
@@ -292,6 +373,9 @@ impl FollowUps<'_> {
                     return;
                 }
                 let _ = writeln!(self.err, "{}", ensured.stdout);
+                if let Some(new) = prepared {
+                    self.hand_off_webui(old_webui, new);
+                }
             }
             Err(e) => self.fail(format!("cannot probe {}: {e}", lock.display())),
         }
