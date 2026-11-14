@@ -240,6 +240,15 @@ fn paired_future_context_creation() {
             "fake tmux failure must be reported"
         );
         let manager = f.manager();
+        assert_eq!(
+            f.fakes
+                .runner
+                .calls()
+                .iter()
+                .filter(|call| call.args.iter().any(|arg| arg == "new-window"))
+                .count(),
+            1
+        );
         assert!(f.context(CONTEXT_ARGS).is_err());
         assert_eq!(f.manager(), manager);
         assert_eq!(
