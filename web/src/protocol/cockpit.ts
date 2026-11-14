@@ -109,6 +109,8 @@ export interface InboxRow {
 export interface InboxModel {
   readonly openCount: number; // items.length (the list holds open, visible items only)
   readonly engineRunning: boolean;
+  readonly engineDownSince?: string; // ISO; absent while the engine runs
+  readonly engineRestartReason?: "install"; // absent unless the engine is restarting for an install
   readonly hidden: { readonly claimed: number; readonly dismissed: number; readonly snoozed: number };
   readonly rows: readonly InboxRow[]; // source order (rank order of cpd)
   readonly cursor: number;

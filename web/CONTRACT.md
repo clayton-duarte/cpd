@@ -2946,5 +2946,159 @@ Decision pro-d584: for a review verdict of `changes` or `reject`, the feedback i
 - **`reject` with feedback** (33.6): whether the wire `reject` carries `feedback`, and how the WebUI collects it. Not decided.
 - **Host-held feedback file location** (33.5): whether the relative `feedback-<review>.md` resolves in `cpd`. Unverified.
 
+## 34. PWA shell: service worker, offline cache, engine banner, outbox, dedup, and HTTPS (Plan `pwa-shell`; Job `pwa-docs`)
+
+This section states the contract for the PWA shell: offline behavior, server deduplication, engine status banner, and static asset caching. The sections below describe the wire types, server-side dedup, outbox state machine, banner state machine, and HTTPS provisioning (deferred to pro-d571).
+
+### 34.1 Offline cache and outbox
+
+The WebUI supports an offline outbox for user submissions, scoped to the selected session. The outbox stores submissions in a client-side IndexedDB queue while the WebSocket is closed or reconnecting, replaying them in order when the connection reopens (pro-d568, scope Plan `pwa-shell`). **Implementation is deferred to a later Job** (pro-d571); this section describes the contract only.
+
+**Outbox entries (A4, pro-d591):** Each entry in the client-side IndexedDB outbox store (named `outbox`) holds:
+
+```ts
+export interface OutboxEntry {
+  readonly id: string; // clientSubmissionId, actionId, or dialogId (per kind)
+  readonly kind: "submit" | "action" | "respond"; // composer submit, cockpit action, or dialog response
+  readonly payload: Readonly<Record<string, unknown>>; // submit: {text, images: WireImage[], files: WireFile[], whenBusy}; action: CockpitAction; respond: {dialogId, response: DialogResponse}
+  readonly state: "queued" | "sending" | "failed"; // queued = not sent; sending = in-flight; failed = ack received with error
+  readonly error?: WireError; // set when state is "failed"
+  readonly createdAt: string; // ISO timestamp
+}
+```
+
+**Outbox replay on connect:** When the WebSocket transitions from `closed` or `reconnecting` to `open`, the browser fetches all `state:"queued"` entries in creation order and replays each: `session.submit`, `cockpit.action`, or `dialog.respond` with the stored payload. Session submissions and dialog replies wait until their target is selected and `session.attached` confirms attachment; other sessions remain queued. Entries are moved to `state:"sending"` before each send. On `session.submitAck` or `action.result` or `session.dialogResolved`, the corresponding entry is deleted from the store (success or 4xx error); on `session.error` with a 5xx-like error, the entry stays in `state:"queued"` for the next reconnect. **A `session.error` without a `clientSubmissionId`, `actionId`, or `dialogId` match** does not affect the outbox and is displayed as a cockpit error toast (11.7).
+
+**Scope:** Outbox applies to composer submissions, dialog responses, and cockpit actions of inbox kind (`inbox.*`), PR kind (`pr.*`), session kind (`session.retier`), plan kind (`plan.reject`), context kind (`context.retire`), and engine kind (`engine.start`). Actions `error.report` and `logs.read` / `settings.read` / `settings.save` are not queued.
+
+### 34.2 Server-side deduplication (A4, pro-d591)
+
+The server stores a dedup table of at most **1000 entries**, keyed by submission id (clientSubmissionId, actionId, or dialogId). When a submission, action, or dialog response arrives, the server checks the dedup table. If an entry exists with the same key:
+
+- **submit (`session.submit`):** return the stored `session.submitAck` without re-enqueueing.
+- **action (`cockpit.action`):** return the stored `action.result` without re-running.
+- **respond (`dialog.respond`):** return the stored `session.dialogResolved` without re-processing.
+
+If no entry exists:
+
+1. Process the request (enqueue, run, or respond).
+2. Store the key and the result (ack, action result, or resolved outcome) in the dedup table.
+3. If the table exceeds 1000 entries, evict the oldest entry by `createdAt`.
+
+**Dedup keys are the operation and request id; session operations also include their session id.** A resubmission with the same id but different payload is deduplicated as the same request: the server returns the prior result, ignoring the changed payload. The client is responsible for payload idempotence (same clientSubmissionId must mean same submission).
+
+### 34.3 Server cache headers and service-worker script
+
+Static asset cache headers (A3, pro-d568):
+
+| Path | Cache-Control | Note |
+|---|---|---|
+| `/sw.js` | `no-cache` | Service worker script; browser checks for updates on every load (W3C spec) |
+| `/index.html` | `no-cache` | SPA entry point; must be fresh to reflect new deployments |
+| `/manifest.webmanifest` | `no-cache` | Manifest (installability); must be fresh |
+| `/assets/*` (hashed names) | `public, max-age=31536000, immutable` | Content-addressed; never changes |
+
+**Service-worker script location:** `/sw.js` at the root scope. The WebUI server (`serve.ts`) must serve `/sw.js` with `Content-Type: application/javascript` and no HTTP redirects. The script is served with `no-cache` headers to allow the browser to check for updates on every page load (W3C ServiceWorker spec). The scope of the registration covers the entire origin (`/`).
+
+### 34.4 Engine banner state machine (A3, pro-d568)
+
+The banner displays the top-level connection and engine state, separate from the selected session's state. The banner kind is determined by the first rule that applies (precedence rules, in order):
+
+| Precedence | Condition | Banner kind | Fields |
+|---|---|---|---|
+| 1 | WebSocket not `open` | `reconnecting` | none |
+| 2 | WebSocket not `open` | `server-unreachable` | `since` = last-seen timestamp (ISO) or `engineDownSince` when present |
+| 3 | `InboxModel.engineRunning === false` AND socket is `open` | `engine-down` | `since: engineDownSince` (ISO, from server) |
+| 4 | `InboxModel.engineRunning === false` AND socket is `open` AND `engineRestartReason === "install"` | `engine-restarting` | `reason: "install"`, `since: engineDownSince` (ISO) |
+| 5 | none of the above | none | (no banner) |
+
+**Banner kinds:**
+
+- **`reconnecting`:** WebSocket is `closed` or `reconnecting` (connection lost, actively retrying with exponential backoff). Display: `"Reconnecting…"` or similar, with a spinner.
+- **`server-unreachable`:** WebSocket is `closed` or `reconnecting` AND `since` is set (server was reachable before, now is not). Display: `"Server unreachable"` with `since` timestamp.
+- **`engine-down`:** Engine process is down (detectable when socket is open but `engineRunning === false`). Display: `"Engine down"` with `since` timestamp.
+- **`engine-restarting`:** Engine is down due to restart (`engineRestartReason === "install"` or similar cause). Display: `"Engine restarting from install…"` or similar, with `since` timestamp.
+
+**State inputs (A3, pro-d591, pro-d568):**
+
+- `ConnectionStatus` (store: `state.connection`): `"connecting" | "open" | "reconnecting" | "closed"` (6.2 `store.ts`). Socket is `open` iff `state.connection === "open"`.
+- `InboxModel.engineRunning: boolean` (server-sent, updated with `cockpit.snapshot` or `cockpit.patch` pane `"inbox"`). Wire type: `web/src/protocol/cockpit.ts §5.3`.
+- `InboxModel.engineDownSince?: string` (ISO timestamp, added to `InboxModel`; sent by server when `engineRunning === false`). Deferred to pro-d571 (HTTPS/provisioning detail).
+- `InboxModel.engineRestartReason?: string` (enum: `"install"` or absent; added to `InboxModel`, deferred to pro-d571). Wire type planned; not on the wire yet.
+- `lastSeenTimestamp: string` (client-side, the moment when the socket was last `open`; ISO). Updated whenever `state.connection` transitions to `"open"`.
+
+**Rendering:**
+- The banner is a full-width element above the Shell (zones: Header, Tree, Plan, Chat, Inbox, StatusBar).
+- Precedence rules ensure exactly one banner kind at a time, or none.
+- The banner is hidden (render nothing) when `kind` is `none`.
+
+### 34.5 Outbox state machine (A4, pro-d591)
+
+Outbox entry state transitions:
+
+| From | To | Trigger | Action |
+|---|---|---|---|
+| `queued` | `sending` | User submits (or replay starts) | Send `session.submit`, `cockpit.action`, or `dialog.respond` to server |
+| `sending` | (deleted) | `session.submitAck`, `action.result`, or `session.dialogResolved` arrives (success or 4xx) | Remove from store; update UI (pending submission row removed or marked sent) |
+| `sending` | `queued` | `session.error` or network error (5xx-like) | Move back to `queued` for next replay |
+| `sending` | `failed` | `session.error` with error code set | Mark `state:"failed"`, set `error` field; display to user (optional: inline in chat or as a toast, TBD) |
+| `failed` | (manual) | User clears/retries | Client-side action to retry or remove (TBD); move back to `queued` and replay |
+
+**Submitted while offline** (outbox usage): When `state.connection` is `"closed"` or `"reconnecting"`, a user submission via the Composer, a dialog response, or a cockpit action is not sent immediately. Instead:
+
+1. Create `OutboxEntry` with `state: "queued"`, `createdAt: now()`.
+2. Store in IndexedDB `outbox` store.
+3. Dispatch `submitPending` (or equivalent) to show pending submission in the UI (a dimmed or pending indicator).
+4. Do not send to the server yet.
+
+**Replay on reconnect:** When `state.connection` transitions to `"open"`, fetch all `queued` entries in `createdAt` order:
+
+1. For each entry, change `state` to `sending`.
+2. Send the corresponding message (`session.submit`, `cockpit.action`, or `dialog.respond`).
+3. Wait for the server response (ack or result).
+4. On success (ack with `queued: false` or result with `ok: true`) or client error (`ok: false` with 4xx), delete the entry.
+5. On server error (5xx-like) or network error, move back to `queued` for the next retry.
+
+### 34.6 Exact wire contract for outbox and banner fields (A3, A4, pro-d591, pro-d568)
+
+**New fields on `InboxModel` (wire, server to client, `web/src/protocol/cockpit.ts §5.3`):**
+
+```ts
+export interface InboxModel {
+  readonly openCount: number;
+  readonly engineRunning: boolean;
+  readonly engineDownSince?: string; // ISO timestamp, present only when engineRunning === false; deferred to pro-d571
+  readonly engineRestartReason?: string; // "install" or absent; deferred to pro-d571
+  readonly hidden: { readonly claimed: number; readonly dismissed: number; readonly snoozed: number };
+  readonly rows: readonly InboxRow[];
+  readonly cursor: number;
+}
+```
+
+**Outbox entry types (client-side, IndexedDB store, not on wire):** Defined in 34.1 above. No wire type; stored locally.
+
+**Dedup table (server-side):** Keyed by `clientSubmissionId` (submit), `actionId` (action), or `dialogId` (respond). No explicit wire type; the client detects dedup when the server returns a dedup result with the same `actionId` or `clientSubmissionId`.
+
+### 34.7 Assumptions (pro-d568, pro-d591, A1-A5)
+
+**A1:** PWA code only. LAN HTTPS/mkcert provisioning (certificate generation, device installation, CA profile) is deferred to the end-game (pro-d591, pro-d571). Service workers register only in a secure context (HTTPS or `localhost`); the plain-http LAN origin is not a secure context (res-pwa.md §1), so registration will fail there until HTTPS is provisioned (open item: pro-d571 decides how).
+
+**A2:** The service worker is built into the production build served by `serve.ts` (`:3333`). The `:33333` preview is the Vite dev server and registers no service worker (it still serves the manifest and all assets). The dev server's `/sw.js` is a stub that does nothing (unimplemented).
+
+**A3:** One global banner (engine/connection status), rendering above the Shell. Two inputs: `InboxModel.engineRunning` (bool) and `engineDownSince` (ISO) and `engineRestartReason` (string or absent) from Plan `engine-restart` (pro-n467, pro-d591) while the socket is open; the client's own `lastSeenTimestamp` when the socket is down.
+
+**A4:** Offline queue covers composer submissions (`session.submit`), dialog responses (`dialog.respond`), and cockpit actions (`cockpit.action` of `inbox.*`, `pr.*`, `session.retier`, `plan.reject`, `context.retire`, `engine.start` kinds). Server dedup by id (clientSubmissionId, actionId, dialogId), persisted across server restarts (at most 1000 entries, LRU eviction). Replay order is FIFO by creation time.
+
+**A5:** Electron (global `window.cpdElectron` defined) registers no service worker and shows the same banner and outbox. Electron runs cpd locally via IPC; no offline benefit from a service worker. The banner still displays connection state (for parity with the browser) even though Electron's connection to the local cpd is typically very fast.
+
+### 34.8 Out of scope
+
+The following are decided elsewhere or deferred:
+
+- **Service-worker implementation:** PWA shell defines the contract and wire types only. The SW itself (fetch event handler, cache strategy, offline fallback to `/index.html`) is not written here.
+- **HTTPS provisioning on LAN:** mkcert cert generation, device-specific CA installation, iOS profile and full-trust setup, DNS SAN and IP SAN configuration. Deferred to pro-d571.
+- **Electron IPC bridge:** Electron's preload and main-process setup is outside web/. Electron bridge location is documented in scout-seams.md §7.
+- **IndexedDB implementation and schema:** The outbox store's full implementation (create, schema, indexed columns for ordering) is deferred to pro-d591.
+- **Dedup persistence layer:** The WebUI service owns one shared store persisted atomically in `$CPD_HOME/run/webui-dedup.json`. Successful session entries retain their acknowledgement for replay across connections and restarts. Failed actions are forgotten so a manual retry executes again. Browser request IDs use `crypto.randomUUID()` so a page reload cannot reuse an earlier outbox ID.
 
 Cockpit startup cancellation: stopping before the initial load completes cancels the owned retry timer and prevents further startup reads, snapshot publication, follow processes and safety work. The pending start settles normally; unresolved ready() rejects with reason stopped. An already-issued ReadModel call has no abort interface and may finish, but its late result/error is ignored. Starting a stopped service is a no-op; create a new service for a new lifecycle.

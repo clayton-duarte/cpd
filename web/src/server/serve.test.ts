@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import { describe, expect, it, vi } from 'vitest';
 import * as serveModule from './serve.ts';
 
 describe('preview dev server', () => {
@@ -19,5 +24,43 @@ describe('preview dev server', () => {
     const createPreviewServer = serve.createPreviewServer as (options?: unknown) => Promise<unknown>;
     const server = await createPreviewServer({ port: 33333, host: '0.0.0.0' });
     expect(server).toBeDefined();
+  });
+});
+
+describe('static headers', () => {
+  it('serves /sw.js no-cache from the static dir', async () => {
+    const fake: { request?: (req: IncomingMessage, res: ServerResponse) => void } = {};
+    vi.resetModules();
+    vi.doMock('node:http', () => ({
+      createServer: (handler: typeof fake.request) => {
+        fake.request = handler;
+        return { once() {}, listen(_p: number, _h: string, ready: () => void) { ready(); } };
+      },
+    }));
+    vi.doMock('./plugin.ts', () => ({
+      createServices: () => ({ cockpit: { start: () => Promise.resolve() }, newConnection: vi.fn() }),
+      realBoundaries: vi.fn(), cpdWebPlugin: vi.fn(),
+    }));
+    vi.doMock('./ws.ts', () => ({ createWsServer: vi.fn(), createUpgradeFactory: vi.fn(), WS_PATH: '/cpd-ws' }));
+    const dir = mkdtempSync(join(tmpdir(), 'cpd-static-sw-'));
+    try {
+      writeFileSync(join(dir, 'sw.js'), 'self');
+      const { createProdServer } = await import('./serve.ts');
+      await createProdServer({ staticDir: dir, boundaries: {} as never });
+      let headers: Record<string, string | number> = {};
+      const response = Object.assign(new PassThrough(), {
+        writeHead(_code: number, h: Record<string, string | number>) { headers = h; return this; },
+      });
+      response.resume();
+      const ended = new Promise<void>((resolve) => response.on('end', resolve));
+      fake.request?.({ method: 'GET', url: '/sw.js', headers: { host: 'localhost' } } as IncomingMessage,
+        response as unknown as ServerResponse);
+      await ended;
+      expect(headers['Cache-Control']).toBe('no-cache');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      vi.doUnmock('node:http'); vi.doUnmock('./plugin.ts'); vi.doUnmock('./ws.ts');
+      vi.resetModules();
+    }
   });
 });
