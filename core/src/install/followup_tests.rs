@@ -1271,3 +1271,20 @@ fn failed_webui_prepare_leaves_the_running_engine_untouched() {
             .any(|c| c.args.iter().any(|a| a == "--mark-restart"))
     );
 }
+
+#[test]
+fn an_ok_webui_prepare_naming_no_instance_proceeds_to_the_engine_restart() {
+    let rig = Rig::with(Script {
+        webui_prepare: Some(Reply::ok(r#"{"ok":true}"#)),
+        ..Script::default()
+    });
+    rig.running_old_engine();
+    let out = rig.run();
+    assert!(!out.stderr.contains("webui --prepare"), "{}", out.stderr);
+    let calls = rig.fakes.runner.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "kill-window"))
+    );
+}

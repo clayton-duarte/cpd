@@ -203,15 +203,21 @@ impl FollowUps<'_> {
         if prepared.ok() && prepared.stdout.trim().is_empty() {
             return Ok(None);
         }
-        let pid = prepared.ok().then(|| {
-            serde_json::from_str::<serde_json::Value>(&prepared.stdout)
-                .ok()?
-                .get("pid")?
-                .as_u64()
-                .and_then(|p| u32::try_from(p).ok())
+        let reply = prepared
+            .ok()
+            .then(|| serde_json::from_str::<serde_json::Value>(&prepared.stdout).ok())
+            .flatten();
+        let pid = reply
+            .as_ref()
+            .and_then(|v| v.get("pid")?.as_u64())
+            .and_then(|p| u32::try_from(p).ok());
+        // A valid `{"ok":true}` reply naming no prepared instance has nothing to hand over either.
+        let nothing_to_hand_over = reply.as_ref().is_some_and(|v| {
+            v.get("ok").and_then(serde_json::Value::as_bool) == Some(true) && v.get("pid").is_none()
         });
-        match pid.flatten() {
+        match pid {
             Some(pid) => Ok(Some(Pid(pid))),
+            None if nothing_to_hand_over => Ok(None),
             None => {
                 self.fail(format!(
                     "cpd webui --prepare: {} {}; the old WebUI keeps serving",
