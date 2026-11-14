@@ -45,3 +45,10 @@ describe("parseInboxEngine", () => {
     expect(() => parseInboxEngine({ engineRunning: false, engineDownSince: 5 })).toThrowError(expect.objectContaining({ code: "invalid_message" }));
   });
 });
+
+it("session.resume parses and rejects malformed actions", () => {
+  expect(parseCockpitAction({ kind: "session.resume", sessionId: "s1" })).toEqual({ kind: "session.resume", sessionId: "s1" });
+  for (const action of [{ kind: "session.resume" }, { kind: "session.resume", sessionId: "" }, { kind: "session.resume", sessionId: 3 }]) {
+    expect(() => parseCockpitAction(action)).toThrowError(expect.objectContaining({ code: "invalid_message" }));
+  }
+});

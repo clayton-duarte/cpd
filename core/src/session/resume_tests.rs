@@ -197,74 +197,107 @@ fn resume_keeps_state_stopped_until_the_adapter_reports() {
 }
 
 #[test]
-fn resume_replaces_the_live_wrapper_waiting_for_enter() {
+fn resume_refuses_a_live_tagged_pi_pane_without_killing_or_restarting() {
     let w = world();
-    try_cpd(&w, &["resume", "stopped1"]).unwrap();
-    // pi exited: the wrapper pane stays alive, the Session is stopped.
-    let out = try_cpd(&w, &["resume", "stopped1"]).unwrap();
-    assert_eq!(out["already"], Value::Bool(false), "{out}");
-    assert!(out["pane"].is_string(), "a restarted pane: {out}");
-    assert_eq!(pane_starts(&w).len(), 2, "{:?}", pane_starts(&w));
+    let first = try_cpd(&w, &["resume", "stopped1"]).unwrap();
+    let starts = pane_starts(&w);
+    let err = try_cpd(&w, &["resume", "stopped1"]).expect_err("live pane must be refused");
+    assert_eq!(err.code(), ErrorCode::SessionRunning);
+    assert_eq!(pane_starts(&w), starts);
+    assert!(!tmux_calls(&w).iter().any(|c| c.contains("kill-pane")));
+    let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
     assert!(
-        tmux_calls(&w).iter().any(|c| c.contains("kill-pane")),
-        "the old wrapper pane was killed: {:?}",
-        tmux_calls(&w)
+        tmux.list_panes()
+            .unwrap()
+            .iter()
+            .any(|p| p.pane.as_str() == first["pane"].as_str().unwrap() && !p.dead)
     );
 }
 
 #[test]
-fn resume_refuses_a_durable_session_before_any_side_effect() {
+fn resume_stopped_durable_wakes_without_starting_a_pane() {
     let mut w = world();
     w.store
         .write("fixture", |tx| {
-            Ok(tx.execute_batch("UPDATE sessions SET runner = 'durable' WHERE id = 'stopped1'")?)
+            Ok(tx.execute_batch(
+                "UPDATE sessions SET runner = 'durable', asleep_at = 't' WHERE id = 'stopped1'",
+            )?)
         })
         .unwrap();
-    let err = try_cpd(&w, &["resume", "stopped1"]).expect_err("durable is refused");
-    assert_eq!(err.code(), ErrorCode::DurableSession, "{}", err.message());
-    assert!(pane_starts(&w).is_empty(), "no pane: {:?}", pane_starts(&w));
-    assert_eq!(count(&mut w, "SELECT count(*) FROM events"), 0, "no Event");
+    let out = try_cpd(&w, &["resume", "stopped1"]).unwrap();
+    assert_eq!(out["session"], "stopped1");
+    assert_eq!(out["state"], "stopped");
+    assert_eq!(out["pane"], Value::Null);
+    assert_eq!(
+        count(
+            &mut w,
+            "SELECT count(*) FROM sessions WHERE id = 'stopped1' AND state = 'stopped' AND asleep_at IS NULL AND tmux_pane IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &mut w,
+            "SELECT count(*) FROM events WHERE session = 'stopped1'"
+        ),
+        0
+    );
+    assert!(tmux_calls(&w).is_empty());
+    let again = try_cpd(&w, &["resume", "stopped1"]).unwrap();
+    assert_eq!(again["already"], true);
 }
 
 #[test]
-fn resume_replacing_the_wrapper_in_the_chat_slot_keeps_the_chat_slot() {
-    let w = world();
-    let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
-    let (_, placeholder) = tmux
-        .create_session("cpd", "main", &super::moves::placeholder_spawn())
-        .unwrap()
-        .unwrap();
-    tmux.set_pane_view(&placeholder, crate::host::View::Chat)
-        .unwrap();
-    try_cpd(&w, &["resume", "stopped1"]).unwrap();
-    // The wrapper (pi exited) holds the chat slot: swapped into cpd:main.
-    let wrapper = tmux
-        .list_panes()
-        .unwrap()
-        .into_iter()
-        .find(|p| p.cpd_session.is_some())
-        .unwrap()
-        .pane;
-    tmux.swap_pane(&wrapper, &placeholder).unwrap();
-    let slot =
-        |panes: &[crate::host::Pane]| crate::host::chat_slot(panes, "cpd").map(|p| p.pane.clone());
-    assert_eq!(slot(&tmux.list_panes().unwrap()), Some(wrapper.clone()));
+fn resume_stopped_durable_crash_loop_resets_only_latched_bound() {
+    let mut w = world();
+    for (label, expected, window) in [
+        ("'host crash loop'", 0, "host_window_start IS NULL"),
+        ("NULL", 2, "host_window_start = 'w'"),
+    ] {
+        let sql = format!(
+            "UPDATE sessions SET runner = 'durable', asleep_at = 't', state_label = {label}, host_restarts = 2, host_window_start = 'w' WHERE id = 'stopped1'"
+        );
+        w.store
+            .write("fixture", |tx| Ok(tx.execute_batch(&sql)?))
+            .unwrap();
+        try_cpd(&w, &["resume", "stopped1"]).unwrap();
+        let sql = format!(
+            "SELECT count(*) FROM sessions WHERE id = 'stopped1' AND asleep_at IS NULL AND state_label IS NULL AND host_restarts = {expected} AND {window}"
+        );
+        assert_eq!(count(&mut w, &sql), 1);
+    }
+    assert!(tmux_calls(&w).is_empty());
+}
 
-    try_cpd(&w, &["resume", "stopped1"]).unwrap();
-
-    let panes = tmux.list_panes().unwrap();
-    assert!(
-        slot(&panes).is_some(),
-        "the chat slot still exists: {panes:?}"
-    );
-    assert!(
-        panes.iter().all(|p| p.pane != wrapper),
-        "the old wrapper is gone"
-    );
-    assert!(
-        panes
-            .iter()
-            .any(|p| !p.dead && p.cpd_session.is_some() && Some(&p.pane) != slot(&panes).as_ref()),
-        "the restarted pi runs parked"
-    );
+#[test]
+fn resume_durable_loop_guard_writes_one_scoped_event_and_preserves_trip() {
+    let mut w = world();
+    for asleep in ["NULL", "'t'"] {
+        let sql = format!(
+            "UPDATE sessions SET runner = 'durable', state = 'blocked', state_label = 'φ: loop guard', asleep_at = {asleep}, host_restarts = 2, host_window_start = 'w' WHERE id = 'stopped1'"
+        );
+        w.store
+            .write("fixture", |tx| Ok(tx.execute_batch(&sql)?))
+            .unwrap();
+        let before = count(
+            &mut w,
+            "SELECT count(*) FROM events WHERE kind = 'session-resumed' AND session = 'stopped1' AND context = 'ctx' AND plan = 'spay'",
+        );
+        try_cpd(&w, &["resume", "stopped1"]).unwrap();
+        assert_eq!(
+            count(
+                &mut w,
+                "SELECT count(*) FROM events WHERE kind = 'session-resumed' AND session = 'stopped1' AND context = 'ctx' AND plan = 'spay'"
+            ),
+            before + 1
+        );
+        assert_eq!(
+            count(
+                &mut w,
+                "SELECT count(*) FROM sessions WHERE id = 'stopped1' AND state = 'blocked' AND state_label = 'φ: loop guard' AND asleep_at IS NULL AND host_restarts = 2 AND host_window_start = 'w'"
+            ),
+            1
+        );
+    }
+    assert!(tmux_calls(&w).is_empty());
 }
