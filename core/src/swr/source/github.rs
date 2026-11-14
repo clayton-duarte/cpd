@@ -396,7 +396,7 @@ impl GithubSource {
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
-    /// until its future stored reset plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
+    /// until its future reset (the error's own, else the stored one) plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
     /// pauses its own poll; it is not an error.
     fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
         // A failed read or commit restarts discovery rather than retaining an invalid/incomplete sweep.
@@ -410,11 +410,24 @@ impl GithubSource {
                 .unwrap_or(false)
         };
         if flag("rate_limited") {
-            let until = endpoint::get(cx.store, "github")?
-                .and_then(|row| row.rate_reset_at)
+            // The failing call's own reset (a REST budget) wins over the stored GraphQL one (pro-d588).
+            let own = e
+                .details()
+                .get("reset_at")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|at| {
+                    OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
+                });
+            let until = own
+                .or(endpoint::get(cx.store, "github")?.and_then(|row| row.rate_reset_at))
                 .map(|reset| reset + RATE_GRACE)
                 .filter(|until| *until > now)
                 .unwrap_or(now + RATE_LIMITED_PAUSE);
+            // Never shorten an active pause (e.g. the GraphQL rate-floor one set earlier in this pass).
+            let until = endpoint::get(cx.store, "github")?
+                .filter(|row| endpoint::is_paused(row, now))
+                .and_then(|row| row.paused_until)
+                .map_or(until, |active| active.max(until));
             endpoint::pause_until(cx.store, "github", until)?;
             return Err(e);
         }
