@@ -73,3 +73,25 @@ pub fn excuse_from_detail(node: &mut PollNode, detail: &serde_json::Value, excus
         node.listed.pr.merge_state = super::status::MergeState::Clean;
     }
 }
+
+/// b61: under a policy hold a Light node whose rollup is `failed` and whose cached detail of the head has no contexts has
+/// unknown checks: it may be only the excused Danger, so it is stored `pending` and raises no `checks_failed`.
+/// Only a non-Danger failing check seen in contexts may fail a held PR.
+pub fn hold_unknown_failure(
+    node: &mut PollNode,
+    detail: Option<&serde_json::Value>,
+    excused: &[String],
+) {
+    use super::status::ChecksSummary;
+    let held = node.labels.as_array().is_some_and(|l| {
+        let labels: Vec<String> = l
+            .iter()
+            .filter_map(|n| n.as_str().map(str::to_owned))
+            .collect();
+        policy_hold(&labels, excused)
+    });
+    let known = detail.is_some_and(|d| !super::gh::checks_of_detail(d).is_empty());
+    if node.heavy.is_none() && held && !known && node.listed.pr.checks == ChecksSummary::Failed {
+        node.listed.pr.checks = ChecksSummary::Pending;
+    }
+}

@@ -153,7 +153,7 @@ impl GithubSource {
                         pr.authored = 1 OR EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pr.id AND w.status = 'open'),
                         pr.review_requested = 1,
                         d.hydrated_at, d.head_oid IS pr.head_oid AND d.updated_at IS pr.gh_updated_at, d.repo IS NOT NULL,
-                        pr.checks = 'failed', pr.labels_json, pr.created_at
+                        pr.checks IN ('failed', 'pending'), pr.labels_json, pr.created_at
                  FROM pull_requests pr LEFT JOIN swr_pr_detail d ON d.repo = pr.repo AND d.number = pr.number
                  WHERE pr.state = 'open' AND pr.archived = 0 ORDER BY pr.id",
             )?;
@@ -396,7 +396,7 @@ impl GithubSource {
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
-    /// until its future stored reset plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
+    /// until its future reset (the error's own, else the stored one) plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
     /// pauses its own poll; it is not an error.
     fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
         // A failed read or commit restarts discovery rather than retaining an invalid/incomplete sweep.
@@ -410,11 +410,24 @@ impl GithubSource {
                 .unwrap_or(false)
         };
         if flag("rate_limited") {
-            let until = endpoint::get(cx.store, "github")?
-                .and_then(|row| row.rate_reset_at)
+            // The failing call's own reset (a REST budget) wins over the stored GraphQL one (pro-d588).
+            let own = e
+                .details()
+                .get("reset_at")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|at| {
+                    OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
+                });
+            let until = own
+                .or(endpoint::get(cx.store, "github")?.and_then(|row| row.rate_reset_at))
                 .map(|reset| reset + RATE_GRACE)
                 .filter(|until| *until > now)
                 .unwrap_or(now + RATE_LIMITED_PAUSE);
+            // Never shorten an active pause (e.g. the GraphQL rate-floor one set earlier in this pass).
+            let until = endpoint::get(cx.store, "github")?
+                .filter(|row| endpoint::is_paused(row, now))
+                .and_then(|row| row.paused_until)
+                .map_or(until, |active| active.max(until));
             endpoint::pause_until(cx.store, "github", until)?;
             return Err(e);
         }
@@ -596,10 +609,11 @@ impl GithubSource {
                 .ok()
                 .and_then(|j| serde_json::from_str(&j).ok()))
             })?;
+            let excused = self.excused_for(cx.home, repo)?;
             if let Some(detail) = &stored {
-                let excused = self.excused_for(cx.home, repo)?;
                 swr_read::excuse_from_detail(node, detail, &excused);
             }
+            swr_read::hold_unknown_failure(node, stored.as_ref(), &excused);
             let node = &*node;
             let stored_hash: Option<String> = cx.store.read(|c| {
                 Ok(c.query_row(

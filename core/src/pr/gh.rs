@@ -3108,6 +3108,11 @@ fn poll_node(
             checks.push(Check::from(raw));
         }
         pr.checks = ChecksSummary::of(&checks, &[], &[], hold);
+    } else if hold && pr.checks == ChecksSummary::Failed && v.get("comments").is_some() {
+        // b61, assumption A1: under a policy hold a heavy node whose failed rollup has no contexts may be only the excused
+        // Danger: it is not stored as `failed`. A Light node keeps `failed` here: `swr_read::hold_unknown_failure` applies
+        // the same fallback after the cached detail of the head was consulted.
+        pr.checks = ChecksSummary::Pending;
     }
     let mut membership = Membership::default();
     if let Some(did) = v.get("viewerDidAuthor").and_then(Value::as_bool) {
