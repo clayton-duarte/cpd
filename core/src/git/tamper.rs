@@ -273,6 +273,8 @@ pub struct TestCase {
     /// The scoped identity: the Rust module path (`m::a`) or the JS describe suites (`s > a`) before the name, and
     /// `#2`, `#3` after it for a later case of the same scope and name.
     pub name: String,
+    /// The complete original title, without scope or duplicate suffixes.
+    pub title: String,
     pub assertions: usize,
 }
 
@@ -360,6 +362,17 @@ fn count_assertions(s: &str) -> usize {
     n
 }
 
+/// A slash begins a regex where an expression can start; after an operand it is division.
+fn regex_start(prefix: &[u8]) -> bool {
+    let p = prefix.trim_ascii_end();
+    let word = p
+        .iter()
+        .rposition(|b| !b.is_ascii_alphabetic())
+        .map_or(p, |i| &p[i + 1..]);
+    [b"return".as_slice(), b"throw", b"case", b"yield", b"await"].contains(&word)
+        || p.last().is_none_or(|b| b"=(:,[!&|?;{}>".contains(b))
+}
+
 /// Replace comments and literals with spaces while retaining offsets and newlines. The declaration scanner uses
 /// the original text for JS titles, but only code contributes braces or assertions. Rust lifetimes stay code.
 fn code_only(src: &str) -> String {
@@ -367,7 +380,49 @@ fn code_only(src: &str) -> String {
     let mut out = bytes.to_vec();
     let rust = src.contains("#[test") || src.contains("#[tokio::test");
     let mut i = 0;
+    // None is template text; Some(depth) is an executable interpolation (nested templates stack).
+    let mut templates: Vec<Option<usize>> = Vec::new();
     while i < bytes.len() {
+        if templates.last() == Some(&None) {
+            if bytes[i..].starts_with(b"${") {
+                out[i] = b' ';
+                *templates.last_mut().unwrap() = Some(0);
+                i += 2; // Keep the interpolation braces balanced in the code view.
+            } else {
+                let end = if bytes[i] == b'\\' {
+                    (i + 2).min(bytes.len())
+                } else {
+                    i + 1
+                };
+                if bytes[i] == b'`' {
+                    templates.pop();
+                }
+                for byte in &mut out[i..end] {
+                    if !matches!(*byte, b'\n' | b'\r') {
+                        *byte = b' ';
+                    }
+                }
+                i = end;
+            }
+            continue;
+        }
+        if !rust && bytes[i] == b'`' {
+            templates.push(None);
+            out[i] = b'0';
+            i += 1;
+            continue;
+        }
+        if let Some(Some(depth)) = templates.last_mut() {
+            if bytes[i] == b'{' {
+                *depth += 1;
+            } else if bytes[i] == b'}' {
+                if *depth == 0 {
+                    *templates.last_mut().unwrap() = None;
+                } else {
+                    *depth -= 1;
+                }
+            }
+        }
         let start = i;
         if bytes[i..].starts_with(b"//") {
             while i < bytes.len() && bytes[i] != b'\n' {
@@ -386,6 +441,28 @@ fn code_only(src: &str) -> String {
                 } else {
                     i += 1;
                 }
+            }
+        } else if !rust && bytes[i] == b'/' && regex_start(&out[..i]) {
+            i += 1;
+            let mut class = false;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                match bytes[i] {
+                    b'\\' => {
+                        i = (i + 2).min(bytes.len());
+                        continue;
+                    }
+                    b'[' => class = true,
+                    b']' => class = false,
+                    b'/' if !class => {
+                        i += 1;
+                        break;
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
             }
         } else if bytes[i] == b'r' && {
             let mut j = i + 1;
@@ -436,10 +513,14 @@ fn code_only(src: &str) -> String {
             i += 1;
             continue;
         }
+        let literal = !bytes[start..].starts_with(b"//") && !bytes[start..].starts_with(b"/*");
         for b in &mut out[start..i] {
             if *b != b'\n' && *b != b'\r' {
                 *b = b' ';
             }
+        }
+        if literal {
+            out[start] = b'0';
         }
     }
     String::from_utf8(out).expect("masking whole literals preserves UTF-8")
@@ -455,6 +536,7 @@ fn braces(s: &str) -> (i32, i32) {
 
 struct Frame {
     depth: i32,
+    call_depth: Option<i32>,
     seen: bool,
     label: String,
     sep: &'static str,
@@ -463,11 +545,28 @@ struct Frame {
 
 /// The test cases in `src`, in order: Rust `#[test]` fns and `it`/`test` calls (node:test, vitest, jest), each with
 /// its scoped identity and the assertions of its body, a declaration line's included. Scopes are Rust `mod`s and JS
-/// `describe` suites; braces end a case.
+/// `describe` suites; braces end Rust cases and closing call parentheses end JS cases.
 pub fn test_cases(src: &str) -> Vec<TestCase> {
+    // Formatting may put a call's title after the opening parenthesis on the next line.
+    let mut lines: Vec<String> = Vec::new();
+    for line in src.lines() {
+        if let Some(previous) = lines.last_mut()
+            && JS_CASES
+                .iter()
+                .chain(JS_SUITES.iter())
+                .any(|prefix| previous.trim() == *prefix)
+        {
+            previous.push_str(line.trim_start());
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    let joined = lines.join("\n");
+    let src = joined.as_str();
     let mut cases: Vec<TestCase> = Vec::new();
     let mut stack: Vec<Frame> = Vec::new();
     let mut depth = 0;
+    let mut parens = 0;
     let mut rust_test = false;
     let code = code_only(src);
     for (line, masked) in src.lines().zip(code.lines()) {
@@ -502,6 +601,7 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
                     }
                     cases.push(TestCase {
                         name: id,
+                        title: name.clone(),
                         assertions: 0,
                     });
                     (name, "", Some(cases.len() - 1))
@@ -510,6 +610,11 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
             };
             stack.push(Frame {
                 depth: depth_before,
+                call_depth: JS_CASES
+                    .iter()
+                    .chain(JS_SUITES.iter())
+                    .any(|prefix| original.starts_with(prefix))
+                    .then_some(parens),
                 seen: false,
                 label,
                 sep,
@@ -519,6 +624,8 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
         }
         let (open, close) = braces(t);
         depth += open - close;
+        parens += t.bytes().filter(|b| *b == b'(').count() as i32
+            - t.bytes().filter(|b| *b == b')').count() as i32;
         for f in &mut stack {
             f.seen |= depth > f.depth;
         }
@@ -539,7 +646,10 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
             f.seen = true;
             f.depth = depth;
         }
-        while stack.last().is_some_and(|f| f.seen && depth <= f.depth) {
+        while stack.last().is_some_and(|f| match f.call_depth {
+            Some(start) => parens <= start,
+            None => f.seen && depth <= f.depth,
+        }) {
             stack.pop();
         }
     }
@@ -547,9 +657,8 @@ pub fn test_cases(src: &str) -> Vec<TestCase> {
 }
 
 /// Whether `approved` names the case `id`: by its scoped identity, or by its bare name.
-fn is_approved(approved: &[String], id: &str) -> bool {
-    let bare = id.rsplit([':', '>']).next().unwrap_or(id).trim();
-    approved.iter().any(|a| a == id || a == bare)
+fn is_approved(approved: &[String], case: &TestCase) -> bool {
+    approved.iter().any(|a| a == &case.name || a == &case.title)
 }
 
 /// `Ok` when `head` keeps every test case of `base` (matched by scoped identity) with no fewer assertions, or the
@@ -558,7 +667,7 @@ pub fn check_tests_kept(base: &str, head: &str, approved: &[String]) -> Result<(
     let head_cases = test_cases(head);
     let mut lost = Vec::new();
     for b in test_cases(base) {
-        if is_approved(approved, &b.name) {
+        if is_approved(approved, &b) {
             continue;
         }
         match head_cases.iter().find(|h| h.name == b.name) {

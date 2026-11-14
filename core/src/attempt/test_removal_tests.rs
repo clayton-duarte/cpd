@@ -231,3 +231,91 @@ fn quoted_and_commented_braces_do_not_close_cases() {
         "test('a', () => {\n const s = '}';\n const t = `expect(1) }`;\n expect(1).toBe(1);\n});\n";
     assert_eq!(test_cases(js)[0].assertions, 1);
 }
+
+#[test]
+fn regex_quotes_and_braces_do_not_change_assertion_counts() {
+    for regex in ["/}/", "/\"/", "/[}/\"']/g", "/expect\\(x\\)/", "/a\\/b/"] {
+        let src = format!("test('a', () => {{\n const re = {regex};\n expect(1).toBe(1);\n}});\n");
+        assert_eq!(test_cases(&src)[0].assertions, 1, "{regex}");
+    }
+    let division = "test('a', () => { const n = 6 / 2; expect(n).toBe(3); });";
+    assert_eq!(test_cases(division)[0].assertions, 1);
+}
+
+#[test]
+fn deleting_a_test_added_by_an_earlier_lead_job_is_refused() {
+    let mut r = rig(Spec {
+        kind: "work",
+        touches: "[\"tests/lead.rs\"]",
+        lead_only: &[(
+            "tests/lead.rs",
+            "#[test]\nfn lead_test() { assert!(true); }\n",
+        )],
+        deleted: &["tests/lead.rs"],
+        ..Spec::default()
+    });
+    let err = r
+        .submit()
+        .expect_err("Lead tests cannot disappear through the footprint filter");
+    assert_eq!(err.code(), ErrorCode::TestsRemoved);
+    assert_eq!(err.details()["path"], "tests/lead.rs");
+}
+
+#[test]
+fn bare_approval_preserves_punctuation_in_the_complete_title() {
+    let base = "describe('suite', () => {\nit('handles: value > threshold', () => { expect(true).toBe(true); });\n});";
+    assert!(check_tests_kept(base, "", &["threshold".into()]).is_err());
+    assert!(check_tests_kept(base, "", &["handles: value > threshold".into()]).is_ok());
+    assert!(check_tests_kept(base, "", &["suite > handles: value > threshold".into()]).is_ok());
+}
+
+#[test]
+fn js_options_object_does_not_end_the_test_before_its_callback() {
+    let base =
+        "test('keeps assertions', {\n timeout: 1000,\n}, () => {\n expect(true).toBe(true);\n});";
+    assert_eq!(test_cases(base)[0].assertions, 1);
+    let weakened = base.replace("expect(true).toBe(true);", "");
+    assert!(check_tests_kept(base, &weakened, &[]).is_err());
+    let compact =
+        "test('keeps assertions', { timeout: 1000 }, () => { expect(true).toBe(true); });";
+    assert!(check_tests_kept(base, compact, &[]).is_ok());
+}
+
+#[test]
+fn template_interpolations_keep_executable_assertions() {
+    let base = r#"test("a", () => { const msg = `literal expect(fake) ${expect(1).toBe(1)}`; });"#;
+    assert_eq!(test_cases(base)[0].assertions, 1);
+    assert!(check_tests_kept(base, &base.replace("expect(1).toBe(1)", "1"), &[]).is_err());
+    let plain = r#"test("a", () => { expect(1).toBe(1); });"#;
+    assert!(check_tests_kept(plain, base, &[]).is_ok());
+    let nested = r#"test("a", () => { const msg = `outer ${`inner ${(() => { expect(1).toBe(1); return 1; })()}`}`; });"#;
+    assert_eq!(test_cases(nested)[0].assertions, 1);
+}
+
+#[test]
+fn upstream_test_changes_brought_by_a_merge_need_no_removal_approval() {
+    let mut r = rig(Spec {
+        kind: "update",
+        touches: "[\"tests/lead.rs\"]",
+        lead_only: &[(
+            "tests/lead.rs",
+            "#[test]\nfn a() { assert!(true); assert!(true); }\n",
+        )],
+        base_ahead: &[("tests/lead.rs", "#[test]\nfn a() { assert!(true); }\n")],
+        brings_base: true,
+        ..Spec::default()
+    });
+    r.submit().expect("upstream test changes are exempt");
+}
+
+#[test]
+fn multiline_javascript_titles_preserve_case_identity_and_assertions() {
+    let compact = "describe('suite', () => {\ntest('a', () => { expect(1).toBe(1); });\n});";
+    let multiline =
+        "describe(\n 'suite', () => {\ntest(\n 'a',\n () => { expect(1).toBe(1); }\n);\n});";
+    assert_eq!(test_cases(multiline), test_cases(compact));
+    assert!(check_tests_kept(compact, multiline, &[]).is_ok());
+    assert!(
+        check_tests_kept(multiline, &multiline.replace("expect(1).toBe(1);", ""), &[]).is_err()
+    );
+}
