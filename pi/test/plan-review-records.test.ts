@@ -35,7 +35,7 @@ test("mixed legacy and durable reviews preserve ordering and Plan isolation", ()
 test("an external approval closes the live dialog backed by durable records", async () => {
   const held = createHeld();
   const records: { kind: string; data: Record<string, unknown>; model: readonly unknown[] }[] = [];
-  const calls: readonly string[][] = [];
+  const calls: string[][] = [];
   const dialogs = createDialogs({ held, broadcast: () => {}, stateChanged: () => {} });
   const flow = createPlanReview({
     plan: "p1", held, dialogs,
@@ -43,7 +43,7 @@ test("an external approval closes the live dialog backed by durable records", as
     write: async (record) => { records.push(record); },
     readText: async () => "# Review r1",
     cpd: async (args) => {
-      (calls as string[][]).push([...args]);
+      calls.push([...args]);
       return { review: { id: "r1", status: "approved", current: true } };
     },
   });

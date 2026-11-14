@@ -102,13 +102,13 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
     abortDialog(entry.review);
     await port.write({ kind: ENTRY_TYPE, data: entryData(done), model: [] });
     const data = {
-        plan: entry.plan,
-        review: entry.review,
-        approved: verdict,
-        current,
-        ...(text !== undefined ? { feedback: text } : {}),
-        ...(elsewhere ? { decided_elsewhere: true } : {}),
-      };
+      plan: entry.plan,
+      review: entry.review,
+      approved: verdict,
+      current,
+      ...(text !== undefined ? { feedback: text } : {}),
+      ...(elsewhere ? { decided_elsewhere: true } : {}),
+    };
     const content = decisionText(entry.review, verdict, text, current, elsewhere ? ELSEWHERE_CHAT_NOTE : undefined);
     if (port.notifyDecision) await port.notifyDecision(content, data);
     else await port.write({ kind: DECISION_TYPE, data, model: [{ role: "user", content }] });
