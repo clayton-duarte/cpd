@@ -145,7 +145,7 @@ impl Poll {
 fn dispatch_on(ports: &Ports) -> String {
     let argv = ["cpd", "job", "dispatch", UPDATE, "--plan", "pay"].map(std::ffi::OsString::from);
     let mut stdout = Vec::new();
-    cpd::run_with(ports, argv, &mut stdout);
+    let _ = cpd::run_with(ports, argv, &mut stdout);
     String::from_utf8(stdout).unwrap()
 }
 

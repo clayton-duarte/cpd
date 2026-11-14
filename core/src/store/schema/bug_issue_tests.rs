@@ -12,7 +12,12 @@ fn migrations_fill_issue_for_open_bugs() {
     let before: Vec<Named> = NAMED
         .iter()
         .copied()
-        .filter(|m| !m.name.ends_with("-bug-issue") && !m.name.ends_with("-bug-issue-backfill"))
+        .filter(|m| {
+            !m.name.ends_with("-bug-issue")
+                && !m.name.ends_with("-bug-issue-backfill")
+                && !m.name.ends_with("-refactor-shapes")
+                && !m.name.ends_with("-coverage-baseline")
+        })
         .collect();
     let mut store = crate::store::tests::open_named(&home, &before).unwrap();
     store
@@ -62,7 +67,12 @@ fn backfill_skips_a_bug_with_another_title() {
     let before: Vec<Named> = NAMED
         .iter()
         .copied()
-        .filter(|m| !m.name.ends_with("-bug-issue") && !m.name.ends_with("-bug-issue-backfill"))
+        .filter(|m| {
+            !m.name.ends_with("-bug-issue")
+                && !m.name.ends_with("-bug-issue-backfill")
+                && !m.name.ends_with("-refactor-shapes")
+                && !m.name.ends_with("-coverage-baseline")
+        })
         .collect();
     let mut store = crate::store::tests::open_named(&home, &before).unwrap();
     store

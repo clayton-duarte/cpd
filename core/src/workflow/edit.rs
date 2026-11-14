@@ -5,14 +5,16 @@
 //! in any phase and any status but `merged` and `cancelled` (hs-d285): the title is
 //! not a Locked field and not in the fingerprint.
 
+use std::path::Path;
+
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use super::EditArgs;
 use super::add::{
-    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, key_repo_policy,
-    known_workflows, main_worktree, needs_refs, no_branch_clash, resolve_refs, stacked_on,
-    wanted_base,
+    BaseArg, BaseWanted, Subject, capture_coverage_baseline, classify_base, insert_needs, key_repo,
+    key_repo_policy, known_workflows, main_worktree, needs_refs, no_branch_clash, resolve_refs,
+    stacked_on, wanted_base,
 };
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -196,10 +198,32 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             if let Some(title) = edits.title.as_deref().filter(|_| fields.contains(&"title")) {
                 queued = retitle_open_pull_request(&mut env, &plan, &key, title)?;
             }
+            // A refactor's coverage baseline follows its base: re-measured (git, outside the transaction) on the new base and repo.
+            let rebase = before.shape == "refactor"
+                && (before.repo != after.repo || before.base != after.base);
+            let baseline = if rebase {
+                let (_, _, policy) = key_repo_policy(&mut env, &plan, Path::new(&after.repo))?;
+                capture_coverage_baseline(
+                    Path::new(&after.repo),
+                    &plan,
+                    &key,
+                    &after.base,
+                    &policy,
+                )?
+            } else {
+                None
+            };
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
                 Decision::Already(workflow) => Ok((workflow, Vec::new(), true)),
                 Decision::Update { before, after, fields } => {
                     update(tx, &plan, &before, &after, edits.name.as_ref(), edits.title.as_deref(), edits.jira.as_deref())?;
+                    if rebase {
+                        // The stale floor is replaced, or dropped when the new repo measures nothing.
+                        tx.execute("DELETE FROM refactor_coverage_baselines WHERE plan = ?1 AND workflow = ?2", [plan.as_str(), key.as_str()])?;
+                        if let Some((sha, report)) = &baseline {
+                            tx.execute("INSERT INTO refactor_coverage_baselines (plan, workflow, base_sha, report) VALUES (?1, ?2, ?3, ?4)", rusqlite::params![plan.as_str(), key.as_str(), sha, report])?;
+                        }
+                    }
                     let text = format!("Workflow {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                     append(tx, NewEvent::workflow_edited(text, &key, &fields).plan(plan.clone()))?;
                     crate::session::working_pr::name(tx, &plan, &key)?;

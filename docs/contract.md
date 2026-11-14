@@ -1990,7 +1990,7 @@ CREATE TABLE workflows (
   merged_at          TEXT,
   name               TEXT CHECK (name IS NULL OR length(name) BETWEEN 1 AND 100),  -- the repo's GitHub name without its owner (§8.3, hs-d288); NULL only for a PR added before the migration of the policy keys (§4.5), an ADD COLUMN
   title              TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 72),   -- migration `pr-title` (hs-d285, §4.5; additive, so after `name`): nullable, a PR that existed before it has none; one line, no control characters is checked at the boundary (`PrTitle`)
-  shape              TEXT NOT NULL DEFAULT 'free' CHECK (shape IN ('tdd', 'docs', 'config', 'free')),   -- migration `job-kinds` (hs-d341, hs-d497; an ADD COLUMN, so after `title`): the PR's shape, stored and enforced (§2.2 "Job kinds"); `workflow add` always writes one of the first three, `free` is every PR that existed before the migration; never updated (`workflows_shape_fixed`)
+  shape              TEXT NOT NULL DEFAULT 'free' CHECK (shape IN ('tdd', 'docs', 'config', 'coverage', 'refactor', 'free')),   -- migration `job-kinds` (hs-d341, hs-d497; an ADD COLUMN, so after `title`): the PR's shape, stored and enforced (§2.2 "Job kinds"); `workflow add` always writes one of the first three, `free` is every PR that existed before the migration; never updated (`workflows_shape_fixed`)
   head_ref           TEXT CHECK (head_ref IS NULL OR length(head_ref) BETWEEN 1 AND 255),   -- migration `pr-adopt` (pro-n8, §4.5; an ADD COLUMN, so after `shape`): the head branch of the pull request cpd adopted (§2.2 "An adopted PR"); non-null means adopted, null is a cpd PR; set at insert only (`workflows_head_ref_fixed`); `lead_branch` stays the local `cpd/<plan>/<key>`
   description        TEXT CHECK (description IS NULL OR length(description) BETWEEN 1 AND 65536),   -- migration `pr-description` (pro-d93..pro-d96, §4.5; an ADD COLUMN, so after `head_ref`): the PR's description, a Markdown body; non-empty after trimming is checked at the boundary; null only for a PR made before it
   jira               TEXT,   -- migration `pr-jira` (pro-d127, B1, §4.5; an ADD COLUMN, so after `description`): the PR's Jira ticket, a key matching `^[A-Z][A-Z0-9]+-[0-9]+$` (checked at the boundary by the `Jira` type); null until one is set; not a Locked field, outside the plan fingerprint
@@ -2855,6 +2855,15 @@ CREATE TABLE swr_badges (
 **The bug records** (contract §2.2 "Bug record"; air-d103, air-d104, air-d107). One row per bug, written by `cpd protocol bug report`, `protocol bug mitigate` and `protocol bug close` (commands.md §33); the table adds no Event kind of its own: the engine tick's breach check (§3.7 E25) appends the `protocol-breach` kind (§5.2) of migration `20261110T1305-protocol-breach` (§4.5), which the adapter ignores; that kind raises the protocol number to 27 (§5.2: the guards' Ledger leg runs `session report` with new flags, commands.md §10.18). It is created by the migration `20261108T0800-bug-record`, a `history_tables` row with `no_delete` 1.
 
 ```sql
+CREATE TABLE refactor_coverage_baselines (
+  plan TEXT NOT NULL,
+  workflow TEXT NOT NULL,
+  base_sha TEXT NOT NULL,
+  report TEXT NOT NULL CHECK (json_valid(report)),
+  PRIMARY KEY (plan, workflow),
+  FOREIGN KEY (plan, workflow) REFERENCES workflows(plan, key)
+) STRICT;
+
 CREATE TABLE bug_records (
   id              TEXT PRIMARY KEY CHECK (id GLOB 'b[0-9]*' AND length(id) BETWEEN 2 AND 12),
   plan            TEXT REFERENCES plans(id),
@@ -6897,6 +6906,7 @@ A **policy** says how cpd and its agents work for one GitHub owner or repo: what
 | `instructions` | none | machine, owner, repo | Manager, Lead, Worker |
 | `hooks` | `pre-start`, `pre-commit`, `pre-merge`, each in the three forms of §7.3 (none: no hook); **no `text`** | repo | none |
 | `test-commands` | `build`, `run`, optional `list` (§7.7); **no `text`** | repo | none |
+| `coverage-commands` | optional `measure`, a non-empty command producing coverage JSON (commands.md §34); **no `text`** | repo | none |
 | `protected` | `paths`, a list of strings (§7.5; `[]`); **no `text`** | repo | none |
 | `generated` | `paths`, a list of strings (§7.5; `[]`); **no `text`** | repo | none |
 | `resources` | `names`, the visible resource names, sorted (`[]`: none declared), and `declared`, one `{name, scope, slots, source}` per name (§8.3 "The `resources` domain"); **no `text`** | machine, owner, repo | none |
@@ -6912,7 +6922,7 @@ The **`[model]`** domain (pro-d27, Plan policy-scopes, PR `tiers`) replaces the 
 
 **Deprecated `[pr] gate` alias.** Policy files created before hs-d679 may have `[pr] gate = "local" | "ci"` instead of the new `[gate]` domain. For compatibility, cpd still parses `[pr] gate` with a deprecation warning logged (internally; not surfaced to the User): `local` maps to both `[gate] merge = "local"` and `[gate] pr = "local"`, and `ci` or `none` to both `none`. An explicit `[gate]` table in the same file takes precedence over the deprecated alias. The hs policy files are updated outside this PR.
 
-**The repo-only domains.** `hooks`, `test-commands`, `protected`, `generated` and `deploys` are exposed to the repo scope only: a table of one of them in a machine or an owner file is `policy_invalid` (exposure, above). They have no `text` and an empty audience, so nothing reaches an agent from them. The named commands of a `[hooks.<hook>]` block keep file order (`toml::Table` sorts keys; `core/src/git/hooks/def.rs` restores the order with `toml::de::DeTable` spans). An invalid table is `policy_invalid` (`details.file`, `details.key`). `tests` stays text-only and keeps its meaning. `resources` is not repo-only: it is exposed to every scope (next section).
+**The repo-only domains.** `hooks`, `test-commands`, `coverage-commands`, `protected`, `generated` and `deploys` are exposed to the repo scope only: a table of one of them in a machine or an owner file is `policy_invalid` (exposure, above). They have no `text` and an empty audience, so nothing reaches an agent from them. The named commands of a `[hooks.<hook>]` block keep file order (`toml::Table` sorts keys; `core/src/git/hooks/def.rs` restores the order with `toml::de::DeTable` spans). An invalid table is `policy_invalid` (`details.file`, `details.key`). `tests` stays text-only and keeps its meaning. `resources` is not repo-only: it is exposed to every scope (next section).
 
 #### The `resources` domain
 
