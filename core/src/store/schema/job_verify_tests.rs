@@ -130,6 +130,9 @@ fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
                         .replace(", 'waiting_on', OLD.waiting_on", "").replace(", 'waiting_on', NEW.waiting_on", "")
                         .replace(" UNION ALL SELECT 'waiting_on', OLD.waiting_on WHERE OLD.waiting_on IS NOT NEW.waiting_on", "")
                         .replace(" UNION ALL SELECT 'waiting_on', NEW.waiting_on WHERE OLD.waiting_on IS NOT NEW.waiting_on", "")
+                        .replace(", 'touches_waived', OLD.touches_waived", "").replace(", 'touches_waived', NEW.touches_waived", "")
+                        .replace(" UNION ALL SELECT 'touches_waived', OLD.touches_waived WHERE OLD.touches_waived IS NOT NEW.touches_waived", "")
+                        .replace(" UNION ALL SELECT 'touches_waived', NEW.touches_waived WHERE OLD.touches_waived IS NOT NEW.touches_waived", "")
                         .replace(", 'test_removal_approved', OLD.test_removal_approved", "").replace(", 'test_removal_approved', NEW.test_removal_approved", "")
                         .replace(" UNION ALL SELECT 'test_removal_approved', OLD.test_removal_approved WHERE OLD.test_removal_approved IS NOT NEW.test_removal_approved", "")
                         .replace(" UNION ALL SELECT 'test_removal_approved', NEW.test_removal_approved WHERE OLD.test_removal_approved IS NOT NEW.test_removal_approved", ""))
@@ -244,6 +247,8 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
                 assert_eq!(row.remove("touches_approved"), Some(Value::Null));
                 // `waiting_on` is the column of `draft-waiting-on`, later still: null in every row.
                 assert_eq!(row.remove("waiting_on"), Some(Value::Null));
+                // `touches_waived` is the column of `job-touches-waived`, later still: null in every row.
+                assert_eq!(row.remove("touches_waived"), Some(Value::Null));
                 // `test_removal_approved` is the column of `job-test-removal-approved`, later still: null in every row.
                 assert_eq!(row.remove("test_removal_approved"), Some(Value::Null));
             }

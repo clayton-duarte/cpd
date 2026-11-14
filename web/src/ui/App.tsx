@@ -1,14 +1,19 @@
 import { CircleAlertIcon, XIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactElement } from "react";
 import type { ContextNode, PlanNode, SessionNode } from "../protocol/cockpit.ts";
 import type { WireError } from "../protocol/domain.ts";
 import type { Scheduler, Transport } from "../protocol/runtime.ts";
 import { createConnection } from "../state/connection.ts";
+import { engineBanner } from "../state/banner.ts";
+import { createIdbOutboxStorage } from "../state/outbox-idb.ts";
+import { EngineBanner } from "../components/EngineBanner.tsx";
+import { OutboxList } from "../components/OutboxList.tsx";
 import { createStore, useStore } from "../state/store.ts";
 import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
+import { EngineStatusBanner } from "./components/EngineStatusBanner.tsx";
 import { Empty } from "./components/empty.tsx";
 import { routeErrorTarget } from "./errorReport.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
@@ -51,7 +56,9 @@ export function App(props: AppProps): ReactElement {
   const crash = onCrash === undefined ? {} : { onCrash };
   const { store, connection } = useMemo(() => {
     const s = createStore();
-    const c = createConnection({ transport, scheduler, store: s, ...(newId === undefined ? {} : { newId }) });
+    // IndexedDB is absent outside a browser (the jsdom tests): the outbox then lives in memory.
+    const outboxStorage = typeof indexedDB === "undefined" ? {} : { outboxStorage: createIdbOutboxStorage() };
+    const c = createConnection({ transport, scheduler, store: s, ...outboxStorage, ...(newId === undefined ? {} : { newId }) });
     return { store: s, connection: c };
   }, [transport, scheduler, newId]);
   useEffect(() => {
@@ -59,6 +66,15 @@ export function App(props: AppProps): ReactElement {
     return () => connection.close();
   }, [connection]);
   const cockpit = useStore(store, (s) => s.cockpit);
+  const connectionStatus = useStore(store, (s) => s.connection);
+  const outboxEntries = useSyncExternalStore(connection.outbox.subscribe, connection.outbox.list);
+  const banner = engineBanner({
+    connection: connectionStatus,
+    engineRunning: cockpit.inbox?.engineRunning ?? true,
+    ...(cockpit.inbox?.engineDownSince === undefined ? {} : { engineDownSince: cockpit.inbox.engineDownSince }),
+    ...(cockpit.inbox?.engineRestartReason === undefined ? {} : { engineRestartReason: cockpit.inbox.engineRestartReason }),
+    lastSeenAt: connection.lastSeenAt(),
+  });
   const session = useStore(store, (s) => s.session);
   const selectedSessionId = useStore(store, (s) => s.selectedSessionId);
   const lastError = useStore(store, (s) => s.lastError);
@@ -210,7 +226,7 @@ export function App(props: AppProps): ReactElement {
   }, [cockpit.inbox, selectedSessionId]);
 
   return (
-    <>
+    <div data-part="app-layout" className="flex h-dvh min-h-0 flex-col">
     <BootstrapOverlay />
     {reportSent ? (
       <div role="status" className="fixed right-4 bottom-8 z-50 rounded-lg border bg-card px-4 py-3 shadow-lg">
@@ -220,6 +236,16 @@ export function App(props: AppProps): ReactElement {
         </Button>
       </div>
     ) : null}
+    {cockpit.inbox === null || cockpit.inbox.engineRunning ? null : (
+      <div data-part="engine-banner-row" className="shrink-0 px-2 py-1">
+        <EngineStatusBanner
+          engineRunning={cockpit.inbox.engineRunning}
+          engineDownSince={cockpit.inbox.engineDownSince ?? null}
+          engineRestartReason={cockpit.inbox.engineRestartReason ?? null}
+          now={new Date()}
+        />
+      </div>
+    )}
     {shownError === null ? null : (
       <div
         data-part="cockpit-error-toast"
@@ -270,6 +296,16 @@ export function App(props: AppProps): ReactElement {
     )}
     <Shell
       panelsRef={panelsRef}
+      banner={
+        <>
+          <EngineBanner banner={banner} />
+          <OutboxList
+            entries={outboxEntries}
+            onRetry={(id) => void connection.outbox.retry(id)}
+            onDiscard={(id) => void connection.outbox.discard(id)}
+          />
+        </>
+      }
       status={
         <StatusBar
           {...(cockpit.status === null ? { runner: session?.ref?.runner ?? null, state: session?.ref?.state ?? null, version: null } : { status: barStatus(cockpit.status, Date.now()) })}
@@ -347,6 +383,6 @@ export function App(props: AppProps): ReactElement {
       <HealthBeacon live={live} root={healthRoot} errors={errors ?? noErrors} onHealthy={onHealthy} />
     )}
     <span ref={sentinel} hidden />
-    </>
+    </div>
   );
 }

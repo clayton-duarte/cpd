@@ -253,12 +253,13 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261113T0801-bug-issue-backfill",
             "20261113T0802-refactor-shapes",
             "20261113T0803-coverage-baseline",
-            "20261113T0804-job-test-removal-approved",
+            "20261113T0804-job-touches-waived",
+            "20261113T0805-job-test-removal-approved",
         ]
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261113T0804-job-test-removal-approved")
+        Some("20261113T0805-job-test-removal-approved")
     );
 }
 

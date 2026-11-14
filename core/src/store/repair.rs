@@ -297,10 +297,20 @@ pub fn apply_repair_in_txn(
 }
 
 fn reconcile_jobs_table(conn: &Connection) -> Result<(), CpdError> {
-    let has_removal_approvals: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'test_removal_approved')",
-        [], |row| row.get(0),
-    ).map_err(CpdError::from)?;
+    let has_waivers: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'touches_waived')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(CpdError::from)?;
+    let has_removal_approvals: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'test_removal_approved')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(CpdError::from)?;
     let mut sql = "DROP VIEW IF EXISTS job_tenants;
 CREATE TABLE jobs__reconcile_new (
   seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -335,6 +345,7 @@ CREATE TABLE jobs__reconcile_new (
   summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),
   touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),
   waiting_on          TEXT,
+  touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),
   test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),
   UNIQUE (plan, key),
   FOREIGN KEY (plan, workflow) REFERENCES \"workflows\"(plan, key),
@@ -354,14 +365,14 @@ INSERT INTO jobs__reconcile_new (
   acceptance, out_of_scope, status, appended, fingerprint, created_txn,
   retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha,
   created_at, urgent, kind, tests, test_files, resources, test_approved,
-  touches_approved, skipped_n, summary, waiting_on, test_removal_approved
+  touches_approved, skipped_n, summary, waiting_on, touches_waived, test_removal_approved
 )
 SELECT
   seq, plan, workflow, review, key, title, tier, goal, context, touches,
   acceptance, out_of_scope, status, appended, fingerprint, created_txn,
   retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha,
   created_at, urgent, kind, tests, test_files, resources, test_approved,
-  touches_approved, skipped_n, summary, waiting_on, test_removal_approved
+  touches_approved, skipped_n, summary, waiting_on, touches_waived, test_removal_approved
 FROM jobs;
 DROP TABLE jobs;
 ALTER TABLE jobs__reconcile_new RENAME TO jobs;
@@ -416,6 +427,11 @@ BEGIN SELECT RAISE(ABORT, 'job_locked'); END;".to_owned();
     if !has_removal_approvals {
         sql = sql.replace("  test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),\n", "")
             .replace(", test_removal_approved", "");
+    }
+    if !has_waivers {
+        // Pending additive migrations must remain responsible for adding their columns.
+        sql = sql.replace("  touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),\n", "")
+            .replace(", waiting_on, touches_waived", ", waiting_on");
     }
     conn.execute_batch(&sql).map_err(CpdError::from)
 }

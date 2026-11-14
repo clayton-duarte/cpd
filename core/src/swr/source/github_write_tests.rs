@@ -842,3 +842,238 @@ fn gh_deploy_rows_go_inactive_when_the_pr_closes() {
         None
     );
 }
+
+struct UncachedReply {
+    kind: &'static str,
+    wrong_pull: bool,
+}
+impl Handler for UncachedReply {
+    fn handle(&self, call: &Call) -> Reply {
+        let query = call
+            .args
+            .iter()
+            .find_map(|a| a.strip_prefix("query="))
+            .unwrap_or("");
+        let data = if query.contains("node(id:") {
+            json!({"node": {"__typename": self.kind, "fullDatabaseId": "4569528234", "replyTo": {"fullDatabaseId": "4569528233"}, "url": "https://github.com/acme/pay/pull/801#review-42", "pullRequest": {"number": if self.wrong_pull { 802 } else { 801 }, "repository": {"nameWithOwner": "acme/pay"}}}})
+        } else {
+            json!({"repository": {"pullRequest": {"id": "PR_801"}}, "addPullRequestReviewThreadReply": {"comment": {"url": "https://reply"}}, "addComment": {"commentEdge": {"node": {"url": "https://reply"}}}})
+        };
+        Reply::ok(&json!({"data": data}).to_string())
+    }
+}
+
+#[test]
+fn uncached_reply_targets_are_looked_up_and_delivered_by_the_drain() {
+    for (kind, to, operation) in [
+        (
+            "PullRequestReviewThread",
+            "PRRT_one",
+            "addPullRequestReviewThreadReply",
+        ),
+        (
+            "PullRequestReviewComment",
+            "PRRC_one",
+            "comments/4569528233/replies",
+        ),
+        ("PullRequestReview", "PRR_one", "addComment"),
+    ] {
+        let rig = rig();
+        rig.sql("UPDATE pull_requests SET feedback = NULL WHERE number = 801");
+        let _ = (*rig.fakes.runner).clone().route(
+            "gh",
+            Arc::new(UncachedReply {
+                kind,
+                wrong_pull: false,
+            }),
+        );
+        let mut store = store(&rig);
+        let id = crate::swr::source::github_write::enqueue(
+            &mut store,
+            now(&rig),
+            KEY,
+            "reply",
+            json!({"to": to, "body": "Fixed.", "resolve_uncached": true}),
+            None,
+        )
+        .unwrap();
+        rig.sql("UPDATE pull_requests SET feedback = '[]' WHERE number = 801");
+        let m = outbox::get(&mut store, id).unwrap().unwrap();
+        let config = Config::load(&rig.home).unwrap();
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &rig.fakes.ports,
+            home: &rig.home,
+            config: &config,
+        };
+        let outcome = GithubSource::default().execute(&mut cx, &m);
+        assert!(matches!(outcome, ExecOutcome::Done), "{kind}: {outcome:?}");
+        let calls = gh_calls(&rig);
+        assert!(
+            calls.iter().any(|c| c.contains(operation)),
+            "{kind}: {calls:?}"
+        );
+        assert!(
+            calls.iter().any(|c| c.contains("cpd:reply")),
+            "the actual reply includes its marker: {calls:?}"
+        );
+    }
+}
+
+#[test]
+fn uncached_reply_cannot_be_delivered_to_another_pull_request() {
+    let rig = rig();
+    rig.sql("UPDATE pull_requests SET feedback = NULL WHERE number = 801");
+    let _ = (*rig.fakes.runner).clone().route(
+        "gh",
+        Arc::new(UncachedReply {
+            kind: "PullRequestReviewThread",
+            wrong_pull: true,
+        }),
+    );
+    let mut store = store(&rig);
+    let id = crate::swr::source::github_write::enqueue(
+        &mut store,
+        now(&rig),
+        KEY,
+        "reply",
+        json!({"to": "PRRT_other", "body": "Fixed."}),
+        None,
+    )
+    .unwrap();
+    let m = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    let outcome = GithubSource::default().execute(&mut cx, &m);
+    assert!(!matches!(outcome, ExecOutcome::Done), "{outcome:?}");
+    assert_eq!(gh_calls(&rig).len(), 1, "only the lookup, never a write");
+}
+
+#[test]
+fn uncached_reply_metadata_does_not_change_reply_deduplication() {
+    let rig = rig();
+    let mut store = store(&rig);
+    let mut ids = Vec::new();
+    for uncached in [true, false] {
+        ids.push(
+            crate::swr::source::github_write::enqueue(
+                &mut store,
+                now(&rig),
+                KEY,
+                "reply",
+                json!({"to": "PRRT_one", "body": "Fixed.", "resolve_uncached": uncached}),
+                None,
+            )
+            .unwrap(),
+        );
+    }
+    assert_eq!(ids[0], ids[1]);
+    let mutation = outbox::get(&mut store, ids[0]).unwrap().unwrap();
+    assert!(!mutation.vars_json.contains("resolve_uncached"));
+    assert!(mutation.context_json.unwrap().contains("true"));
+}
+
+#[test]
+fn uncached_reply_rest_timeout_is_retryable() {
+    let rig = rig();
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route(
+            "gh",
+            Arc::new(UncachedReply {
+                kind: "PullRequestReviewComment",
+                wrong_pull: false,
+            }),
+        )
+        .once(
+            "gh",
+            |c| c.args.iter().any(|a| a.contains("/replies")),
+            Reply::ok("").takes(Duration::from_secs(61)),
+        );
+    let mut store = store(&rig);
+    let id = super::github_write::enqueue(
+        &mut store,
+        now(&rig),
+        KEY,
+        "reply",
+        json!({"to": "PRRC_one", "body": "Fixed.", "resolve_uncached": true}),
+        None,
+    )
+    .unwrap();
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert!(matches!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Retry { .. }
+    ));
+}
+
+struct AcceptedReplyTimeout(std::sync::atomic::AtomicUsize);
+impl Handler for AcceptedReplyTimeout {
+    fn handle(&self, call: &Call) -> Reply {
+        let query = call
+            .args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("query="))
+            .unwrap_or("");
+        if query.contains("node(id:") {
+            assert!(query.contains("comments(last: 1)"), "{query}");
+            let comments = if self.0.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                vec![]
+            } else {
+                vec![json!({"body": crate::pr::comments::MARKER})]
+            };
+            return Reply::ok(&json!({"data": {"node": {"__typename": "PullRequestReviewThread", "comments": {"nodes": comments},
+                "pullRequest": {"number": 801, "repository": {"nameWithOwner": "acme/pay"}}}}}).to_string());
+        }
+        assert!(query.contains("addPullRequestReviewThreadReply"), "{query}");
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Reply::ok("{}").takes(Duration::from_secs(61))
+    }
+}
+
+#[test]
+fn uncached_reply_accepted_before_timeout_is_not_posted_again() {
+    let rig = rig();
+    let wire = Arc::new(AcceptedReplyTimeout(std::sync::atomic::AtomicUsize::new(0)));
+    let _ = (*rig.fakes.runner).clone().route("gh", wire.clone());
+    let mut store = store(&rig);
+    let id = super::github_write::enqueue(
+        &mut store,
+        now(&rig),
+        KEY,
+        "reply",
+        json!({"to": "PRRT_one", "body": "Fixed.", "resolve_uncached": true}),
+        None,
+    )
+    .unwrap();
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert!(matches!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Retry { .. }
+    ));
+    rig.sql("UPDATE pull_requests SET feedback = '[]' WHERE number = 801");
+    assert_eq!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Done
+    );
+    assert_eq!(wire.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

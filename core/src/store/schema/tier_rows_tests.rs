@@ -359,10 +359,12 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
         let (mut new_cols, mut new_rows) = table(&mut store, &sql);
         if *t == "jobs" {
             // Later migration draft-waiting-on adds waiting_on to jobs (NULL for every existing row).
-            // Then job-test-removal-approved adds test_removal_approved (NULL too).
+            // Later migration job-touches-waived adds touches_waived after it, then job-test-removal-approved test_removal_approved (NULL too).
             assert_eq!(new_cols.pop(), Some("test_removal_approved".to_owned()));
+            assert_eq!(new_cols.pop(), Some("touches_waived".to_owned()));
             assert_eq!(new_cols.pop(), Some("waiting_on".to_owned()));
             for row in &mut new_rows {
+                assert_eq!(row.pop(), Some(Value::Null));
                 assert_eq!(row.pop(), Some(Value::Null));
                 assert_eq!(row.pop(), Some(Value::Null));
             }

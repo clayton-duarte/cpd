@@ -566,7 +566,8 @@ pub(crate) fn setup_mac_pro_drifted_store(env: &impl HasCpdHome) {
            summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),
            touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),
            waiting_on          TEXT CHECK (waiting_on IS NULL OR waiting_on IN ('lead', 'user') OR waiting_on LIKE 'explore:%'),
-           test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),
+           touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),
+          test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),
            UNIQUE (plan, key),
            FOREIGN KEY (plan, workflow) REFERENCES \"workflows\"(plan, key),
            CHECK (status <> 'draft' OR fingerprint IS NULL),
@@ -949,14 +950,15 @@ fn repair_preserves_rows_and_allows_install_copy_migration() {
 }
 
 #[test]
-fn repair_leaves_pending_removal_approval_migration_to_add_its_column() {
+fn repair_leaves_pending_waiver_migration_to_add_its_column() {
     let env = Home::empty();
     let h = home(&env);
     setup_mac_pro_drifted_store(&env);
     let conn = Connection::open(h.db()).unwrap();
     conn.execute_batch("ALTER TABLE jobs DROP COLUMN test_removal_approved;
+        ALTER TABLE jobs DROP COLUMN touches_waived;
         DROP TRIGGER schema_migrations_no_delete;
-        DELETE FROM schema_migrations WHERE name = '20261113T0804-job-test-removal-approved';
+        DELETE FROM schema_migrations WHERE name IN ('20261113T0804-job-touches-waived', '20261113T0805-job-test-removal-approved');
         CREATE TRIGGER schema_migrations_no_delete BEFORE DELETE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;").unwrap();
     drop(conn);
     let result = repair(
@@ -964,7 +966,7 @@ fn repair_leaves_pending_removal_approval_migration_to_add_its_column() {
         &RepairOptions {
             dry_run: false,
             confirmed: true,
-            reason: "pending removal approval migration".into(),
+            reason: "pending waiver migration".into(),
         },
     )
     .unwrap();
@@ -972,7 +974,7 @@ fn repair_leaves_pending_removal_approval_migration_to_add_its_column() {
     let conn = Connection::open(h.db()).unwrap();
     let before: i64 = conn
         .query_row(
-            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'test_removal_approved'",
+            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'touches_waived'",
             [],
             |r| r.get(0),
         )
@@ -983,7 +985,7 @@ fn repair_leaves_pending_removal_approval_migration_to_add_its_column() {
     let conn = Connection::open(h.db()).unwrap();
     let after: i64 = conn
         .query_row(
-            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'test_removal_approved'",
+            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'touches_waived'",
             [],
             |r| r.get(0),
         )

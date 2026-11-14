@@ -25,7 +25,7 @@ mod incident_tests;
 
 pub(crate) mod add;
 mod addendum;
-mod approve;
+pub(crate) mod approve;
 pub use approve::approved_test_removals;
 mod approve_touches;
 pub(crate) mod cancel;
@@ -89,8 +89,10 @@ pub enum Command {
     ApproveTests(ApproveArgs),
     /// The Lead approves a Job to change a path outside its touches (§5.9a)
     ApproveTouches(ApproveTouchesArgs),
-    /// The Lead approves a Job to remove or weaken existing tests (§5.9b)
+    /// The Lead approves a Job to remove or weaken existing tests (§5.9c)
     ApproveTestRemoval(ApproveTestRemovalArgs),
+    /// The Lead waives a declared touch that has no diff (§5.9b)
+    ApproveUntouched(ApproveTouchesArgs),
     /// Add information to a Job without changing its Spec (§5.10)
     Addendum(AddendumArgs),
     /// Start one Ready Job now (§5.5)
@@ -339,6 +341,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::ApproveTests(args) => approve::approve(args),
         Command::ApproveTouches(args) => approve_touches::approve(args),
         Command::ApproveTestRemoval(args) => approve::approve_test_removal(args),
+        Command::ApproveUntouched(args) => approve::approve_untouched(args),
         Command::Addendum(args) => addendum::addendum(args),
         Command::Dispatch(args) => driver::dispatch(args),
         Command::List(args) => show::list(args),

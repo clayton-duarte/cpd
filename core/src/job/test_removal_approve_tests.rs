@@ -1,4 +1,4 @@
-//! Red tests of `job approve-test-removal` (commands.md §5.9b, contract §7.5; b70): the Lead's approval for a Job to
+//! Red tests of `job approve-test-removal` (commands.md §5.9c, contract §7.5; b70): the Lead's approval for a Job to
 //! remove or weaken named test cases. It unions and de-duplicates `jobs.test_removal_approved`, appends `job-edited`
 //! with `fields: ["test_removal_approved"]` and the reason, writes nothing on a rerun, and is refused by a Worker, a
 //! blank name and an ended Job.

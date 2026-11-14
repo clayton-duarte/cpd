@@ -8,7 +8,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::Install;
+use crate::home::CpdHome;
 use crate::host::runner::NO_DEADLINE;
+use crate::host::spawn::{Pid, Signal};
 use crate::host::tmux;
 use crate::ports::Ports;
 
@@ -16,6 +18,8 @@ use crate::ports::Ports;
 const TMUX_DEADLINE: Duration = Duration::from_secs(10);
 /// The step of that wait.
 const LOCK_STEP: Duration = Duration::from_millis(250);
+/// The longest the install waits for the prepared WebUI to listen, and the step of that wait.
+const WEBUI_READY_WAIT: Duration = Duration::from_secs(120);
 
 /// What a finished call left: its exit (`-1` when it did not start), stdout and stderr.
 struct Done {
@@ -184,12 +188,90 @@ impl FollowUps<'_> {
         }
     }
 
+    /// The pid the old WebUI recorded in `run/webui.pid`, if any.
+    fn old_webui_pid(&self) -> Option<Pid> {
+        let text =
+            std::fs::read_to_string(self.install.cpd_home.run_dir().join("webui.pid")).ok()?;
+        text.trim().parse().ok().map(Pid)
+    }
+
+    /// `cpd webui --prepare`: starts the new WebUI beside the old one; its pid. A failure is reported and the old
+    /// WebUI is left to the new engine's own supervision.
+    fn prepare_webui(&mut self) -> Result<Option<Pid>, ()> {
+        let prepared = self.cpd(&["webui", "--prepare"]);
+        // A successful prepare that says nothing has no WebUI to hand over: the engine supervises it as before.
+        if prepared.ok() && prepared.stdout.trim().is_empty() {
+            return Ok(None);
+        }
+        let reply = prepared
+            .ok()
+            .then(|| serde_json::from_str::<serde_json::Value>(&prepared.stdout).ok())
+            .flatten();
+        let pid = reply
+            .as_ref()
+            .and_then(|v| v.get("pid")?.as_u64())
+            .and_then(|p| u32::try_from(p).ok());
+        // A valid `{"ok":true}` reply naming no prepared instance has nothing to hand over either.
+        let nothing_to_hand_over = reply.as_ref().is_some_and(|v| {
+            v.get("ok").and_then(serde_json::Value::as_bool) == Some(true) && v.get("pid").is_none()
+        });
+        match pid {
+            Some(pid) => Ok(Some(Pid(pid))),
+            None if nothing_to_hand_over => Ok(None),
+            None => {
+                self.fail(format!(
+                    "cpd webui --prepare: {} {}; the old WebUI keeps serving",
+                    describe(&prepared.stdout),
+                    prepared.stderr
+                ));
+                Err(())
+            }
+        }
+    }
+
+    /// Waits (on the clock, bounded) for `cpd webui --ready`, then and only then stops the old WebUI.
+    fn hand_off_webui(&mut self, old: Option<Pid>, new: Pid) {
+        let mut waited = Duration::ZERO;
+        loop {
+            let ready = self.cpd(&["webui", "--ready"]);
+            let is_ready = ready.ok()
+                && serde_json::from_str::<serde_json::Value>(&ready.stdout)
+                    .ok()
+                    .and_then(|v| v.get("ready")?.as_bool())
+                    == Some(true);
+            if is_ready {
+                break;
+            }
+            if waited >= WEBUI_READY_WAIT {
+                self.fail(format!(
+                    "install_failed: the new WebUI (pid {}) was not ready after {}s; the old WebUI keeps serving",
+                    new.0,
+                    WEBUI_READY_WAIT.as_secs()
+                ));
+                return;
+            }
+            self.ports.clock.sleep(LOCK_STEP);
+            waited += LOCK_STEP;
+        }
+        if let Some(old) = old.filter(|old| *old != new)
+            && let Err(e) = self.ports.spawn.signal(old, Signal::Term)
+        {
+            self.fail(format!("cannot stop the old WebUI (pid {}): {e}", old.0));
+        }
+    }
+
     /// Retires the old engine and starts the new one.
     fn restart_engine(&mut self, conf: &TmuxConf) {
         let _ = writeln!(
             self.err,
             "restarting the running engine (cpd watch) to run the new binary"
         );
+        // Prepare the new WebUI beside the old one, which keeps serving until the hand-off (pro-d592).
+        let old_webui = self.old_webui_pid();
+        let prepared = match self.prepare_webui() {
+            Ok(prepared) => prepared,
+            Err(()) => return,
+        };
         let mark = self.cpd(&["watch", "--mark-restart"]);
         if !mark.ok() {
             self.fail(format!(
@@ -234,8 +316,32 @@ impl FollowUps<'_> {
             }
         };
         if !free {
+            // Hand off: after the full wait (an explicit shorter `lock_wait` is a caller's own bound and is not handed
+            // off), a detached waiter starts the engine once the lock frees, so the install never leaves it down.
+            let handoff = if self.install.lock_wait >= super::DEFAULT_LOCK_WAIT {
+                write_install_state(self.ports, &self.install.cpd_home, "restarting");
+                let handed = self.cpd(&WAITER_ARGS);
+                if handed.ok() {
+                    "; a detached waiter starts it when the lock frees".to_owned()
+                } else {
+                    let reason = format!(
+                        "the restart waiter could not be started: {} {}",
+                        describe(&handed.stdout),
+                        handed.stderr
+                    );
+                    let _ = record_install_state(
+                        self.ports,
+                        &self.install.cpd_home,
+                        "failed",
+                        Some(&reason),
+                    );
+                    format!("; {reason}: run cpd watch --ensure")
+                }
+            } else {
+                String::new()
+            };
             self.fail(format!(
-                "the old engine still holds {} after {}s: it was told to stop and has not; the new engine was not started",
+                "the old engine still holds {} after {}s: it was told to stop and has not; the new engine was not started{handoff}",
                 lock.display(),
                 self.install.lock_wait.as_secs()
             ));
@@ -267,6 +373,9 @@ impl FollowUps<'_> {
                     return;
                 }
                 let _ = writeln!(self.err, "{}", ensured.stdout);
+                if let Some(new) = prepared {
+                    self.hand_off_webui(old_webui, new);
+                }
             }
             Err(e) => self.fail(format!("cannot probe {}: {e}", lock.display())),
         }
@@ -284,6 +393,106 @@ pub(super) fn run(ports: &Ports, install: &Install, dest: &Path, err: &mut dyn W
     };
     follow_ups.run();
     follow_ups.failed
+}
+
+/// The argv of the installed `cpd` that is the detached restart waiter (the install hands off to it when the old engine
+/// still holds `locks/watch.lock` after `lock_wait`). The command detaches itself and returns at once.
+pub(super) const WAITER_ARGS: [&str; 2] = ["watch", "--ensure-when-free"];
+
+/// The longest the waiter waits for the lock: an hour, so a lock that never frees ends it.
+const WAITER_BOUND: Duration = Duration::from_secs(3600);
+
+/// Writes `run/cpd-install.json` as `{"status":<status>,"since":<now>}`.
+fn write_install_state(ports: &Ports, cpd_home: &CpdHome, status: &str) {
+    let _ = record_install_state(ports, cpd_home, status, None);
+}
+
+fn record_install_state(
+    ports: &Ports,
+    home: &CpdHome,
+    status: &str,
+    reason: Option<&str>,
+) -> Result<(), crate::error::CpdError> {
+    use time::format_description::well_known::Rfc3339;
+    let since = ports
+        .clock
+        .utc()
+        .to_offset(time::UtcOffset::UTC)
+        .format(&Rfc3339)
+        .unwrap_or_default();
+    let mut state = serde_json::json!({"status": status, "since": since});
+    if let Some(reason) = reason {
+        state["reason"] = reason.into();
+    }
+    std::fs::create_dir_all(home.run_dir())
+        .and_then(|()| {
+            crate::atomic::write_atomic(
+                &home.run_dir().join("cpd-install.json"),
+                format!("{state}\n"),
+            )
+        })
+        .map_err(|e| {
+            crate::error::CpdError::new(
+                crate::error::ErrorCode::StoreFailed,
+                format!("Cannot record install state: {e}"),
+            )
+        })
+}
+
+/// Waits for the engine lock, starts the replacement once, and records the final result.
+pub fn restart_waiter(
+    ports: &Ports,
+    cpd_home: &CpdHome,
+    dest: &Path,
+) -> Result<(), crate::error::CpdError> {
+    use crate::error::{CpdError, ErrorCode};
+    let result = (|| {
+        let lock = cpd_home.watch_lock();
+        std::fs::create_dir_all(lock.parent().expect("watch lock has a parent")).map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot create engine lock directory: {e}"),
+            )
+        })?;
+        let mut waited = Duration::ZERO;
+        loop {
+            if FollowUps::lock_free(&lock).map_err(|e| {
+                CpdError::new(
+                    ErrorCode::StoreFailed,
+                    format!("Cannot probe engine lock: {e}"),
+                )
+            })? {
+                break;
+            }
+            if waited >= WAITER_BOUND {
+                return Err(CpdError::new(
+                    ErrorCode::SetupFailed,
+                    "Restart waiter timed out waiting for the engine lock.",
+                ));
+            }
+            ports.clock.sleep(LOCK_STEP);
+            waited += LOCK_STEP;
+        }
+        let mut cmd = Command::new(dest);
+        cmd.args(["watch", "--ensure"])
+            .env("CPD_HOME", cpd_home.root());
+        let ensured = done(ports.runner.output(&mut cmd, "cpd", NO_DEADLINE));
+        if !ensured.ok() {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!(
+                    "Restart waiter: watch --ensure failed (exit {}): {}",
+                    ensured.code,
+                    ensured.text()
+                ),
+            ));
+        }
+        record_install_state(ports, cpd_home, "ok", None)
+    })();
+    if let Err(error) = &result {
+        let _ = record_install_state(ports, cpd_home, "failed", Some(error.message()));
+    }
+    result
 }
 
 /// The last step: the tagger. It never fails the install; the next install retries the tag.
