@@ -9,6 +9,7 @@ import { createStore, useStore } from "../state/store.ts";
 import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
+import { EngineStatusBanner } from "./components/EngineStatusBanner.tsx";
 import { Empty } from "./components/empty.tsx";
 import { routeErrorTarget } from "./errorReport.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
@@ -210,7 +211,7 @@ export function App(props: AppProps): ReactElement {
   }, [cockpit.inbox, selectedSessionId]);
 
   return (
-    <>
+    <div data-part="app-layout" className="flex h-dvh min-h-0 flex-col">
     <BootstrapOverlay />
     {reportSent ? (
       <div role="status" className="fixed right-4 bottom-8 z-50 rounded-lg border bg-card px-4 py-3 shadow-lg">
@@ -220,6 +221,16 @@ export function App(props: AppProps): ReactElement {
         </Button>
       </div>
     ) : null}
+    {cockpit.inbox === null || cockpit.inbox.engineRunning ? null : (
+      <div data-part="engine-banner-row" className="shrink-0 px-2 py-1">
+        <EngineStatusBanner
+          engineRunning={cockpit.inbox.engineRunning}
+          engineDownSince={cockpit.inbox.engineDownSince ?? null}
+          engineRestartReason={cockpit.inbox.engineRestartReason ?? null}
+          now={new Date()}
+        />
+      </div>
+    )}
     {shownError === null ? null : (
       <div
         data-part="cockpit-error-toast"
@@ -347,6 +358,6 @@ export function App(props: AppProps): ReactElement {
       <HealthBeacon live={live} root={healthRoot} errors={errors ?? noErrors} onHealthy={onHealthy} />
     )}
     <span ref={sentinel} hidden />
-    </>
+    </div>
   );
 }
