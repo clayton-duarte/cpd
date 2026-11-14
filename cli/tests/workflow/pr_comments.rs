@@ -308,8 +308,9 @@ fn an_item_that_closes_is_dropped_from_the_list_and_tells_nothing() {
     // T1 was resolved on GitHub.
     let out = poll_with(&fx, "U2", vec![open_thread("T2", "C2")]);
 
-    assert_eq!(out["feedback"], json!([]));
-    assert_eq!(fx.events("pr-feedback").len(), 1, "closing tells nothing");
+    // pro-d588 (contract §7.6 "Wake when feedback is open"): the set changed and T2 is still open, so the Lead is woken again.
+    assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!(fx.events("pr-feedback").len(), 2, "T2 is still open");
     assert_eq!(stored_ids(&fx), ["T2"]);
     assert_eq!(stored(&fx, 812).unwrap().0.as_deref(), Some("U2"));
 }

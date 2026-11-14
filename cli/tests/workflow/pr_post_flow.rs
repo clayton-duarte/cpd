@@ -206,7 +206,8 @@ fn a_ready_pr_with_an_open_bot_comment_is_not_told_ready_to_post() {
         None,
         vec![thread("T1", "review-bot[bot]")],
     );
-    assert_eq!(reasons(&fx), told(&[&["comments"]]));
+    // pro-d588: the moved pull request with its bot thread still open wakes the Lead again, for comments; it is never ready_to_post.
+    assert_eq!(reasons(&fx), told(&[&["comments"], &["comments"]]));
 }
 
 #[test]
