@@ -28,7 +28,7 @@ use crate::ports::Ports;
 
 pub use def::{HookCommand, Pipeline, parse_value};
 pub use exec::is_withheld;
-pub use template::{shell_escape, uses as template_uses};
+pub use template::{render as render_template, shell_escape, uses as template_uses};
 
 /// Why a hook could not be judged (contract §7.3, the last row of the result table).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,6 +85,8 @@ pub struct HookResult {
     /// The last 60 lines of the output; `None` when no command ran (no file, no
     /// table, or `hook_invalid`), so a caller's `check_tail` stays null.
     pub tail: Option<String>,
+    /// What the commands wrote to stdout alone; empty when none ran.
+    pub stdout: String,
 }
 
 /// The other branch of the operation a hook runs for: `base` for `pre-start`
@@ -209,6 +211,7 @@ fn run_with_branch(
         return Ok(HookResult {
             outcome: HookOutcome::Passed,
             tail: None,
+            stdout: String::new(),
         });
     }
 
@@ -230,6 +233,7 @@ fn run_with_branch(
                     return Ok(HookResult {
                         outcome: HookOutcome::Error(HookError::Invalid(why)),
                         tail: None,
+                        stdout: String::new(),
                     });
                 }
             };
@@ -279,6 +283,7 @@ fn run_rendered(
             return HookResult {
                 outcome: HookOutcome::Error(HookError::Io(why)),
                 tail: None,
+                stdout: String::new(),
             };
         }
     };
@@ -312,7 +317,11 @@ fn run_rendered(
         (Some(exec::Ended::NotStarted(why)), _) => HookOutcome::Error(HookError::Io(why)),
         (None, Err(e)) => HookOutcome::Error(e),
     };
-    HookResult { outcome, tail }
+    HookResult {
+        outcome,
+        tail,
+        stdout: String::from_utf8_lossy(&done.stdout).into_owned(),
+    }
 }
 
 /// One command of the repo's `[tests]` (contract §7.7), run as a hook is (§7.3): rendered with the hook's variables
@@ -341,6 +350,7 @@ pub fn run_command(
             return Ok(HookResult {
                 outcome: HookOutcome::Error(HookError::Invalid(why)),
                 tail: None,
+                stdout: String::new(),
             });
         }
     };
@@ -358,6 +368,23 @@ pub fn run_command(
         log,
         mode,
     ))
+}
+
+/// The template variables a `[test-commands]` command renders with (as [`run_command`]'s, before `extra`).
+pub fn command_variables(
+    worktree: &Path,
+    operation: &Operation<'_>,
+) -> Result<Map<String, Value>, CpdError> {
+    let cwd = worktree
+        .canonicalize()
+        .unwrap_or_else(|_| worktree.to_path_buf());
+    variables(
+        &Ports::current(),
+        Hook::PreCommit,
+        &cwd,
+        None,
+        Some(operation),
+    )
 }
 
 /// The template variables of contract §7.3, as worktrunk defines them; also the

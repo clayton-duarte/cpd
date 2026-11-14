@@ -62,6 +62,7 @@ describe("connection", () => {
     transport.sent.length = 0;
     connection.selectSession("s2");
     expect(transport.sent).toEqual([]);
+    transport.emitMessage({ type: "session.attached", sessionId: "s2", capabilities: {}, meta: {} });
     expect(connection.submit({ text: "hi", images: [], whenBusy: "followUp" })).toBe("id1");
     expect(transport.sent).toEqual([
       { type: "session.submit", sessionId: "s2", clientSubmissionId: "id1", text: "hi", images: [], whenBusy: "followUp" },
@@ -375,34 +376,104 @@ describe("connection optimistic action", () => {
   });
 });
 
-it("interrupts multiple unconfirmed actions without replay and accepts a later confirmation once", () => {
-  const transport = new Fake(), scheduler = new FakeScheduler(), store = createStore();
-  const connection = createConnection({ transport, scheduler, store });
-  connection.start(); transport.emitStatus("open");
-  const first = connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#1" });
-  const second = connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#2" });
-  transport.emitStatus("closed");
-  const interrupted = store.getState();
-  scheduler.advance(500); transport.emitStatus("open");
-  transport.emitMessage({ type: "cockpit.snapshot", tree: { contexts: [], cursor: 1 }, plan: null,
-    inbox: { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 1 } });
-  expect(interrupted.pendingActionIds).toEqual([]);
-  expect(interrupted.completedActionIds).toEqual([]);
-  expect(interrupted.lastError?.message).toMatch(/outcome.*unknown/i);
-  expect(store.getState().pendingActionIds).toEqual([]);
-  expect(transport.sent.filter((m) => (m as {type:string}).type === "cockpit.action")).toHaveLength(2);
-  transport.emitMessage({ type: "action.result", actionId: first, ok: true, output: {} });
-  transport.emitMessage({ type: "action.result", actionId: first, ok: true, output: {} });
-  expect(store.getState().completedActionIds).toEqual([first]);
-  expect(store.getState().completedActionIds).not.toContain(second);
-  connection.close();
+describe("connection outbox", () => {
+  it("a submit while the connection is not open is queued and sent once after reopen", async () => {
+    const { transport, connection } = setup();
+    connection.start();
+    transport.emitStatus("open");
+    connection.selectSession("s1");
+    transport.emitStatus("closed");
+    transport.sent.length = 0;
+    const id = connection.submit({ text: "hi", images: [], whenBusy: "queue" } as never);
+    expect(transport.sent).toEqual([]);
+    expect(connection.outbox.list()).toMatchObject([{ id, kind: "submit", state: "queued" }]);
+    transport.emitStatus("open");
+    await Promise.resolve();
+    expect(transport.sent.some((m) => (m as { type: string }).type === "session.submit")).toBe(false);
+    transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities: {}, meta: {} });
+    const submits = transport.sent.filter((m) => (m as { type: string }).type === "session.submit");
+    expect(submits).toEqual([{ type: "session.submit", sessionId: "s1", clientSubmissionId: id, text: "hi", images: [], whenBusy: "queue" }]);
+    transport.emitMessage({ type: "session.submitAck", sessionId: "s1", clientSubmissionId: id, queued: false });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(connection.outbox.list()).toEqual([]);
+  });
+
+  it("interrupts multiple unconfirmed actions without replay and accepts a later confirmation once", () => {
+    const transport = new Fake(), scheduler = new FakeScheduler(), store = createStore();
+    const connection = createConnection({ transport, scheduler, store });
+    connection.start(); transport.emitStatus("open");
+    const first = connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#1" });
+    const second = connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#2" });
+    transport.emitStatus("closed");
+    const interrupted = store.getState();
+    scheduler.advance(500); transport.emitStatus("open");
+    transport.emitMessage({ type: "cockpit.snapshot", tree: { contexts: [], cursor: 1 }, plan: null,
+      inbox: { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 1 } });
+    expect(interrupted.pendingActionIds).toEqual([]);
+    expect(interrupted.completedActionIds).toEqual([]);
+    expect(interrupted.lastError?.message).toMatch(/outcome.*unknown/i);
+    expect(store.getState().pendingActionIds).toEqual([]);
+    expect(transport.sent.filter((m) => (m as {type:string}).type === "cockpit.action")).toHaveLength(2);
+    transport.emitMessage({ type: "action.result", actionId: first, ok: true, output: {} });
+    transport.emitMessage({ type: "action.result", actionId: first, ok: true, output: {} });
+    expect(store.getState().completedActionIds).toEqual([first]);
+    expect(store.getState().completedActionIds).not.toContain(second);
+    connection.close();
+  });
+
+  it("a synchronous failed action send retires its pending and optimistic state", () => {
+    const { connection, transport, store } = setup();
+    connection.start(); transport.emitStatus("open");
+    transport.send = () => { throw new Error("transport is not open"); };
+    expect(() => connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#1" })).toThrow("transport is not open");
+    expect(store.getState().pendingActionIds).toEqual([]);
+    expect(store.getState().completedActionIds).toEqual([]);
+  });
+
+  it("a failed dialog response marks its outbox entry failed with the error", async () => {
+    const { transport, store, connection } = setup();
+    connection.start(); transport.emitStatus("open");
+    connection.selectSession("s1");
+    transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities: {}, meta: {} });
+    connection.respond("d1", { method: "ask_user_question", outcome: "cancelled" } as never);
+    await Promise.resolve();
+    transport.emitMessage({ type: "session.error", sessionId: "s1", clientSubmissionId: "d1", error: { code: "internal", message: "pi down" } });
+    await new Promise<void>((r) => queueMicrotask(r));
+    await new Promise<void>((r) => queueMicrotask(r));
+    expect(connection.outbox.list()).toMatchObject([{ id: "d1", kind: "respond", state: "failed", error: "pi down" }]);
+    expect(store.getState().session).not.toBeUndefined();
+  });
+
+  describe("default ids without crypto.randomUUID", () => {
+    const ids = (c: unknown, now = () => 5) => {
+      const transport = new Fake();
+      const connection = createConnection({ transport, scheduler: new FakeScheduler(), store: createStore(), idEnv: { crypto: c as never, now, random: () => 0.5 } });
+      connection.start(); transport.emitStatus("open");
+      connection.selectSession("s1");
+      return [connection.submit({ text: "a", images: [], whenBusy: "followUp" }), connection.submit({ text: "b", images: [], whenBusy: "followUp" })];
+    };
+    it("uses randomUUID when present", () => {
+      expect(ids({ randomUUID: () => "u" })[0]).toBe("u");
+    });
+    it("falls back to a getRandomValues UUIDv4", () => {
+      const [a] = ids({ getRandomValues: (b: Uint8Array) => { b.fill(0xff); return b; } });
+      expect(a).toBe("ffffffff-ffff-4fff-bfff-ffffffffffff");
+    });
+    it("falls back to a unique time+counter+random string without crypto", () => {
+      const [a, b] = ids(undefined);
+      expect(a).not.toBe(b);
+      expect(a).toMatch(/^[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/);
+    });
+  });
 });
 
-it("a synchronous failed action send retires its pending and optimistic state", () => {
-  const { connection, transport, store } = setup();
-  connection.start(); transport.emitStatus("open");
-  transport.send = () => { throw new Error("transport is not open"); };
-  expect(() => connection.action({ kind: "pr.merge", planId: "p1", pull: "o/r#1" })).toThrow("transport is not open");
-  expect(store.getState().pendingActionIds).toEqual([]);
-  expect(store.getState().completedActionIds).toEqual([]);
+it("default request IDs do not collide between page instances", () => {
+  const make = () => createConnection({ transport: new Fake(), scheduler: new FakeScheduler(), store: createStore() });
+  const first = make(), second = make();
+  const a = first.action({ kind: "inbox.dismiss", itemId: 1 });
+  const b = second.action({ kind: "inbox.dismiss", itemId: 1 });
+  expect(a).not.toBe(b);
+  first.close(); second.close();
 });

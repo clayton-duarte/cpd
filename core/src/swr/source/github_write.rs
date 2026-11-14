@@ -45,9 +45,17 @@ pub fn enqueue(
     now: OffsetDateTime,
     target: &str,
     op_kind: &str,
-    vars: Value,
+    mut vars: Value,
     patch: Option<Value>,
 ) -> Result<i64, CpdError> {
+    // Execution metadata survives polling, but does not change the logical reply identity.
+    let context = if op_kind == "reply" {
+        vars.as_object_mut()
+            .and_then(|v| v.remove("resolve_uncached"))
+            .map(|resolve| json!({"resolve_uncached": resolve}))
+    } else {
+        None
+    };
     let coalesce = match coalesce_of(op_kind) {
         Coalesce::Dedupe(_) => Coalesce::Dedupe(vars.to_string()),
         other => other,
@@ -61,7 +69,7 @@ pub fn enqueue(
             op_kind: op_kind.into(),
             vars,
             patch,
-            context: None,
+            context,
         },
         coalesce,
     )
@@ -274,10 +282,19 @@ impl GithubSource {
         let Some((kind, repo, number)) = target(&m.target_key) else {
             return failed(format!("{:?} is not a github target.", m.target_key));
         };
-        let vars: Value = match serde_json::from_str(&m.vars_json) {
+        let mut vars: Value = match serde_json::from_str(&m.vars_json) {
             Ok(v) => v,
             Err(e) => return failed(format!("The vars of mutation {} are not JSON: {e}.", m.id)),
         };
+        if m.op_kind == "reply"
+            && let Some(context) = m
+                .context_json
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            && let Some(resolve) = context.get("resolve_uncached")
+        {
+            vars["resolve_uncached"] = resolve.clone();
+        }
         let ports = cx.ports.clone();
         let runner = &*ports.runner;
         let cwd = cx.home.root().to_path_buf();
@@ -301,22 +318,6 @@ impl GithubSource {
                     Ok(None) => return self.wait_for_repo(cx, repo),
                     Err(e) => return retry(&e),
                 };
-                // The up-to-date re-check (commands.md §9.10): a head that no longer contains the default branch is
-                // not merged. The intent stays armed and the Workflow's update Job is queued.
-                match uptodate(cx, runner, cwd, repo, number, &head) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        if let Err(e) =
-                            crate::pr::poll::arm_for_behind_head(cx.store, cx.home, repo, number)
-                        {
-                            return failed(e.message());
-                        }
-                        // Handled: the update Job is queued and the intent stays armed; no error Event.
-                        // Not Done: the merge did not run; the drain re-checks the head after RETRY.
-                        return ExecOutcome::Retry { after: RETRY };
-                    }
-                    Err(e) => return retry(&e),
-                }
                 match gh::merge_pr(runner, cwd, repo, number, method, &head) {
                     Ok(()) => ExecOutcome::Done,
                     Err(e) => failed(refusal(&e)),
@@ -521,6 +522,17 @@ impl GithubSource {
             vars["to"].as_str().unwrap_or_default(),
             vars["body"].as_str().unwrap_or_default(),
         );
+        if vars["resolve_uncached"] == true {
+            return gh::reply_to_uncached(
+                runner,
+                cwd,
+                repo,
+                number,
+                to,
+                &format!("{body}\n\n{MARKER}"),
+            )
+            .map_or_else(|e| retry(&e), |()| ExecOutcome::Done);
+        }
         let feedback: Result<Option<String>, CpdError> = cx.store.read(|c| {
             Ok(c.query_row(
                 "SELECT feedback FROM pull_requests WHERE repo = ?1 AND number = ?2",
@@ -532,7 +544,17 @@ impl GithubSource {
         });
         let items: Vec<crate::pr::comments::Item> = match feedback {
             Ok(Some(text)) => serde_json::from_str(&text).unwrap_or_default(),
-            Ok(None) => Vec::new(),
+            Ok(None) => {
+                return gh::reply_to_uncached(
+                    runner,
+                    cwd,
+                    repo,
+                    number,
+                    to,
+                    &format!("{body}\n\n{MARKER}"),
+                )
+                .map_or_else(|e| retry(&e), |()| ExecOutcome::Done);
+            }
             Err(e) => return failed(e.message()),
         };
         // The item is gone from the raw feedback: someone answered it already.
@@ -555,34 +577,6 @@ impl GithubSource {
         };
         sent.map_or_else(|e| retry(&e), |_| ExecOutcome::Done)
     }
-}
-
-/// Whether the merge op's `head` still contains the default branch's head (commands.md §9.10): `true` when the pull
-/// request's `base_ref` is not its default branch (nothing to compare) or the fresh compare says it does. The compare
-/// is a read through `crate::pr::gh` (the module `pr` owns); a failure is the caller's to retry.
-fn uptodate(
-    cx: &mut Cx<'_>,
-    runner: &dyn crate::host::runner::Runner,
-    cwd: &Path,
-    repo: &str,
-    number: i64,
-    head: &str,
-) -> Result<bool, CpdError> {
-    let row: Option<(Option<String>, Option<String>)> = cx.store.read(|c| {
-        Ok(c.query_row(
-            "SELECT base_ref, default_branch FROM pull_requests WHERE repo = ?1 AND number = ?2",
-            rusqlite::params![repo, number],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?)
-    })?;
-    let Some((Some(base), Some(default))) = row else {
-        return Ok(true);
-    };
-    if base != default {
-        return Ok(true);
-    }
-    crate::pr::poll::head_contains_base(runner, cwd, repo, &default, head)
 }
 
 /// GitHub's refusal text of a failed write: its stderr when it printed one.

@@ -51,6 +51,8 @@ mod query_tests;
 #[cfg(test)]
 mod rate_limit_tests;
 #[cfg(test)]
+mod reply_tests;
+#[cfg(test)]
 mod settings_cache_tests;
 
 pub mod approval;
@@ -412,6 +414,89 @@ fn gate_hooks<'a>(
     }
 }
 
+/// Check the stored baseline for a refactor at every local workflow Gate.
+fn coverage_gate(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    sha: &str,
+) -> Result<(), CpdError> {
+    if workflow.shape != "refactor" || policy.coverage_commands.measure.is_none() {
+        return Ok(());
+    }
+    let mut gate_env = Env::open_with(&env.ports)?;
+    coverage_check(&mut gate_env.store, policy, plan, workflow, sha)
+}
+
+/// The stored baseline of a refactor against the coverage measured at `sha`; nothing when the policy measures none.
+pub(crate) fn coverage_check(
+    store: &mut crate::store::Store,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    sha: &str,
+) -> Result<(), CpdError> {
+    use rusqlite::OptionalExtension;
+    if workflow.shape != "refactor" {
+        return Ok(());
+    }
+    let Some(command) = &policy.coverage_commands.measure else {
+        return Ok(());
+    };
+    let stored: Option<(String, String)> = store.read(|conn| Ok(conn.query_row(
+        "SELECT base_sha, report FROM refactor_coverage_baselines WHERE plan = ?1 AND workflow = ?2",
+        [plan.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))
+    ).optional()?))?;
+    let (mut base, report) = stored.ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::CoverageBelowBaseline,
+            "Coverage baseline was not captured at workflow creation.",
+        )
+    })?;
+    let mut baseline: crate::workflow::CoverageReport = serde_json::from_str(&report)
+        .map_err(|e| CpdError::bad_row(format!("invalid coverage baseline: {e}")))?;
+    let repo = std::path::Path::new(&workflow.repo);
+    // Refresh only after an amended base is incorporated in the refactor branch.
+    let base_ref = crate::git::run::run(repo, &["rev-parse", "--verify", &workflow.base])?;
+    if base_ref.code == 0 {
+        let candidate = base_ref.stdout.trim();
+        let descendant =
+            crate::git::run::run(repo, &["merge-base", "--is-ancestor", &base, candidate])?;
+        let incorporated =
+            crate::git::run::run(repo, &["merge-base", "--is-ancestor", candidate, sha])?;
+        if !matches!(descendant.code, 0 | 1) || !matches!(incorporated.code, 0 | 1) {
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                "Could not check coverage baseline ancestry.",
+            ));
+        }
+        if candidate != base && descendant.code == 0 && incorporated.code == 0 {
+            baseline =
+                crate::workflow::measure_coverage(repo, plan, &workflow.key, candidate, command)?;
+            let json =
+                serde_json::to_string(&baseline).map_err(|e| CpdError::bad_row(e.to_string()))?;
+            let previous = base.clone();
+            store.write("coverage check", |tx| {
+                let changed = tx.execute(
+                    "UPDATE refactor_coverage_baselines SET base_sha = ?3, report = ?4 WHERE plan = ?1 AND workflow = ?2 AND base_sha = ?5",
+                    rusqlite::params![plan.as_str(), workflow.key.as_str(), candidate, json, previous],
+                )?;
+                if changed != 1 {
+                    return Err(CpdError::new(ErrorCode::CasLost, "Coverage baseline changed during refresh; retry."));
+                }
+                Ok(())
+            })?;
+            base = candidate.to_owned();
+        }
+    }
+    let current = crate::workflow::measure_coverage(repo, plan, &workflow.key, sha, command)?;
+    let touched = crate::git::tamper::changed_paths(repo, &base, sha)?;
+    let removed = crate::workflow::absent_paths(repo, sha, &touched)?;
+    let renamed = crate::workflow::renamed_paths(repo, &base, sha)?;
+    baseline.check(&current, &touched, &removed, &renamed)
+}
+
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
 fn gate(
     env: &Env,
@@ -422,7 +507,24 @@ fn gate(
     sha: &str,
     again: &str,
 ) -> Result<(), CpdError> {
-    gate_in(env, policy, plan, workflow, worktree, sha, false, again)
+    gate_checked(
+        env, policy, plan, workflow, worktree, sha, false, again, true,
+    )
+}
+
+/// [`gate`] for a caller that already measured coverage at `sha` (`pr push`): coverage is measured once per push.
+fn gate_measured(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    worktree: &std::path::Path,
+    sha: &str,
+    again: &str,
+) -> Result<(), CpdError> {
+    gate_checked(
+        env, policy, plan, workflow, worktree, sha, false, again, false,
+    )
 }
 
 /// The Gate on `sha` in `worktree`, which is already at the gated tree (contract §7.6): `pre-start`
@@ -440,6 +542,52 @@ fn gate_in(
     pre_start: bool,
     again: &str,
 ) -> Result<(), CpdError> {
+    gate_checked(
+        env, policy, plan, workflow, worktree, sha, pre_start, again, true,
+    )
+}
+
+// `measure`: whether the refactor coverage is measured here (false when the caller did it).
+#[allow(clippy::too_many_arguments)]
+fn gate_checked(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    worktree: &std::path::Path,
+    sha: &str,
+    pre_start: bool,
+    again: &str,
+    measure: bool,
+) -> Result<(), CpdError> {
+    // Before anything is published (a rebase's included): a refactor's own commits change no test, the base's amended ones excepted.
+    {
+        let mut guard_env = Env::open_with(&env.ports)?;
+        let repo = std::path::Path::new(&workflow.repo);
+        // The authoritative bases: the local base and the fetched remote base a rebase goes onto, whose amended tests are inherited.
+        let remote = format!(
+            "origin/{}",
+            workflow.head_ref.as_deref().unwrap_or(&workflow.base)
+        );
+        let mut allowed = vec![workflow.base.as_str()];
+        if git::run::rev_parse(repo, &format!("refs/remotes/{remote}")).is_ok() {
+            allowed.push(remote.as_str());
+        }
+        guard_env.store.read(|conn| {
+            crate::workflow::guard_refactor_tests_allowing(
+                conn,
+                plan,
+                workflow.key.as_str(),
+                std::path::Path::new(&workflow.repo),
+                &workflow.base,
+                sha,
+                &allowed,
+            )
+        })?;
+    }
+    if measure {
+        coverage_gate(env, policy, plan, workflow, sha)?;
+    }
     if policy.gate.workflow != Gate::Local {
         return Ok(());
     }

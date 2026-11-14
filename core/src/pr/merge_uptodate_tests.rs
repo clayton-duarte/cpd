@@ -1,13 +1,9 @@
-//! The up-to-date merge gate: `pr merge` refuses a head that does not contain the current default branch's head,
-//! queues the Workflow's update Job, and leaves a head that does contain it on the normal merge path. In process on
+//! `pr merge` does not gate on up-to-dateness (b79): a clean head behind the default branch merges like any other. In process on
 //! the janitor's `Rig`: `gh` is a scripted route on the `FakeRunner`, the store is the rig's temp database. No process,
 //! no network, no real git.
 
 use std::sync::Arc;
 
-use rusqlite::OptionalExtension;
-
-use crate::error::ErrorCode;
 use crate::host::runner::{Call, Handler, Reply};
 use crate::janitor_tests::Rig;
 use crate::ports::Ports;
@@ -73,88 +69,35 @@ fn merge_ops(store: &mut Store) -> i64 {
 }
 
 #[test]
-fn a_behind_head_is_refused_with_head_behind_main() {
+fn a_behind_head_is_not_refused() {
     let rig = rig("behind");
-    let err = Ports::scope(&rig.fakes.ports, || {
+    let out = Ports::scope(&rig.fakes.ports, || {
         super::merge(&rig.fakes.ports, merge_args())
     })
-    .expect_err("a head behind main is refused");
-    assert_eq!(
-        err.code(),
-        ErrorCode::HeadBehindMain,
-        "the refusal is head_behind_main: {}",
-        err.message()
-    );
+    .expect("a clean head behind main is not refused");
+    assert!(matches!(out, crate::output::Output::Success(_)));
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    assert_eq!(merge_ops(&mut store), 0, "no merge op is enqueued");
-}
-
-#[test]
-fn a_behind_head_queues_the_update_job() {
-    let rig = rig("behind");
-    let err = Ports::scope(&rig.fakes.ports, || {
-        super::merge(&rig.fakes.ports, merge_args())
-    })
-    .expect_err("a head behind main is refused");
-    assert_eq!(err.code(), ErrorCode::HeadBehindMain);
-
-    let mut store = Store::open(&rig.home, 5000).unwrap();
-    let jobs: Vec<String> = store
-        .read(|c| {
-            let mut stmt =
-                c.prepare("SELECT key FROM jobs WHERE plan = 'pay' AND kind = 'update'")?;
-            Ok(stmt
-                .query_map([], |r| r.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .unwrap();
-    assert_eq!(jobs.len(), 1, "the Workflow's update Job is queued");
-    let reason: Option<String> = store
+    assert_eq!(merge_ops(&mut store), 1, "the merge op is enqueued");
+    let updates: i64 = store
         .read(|c| {
             Ok(c.query_row(
-                "SELECT json_extract(data, '$.reason') FROM events WHERE kind = 'job-added' AND plan = 'pay' ORDER BY id DESC LIMIT 1",
+                "SELECT COUNT(*) FROM jobs WHERE plan = 'pay' AND kind = 'update'",
                 [],
                 |r| r.get(0),
-            )
-            .optional()?)
+            )?)
         })
         .unwrap();
-    assert_eq!(
-        reason.as_deref(),
-        Some("behind"),
-        "the Job's cause is behind"
-    );
+    assert_eq!(updates, 0, "no update Job is queued");
 }
 
 #[test]
 fn a_contained_head_is_not_refused() {
     let rig = rig("ahead");
-    let cwd = rig.home.root();
-    let contained = Ports::scope(&rig.fakes.ports, || {
-        crate::pr::gh::head_contains_base(&*rig.fakes.runner, cwd, "acme/pay", "main", HEAD)
-    })
-    .expect("the containment read succeeds");
-    assert!(contained, "the head contains main");
-
     let out = Ports::scope(&rig.fakes.ports, || {
         super::merge(&rig.fakes.ports, merge_args())
     })
     .expect("a contained head is not refused");
-    assert!(
-        matches!(out, crate::output::Output::Success(_)),
-        "the merge path is unchanged"
-    );
-
+    assert!(matches!(out, crate::output::Output::Success(_)));
     let mut store = Store::open(&rig.home, 5000).unwrap();
     assert_eq!(merge_ops(&mut store), 1, "the normal merge path enqueues");
-    let calls = rig.fakes.runner.calls();
-    assert!(
-        calls.iter().any(|c| {
-            c.program == "gh"
-                && c.args
-                    .iter()
-                    .any(|a| a.starts_with("repos/acme/pay/compare/main..."))
-        }),
-        "the merge gate read the containment comparison"
-    );
 }

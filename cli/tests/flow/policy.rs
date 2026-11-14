@@ -119,6 +119,7 @@ fn the_output_has_exactly_the_documented_fields() {
         domains,
         [
             "code",
+            "coverage-commands",
             "deploy",
             "deploys",
             "gate",

@@ -430,7 +430,7 @@ impl After {
             .collect();
         let then = move || {
             let mut out = Vec::new();
-            cpd::run_with(&ports, argv.clone(), &mut out);
+            let _ = cpd::run_with(&ports, argv.clone(), &mut out);
             let out: Value = serde_json::from_slice(&out).expect("cpd printed JSON");
             assert_eq!(out["ok"], true, "{out}");
         };

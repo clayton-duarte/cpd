@@ -252,6 +252,42 @@ impl HasText for Option<RepoTests> {
     }
 }
 
+/// Optional repo command producing a JSON coverage report.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageCommands {
+    pub measure: Option<String>,
+}
+
+impl HasText for CoverageCommands {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageCommandsSet {
+    pub measure: Option<String>,
+}
+
+impl Set for CoverageCommandsSet {
+    type Value = CoverageCommands;
+    fn fill(&self, _base: &CoverageCommands) -> (CoverageCommands, Vec<&'static str>) {
+        (
+            CoverageCommands {
+                measure: self.measure.clone(),
+            },
+            Vec::new(),
+        )
+    }
+    fn complete(&self) -> Option<CoverageCommands> {
+        Some(CoverageCommands {
+            measure: self.measure.clone(),
+        })
+    }
+}
+
 /// The `protected` domain (repo scope only, no `text`): the Workflow's protected paths of §7.5.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -404,6 +440,7 @@ pub struct TestCommandsSet {
     pub build: Option<String>,
     pub run: Option<String>,
     pub list: Option<String>,
+    pub related: Option<String>,
 }
 
 impl TestCommandsSet {
@@ -411,7 +448,7 @@ impl TestCommandsSet {
     /// [`RepoTests::validate`] holds. The error is a sentence.
     pub fn commands(&self) -> Result<Option<RepoTests>, String> {
         let (build, run) = match (&self.build, &self.run) {
-            (None, None) if self.list.is_none() => return Ok(None),
+            (None, None) if self.list.is_none() && self.related.is_none() => return Ok(None),
             (Some(build), Some(run)) => (build, run),
             (None, _) => return Err("[test-commands] has no `build`".to_owned()),
             (_, None) => return Err("[test-commands] has no `run`".to_owned()),
@@ -420,6 +457,7 @@ impl TestCommandsSet {
             build: build.clone(),
             run: run.clone(),
             list: self.list.clone(),
+            related: self.related.clone(),
         };
         tests
             .validate()
@@ -1056,6 +1094,7 @@ domains! {
     model, Model, [], [Machine, Owner, Repo], Models, ModelSet;
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
+    coverage_commands = "coverage-commands", CoverageCommands, [], [Repo], CoverageCommands, CoverageCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
     generated, Generated, [], [Repo], Generated, GeneratedSet;
     resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;
