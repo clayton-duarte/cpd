@@ -245,8 +245,8 @@ fn gh_merge_enqueues_a_mutation_and_prints_queued() {
     assert_eq!(patch.as_ref().unwrap()["state"], "merging");
     assert_eq!(
         gh_calls(&rig),
-        [format!("api repos/acme/pay/compare/main...{HEAD}")],
-        "the enqueue reads the containment, and never writes"
+        Vec::<String>::new(),
+        "the enqueue makes no gh call: behind main is not read (b79)"
     );
 }
 
