@@ -84,14 +84,51 @@ pub fn post(
 /// review history (answered threads included) that is in `configured`, asks that bot once per head, and only when a push moved the head
 /// since the pass last saw the bot's review (`rereview_head`). The first sight of a head with a reviewer records it and asks nothing, so
 /// a bot that reviewed the head already is never asked about it. Reads only the store, so a poll that changed nothing posts nothing.
+#[cfg(test)]
 pub fn pass(
     store: &mut Store,
     now: OffsetDateTime,
     configured: &[String],
 ) -> Result<Vec<String>, CpdError> {
-    if configured.is_empty() {
-        return Ok(Vec::new());
-    }
+    pass_with(store, now, &mut |_, _, _| Ok(configured.to_vec()))
+}
+
+/// Each Workflow may override the machine's defaults, including an explicit empty list.
+pub fn pass_scoped(
+    store: &mut Store,
+    home: &crate::home::CpdHome,
+    now: OffsetDateTime,
+    defaults: &[String],
+) -> Result<Vec<String>, CpdError> {
+    pass_with(store, now, &mut |store, plan, workflow| {
+        let plan = crate::ids::PlanId::parse(plan)?;
+        let key = crate::ids::WorkflowKey::parse(workflow)?;
+        let policy = match store.read(|conn| super::policy_of_workflow(conn, home, &plan, &key)) {
+            Ok(policy) => policy,
+            // The poll reports unresolved policies per Workflow; one must not stop other re-review requests.
+            Err(error)
+                if matches!(
+                    error.code(),
+                    crate::error::ErrorCode::OwnerUnset
+                        | crate::error::ErrorCode::OwnerUnconfirmed
+                        | crate::error::ErrorCode::PolicyInvalid
+                ) =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(policy.pr.rereview_bots.unwrap_or_else(|| defaults.to_vec()))
+    })
+}
+
+type ScopedBots<'a> = dyn FnMut(&mut Store, &str, &str) -> Result<Vec<String>, CpdError> + 'a;
+
+fn pass_with(
+    store: &mut Store,
+    now: OffsetDateTime,
+    configured_for: &mut ScopedBots<'_>,
+) -> Result<Vec<String>, CpdError> {
     type Row = (
         String,
         String,
@@ -107,7 +144,9 @@ pub fn pass(
             "SELECT w.plan, w.key, r.repo, r.number, r.id, r.head_oid, r.rereview_head, r.reviewers FROM pull_requests r
              JOIN workflows w ON w.pull_request = r.id AND w.status = 'open'
              JOIN plans p ON p.id = w.plan AND p.archived_at IS NULL
-             WHERE r.state = 'open' AND r.head_oid IS NOT NULL AND r.reviewers IS NOT NULL",
+             WHERE r.state = 'open' AND r.head_oid IS NOT NULL AND r.reviewers IS NOT NULL
+               AND (json_array_length(CASE WHEN json_valid(r.open_threads) THEN r.open_threads ELSE '[]' END) > 0
+                    OR json_array_length(CASE WHEN json_valid(r.feedback) THEN r.feedback ELSE '[]' END) > 0)",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -128,6 +167,7 @@ pub fn pass(
     let mut asked = Vec::new();
     for (plan, workflow, repo, number, id, head_sha, seen, reviewers) in rows {
         let reviewers: Vec<String> = serde_json::from_str(&reviewers).map_err(CpdError::bad_row)?;
+        let configured = configured_for(store, &plan, &workflow)?;
         if !configured.iter().any(|bot| reviewers.contains(bot))
             || seen.as_deref() == Some(&head_sha)
         {
@@ -147,7 +187,7 @@ pub fn pass(
                     number,
                     head_sha: &head_sha,
                     reviewers: &reviewers,
-                    configured,
+                    configured: &configured,
                 },
             )?
         };

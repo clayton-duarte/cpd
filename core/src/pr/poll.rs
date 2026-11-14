@@ -381,7 +381,9 @@ fn poll_pass(
         }
         // The comments of the owned open pull requests whose `updatedAt` moved or whose stored feedback holds an open item (§7.6 step 3a): one call, before anything is
         // written, so that a failed read writes nothing.
-        let due = due_reads(&owned, &seen);
+        let mut due = due_reads(&owned, &seen);
+        env.store
+            .read(|conn| due_metadata(conn, &owned, &seen, &mut due))?;
         comment_calls = u32::from(!due.is_empty());
         reads = gh::read_comments(
             &*env.ports.runner,
@@ -555,7 +557,8 @@ fn poll_pass(
             }
             for listed in &seen {
                 match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
-                    Some(row) if row.holds(listed, read_of(&reads, listed))? => {
+                    Some(row) if row.holds(listed, read_of(&reads, listed))?
+                        && read_of(&reads, listed).map(|read| pulls::metadata_held(conn, row.id, read)).transpose()?.unwrap_or(true) => {
                         if listed.pr.state == PrState::Merged
                             && conn.query_row(
                                 "SELECT EXISTS (SELECT 1 FROM inbox_items WHERE kind = 'pr-ready' AND closed_at IS NULL AND subject = ?1)",
@@ -610,7 +613,7 @@ fn poll_pass(
     };
 
     // pro-d588: a bot with feedback on a head the engine has not asked about yet is asked to re-review it.
-    super::rereview::pass(&mut env.store, now, &env.config.pr.rereview_bots)?;
+    super::rereview::pass_scoped(&mut env.store, &env.home, now, &env.config.pr.rereview_bots)?;
     report_unresolved(env, &unresolved)?;
     let reopened = rebind_reopened(env)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
@@ -1546,6 +1549,31 @@ fn stored_thread_closed(row: &pulls::PullRequest, open_threads: &[String]) -> bo
 /// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved,
 /// whose stored feedback is NULL (a first read, so feedback is populated and Lead is woken), or
 /// whose stored feedback holds a review thread that is no longer open (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
+fn due_metadata(
+    conn: &rusqlite::Connection,
+    owned: &[Owned],
+    seen: &[Listed],
+    due: &mut Vec<(String, i64)>,
+) -> Result<(), CpdError> {
+    for (_, _, row) in owned {
+        if let Some(listed) = seen.iter().find(|l| {
+            l.pr.repo == row.repo && l.pr.number == row.number && l.pr.state == PrState::Open
+        }) {
+            let stored: Option<String> = conn.query_row(
+                "SELECT open_threads FROM pull_requests WHERE id = ?1",
+                [row.id],
+                |r| r.get(0),
+            )?;
+            let current = serde_json::to_string(&listed.pr.open_threads).unwrap();
+            let pair = (row.repo.clone(), row.number);
+            if stored.as_deref() != Some(&current) && !due.contains(&pair) {
+                due.push(pair);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn due_reads(
     owned: &[(PlanId, WorkflowKey, pulls::PullRequest)],
     seen: &[Listed],
@@ -1850,5 +1878,44 @@ mod due_reads_tests {
             due_reads(&[r.clone(), r], &[listed("2", PrState::Open)]),
             key()
         );
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    #[test]
+    fn resolving_an_answered_thread_is_due_and_dirty_without_an_updated_at_move() {
+        let mut rig = crate::janitor_tests::Rig::new();
+        rig.workflow("api", "open");
+        rig.sql("UPDATE pull_requests SET feedback = '[]', updated_at = 'U1', open_threads = '[\"T1\"]', reviewers = '[]' WHERE number = 801");
+        let mut store = Store::open(&rig.home, 5000).unwrap();
+        store
+            .read(|conn| {
+                let owned = pulls::owned_open(conn)?;
+                let row = &owned[0].2;
+                let listed = Listed {
+                    pr: row.polled()?,
+                    membership: row.membership(),
+                };
+                let mut due = due_reads(&owned, std::slice::from_ref(&listed));
+                assert!(
+                    due.is_empty(),
+                    "legacy feedback-only scheduling sees no change"
+                );
+                due_metadata(conn, &owned, &[listed], &mut due)?;
+                assert_eq!(due, [("acme/pay".to_owned(), 801)]);
+                let read = Read {
+                    repo: row.repo.clone(),
+                    number: row.number,
+                    updated_at: "U1".to_owned(),
+                    items: vec![],
+                    open_threads: vec![],
+                    reviewers: vec![],
+                };
+                assert!(!pulls::metadata_held(conn, row.id, &read)?);
+                Ok::<(), CpdError>(())
+            })
+            .unwrap();
     }
 }

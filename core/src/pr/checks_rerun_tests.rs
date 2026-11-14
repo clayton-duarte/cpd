@@ -319,7 +319,7 @@ fn ready_to_merge_requires_head_oid() {
     rig.workflow("api", "open");
     rig.sql(
         "UPDATE pull_requests SET state = 'open', draft = 0, merge_state = 'clean', base_ref = 'main',
-                default_branch = 'main', base_contained = 1, head_oid = NULL WHERE number = 801;",
+                default_branch = 'main', base_contained = 1, head_oid = NULL, open_threads = '[]' WHERE number = 801;",
     );
     let sql = format!(
         "SELECT {} FROM pull_requests p WHERE p.number = 801",

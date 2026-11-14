@@ -290,6 +290,14 @@ impl GithubSource {
         };
         crate::ports::Ports::scope(&ports, || match (kind, m.op_kind.as_str()) {
             ("pr", "merge") => {
+                match cx
+                    .store
+                    .read(|conn| crate::pr::pulls::unresolved_threads(conn, repo, number))
+                {
+                    Ok(0) => {}
+                    Ok(_) => return ExecOutcome::Retry { after: RETRY },
+                    Err(e) => return retry(&e),
+                }
                 let head = text("expected_head_oid");
                 let method = match merge_method(cx.store, repo) {
                     Ok(Some(Ok(method))) => method,

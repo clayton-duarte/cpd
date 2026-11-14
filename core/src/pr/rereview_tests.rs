@@ -144,7 +144,7 @@ fn rig(reviewers: &str, rereview_head: Option<&str>) -> (Rig, Store) {
     let mut rig = Rig::new();
     rig.workflow("api", "open");
     rig.sql(&format!(
-        "UPDATE pull_requests SET state = 'open', head_oid = 'new', feedback = '[]', reviewers = '{reviewers}', rereview_head = {} WHERE number = 801;",
+        "UPDATE pull_requests SET state = 'open', head_oid = 'new', feedback = '[]', open_threads = '[\"T1\"]', reviewers = '{reviewers}', rereview_head = {} WHERE number = 801;",
         rereview_head.map_or("NULL".to_owned(), |h| format!("'{h}'"))
     ));
     let store = Store::open(&rig.home, 5000).unwrap();
@@ -234,4 +234,58 @@ fn rereview_not_requested_for_head_bot_already_reviewed() {
     assert_eq!(pass_asks(&mut s), names(&[CODEX]));
     assert!(pass_asks(&mut s).is_empty());
     assert_eq!(comments(&mut s).len(), 1);
+}
+
+#[test]
+fn scoped_rereview_policy_can_disable_machine_defaults() {
+    let history = format!("[\"{CODEX}\"]");
+    let (rig, mut s) = rig(&history, Some("old"));
+    let path = rig.home.root().join("policy/acme/pay.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path.with_file_name("owner.toml"), "").unwrap();
+    std::fs::write(&path, "[pr]\nrereview_bots = []\n").unwrap();
+    let policy = s
+        .read(|conn| {
+            super::policy_of_workflow(
+                conn,
+                &rig.home,
+                &crate::ids::PlanId::parse("pay").unwrap(),
+                &crate::ids::WorkflowKey::parse("api").unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(policy.pr.rereview_bots, Some(vec![]));
+    assert!(
+        super::rereview::pass_scoped(&mut s, &rig.home, now(), &names(&CONFIGURED))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(comments(&mut s).is_empty());
+    std::fs::write(&path, format!("[pr]\nrereview_bots = [\"{CODEX}\"]\n")).unwrap();
+    assert_eq!(
+        super::rereview::pass_scoped(&mut s, &rig.home, now(), &[]).unwrap(),
+        names(&[CODEX])
+    );
+    assert_eq!(comments(&mut s).len(), 1);
+}
+
+#[test]
+fn resolved_feedback_does_not_request_rereview_on_later_pushes() {
+    let history = format!("[\"{CODEX}\"]");
+    let (rig, mut store) = rig(&history, Some("old"));
+    rig.sql("UPDATE pull_requests SET open_threads = '[]', feedback = '[]' WHERE number = 801");
+    assert!(pass_asks(&mut store).is_empty());
+    assert!(comments(&mut store).is_empty());
+}
+
+#[test]
+fn unresolved_scoped_policy_skips_rereview_without_failing_the_poll() {
+    let history = format!("[\"{CODEX}\"]");
+    let (rig, mut store) = rig(&history, Some("old"));
+    assert!(
+        super::rereview::pass_scoped(&mut store, &rig.home, now(), &names(&CONFIGURED))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(comments(&mut store).is_empty());
 }

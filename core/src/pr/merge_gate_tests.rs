@@ -131,3 +131,41 @@ fn open_thread_refuses_merge_green() {
         err.message()
     );
 }
+
+#[test]
+fn unread_review_threads_never_clear_merge_readiness() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = crate::home::CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
+    let mut store = crate::store::Store::open(&home, 5000).unwrap();
+    insert(&mut store, 99, "[]");
+    store
+        .write("unread", |tx| {
+            tx.execute(
+                "UPDATE pull_requests SET open_threads = NULL, feedback = NULL WHERE number = 99",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(!ready(&mut store, 99));
+    let error = store
+        .read(|conn| super::pulls::unresolved_threads(conn, "acme/pay", 99))
+        .unwrap_err();
+    assert_eq!(error.code(), crate::error::ErrorCode::ChecksNotGreen);
+    store
+        .write("read comments", |tx| {
+            tx.execute(
+                "UPDATE pull_requests SET open_threads = '[]' WHERE number = 99",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(ready(&mut store, 99));
+    assert_eq!(
+        store
+            .read(|conn| super::pulls::unresolved_threads(conn, "acme/pay", 99))
+            .unwrap(),
+        0
+    );
+}

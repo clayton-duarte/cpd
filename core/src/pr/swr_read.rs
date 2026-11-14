@@ -36,6 +36,14 @@ pub fn write_header(tx: &WriteTxn<'_>, node: &PollNode) -> Result<(), CpdError> 
             node.labels.to_string()
         ],
     )?;
+    let reviewers: Vec<String> = node.reviews["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["author"]["login"].as_str().map(str::to_owned))
+        .collect();
+    tx.execute("UPDATE pull_requests SET open_threads = ?3, reviewers = ?4 WHERE repo = ?1 AND number = ?2 AND (open_threads IS NOT ?3 OR reviewers IS NOT ?4)",
+        rusqlite::params![node.listed.pr.repo, node.listed.pr.number, serde_json::to_string(&node.listed.pr.open_threads).unwrap(), serde_json::to_string(&reviewers).unwrap()])?;
     Ok(())
 }
 

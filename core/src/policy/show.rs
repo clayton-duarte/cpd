@@ -284,6 +284,7 @@ pub(super) fn typed_keys(
                 (HUMAN_GATED_CONTEXTS, value(&pr.human_gated_contexts)),
                 (EXCUSED_LABELS, value(&pr.excused_labels)),
                 (REQUIRED_CHECKS, value(&pr.required_checks)),
+                ("pr.rereview_bots", value(&pr.rereview_bots)),
                 (JIRA_IN_PROGRESS, value(&pr.jira.in_progress)),
                 (JIRA_IN_REVIEW, value(&pr.jira.in_review)),
                 (JIRA_DONE, value(&pr.jira.done)),
