@@ -180,21 +180,20 @@ fn missing_tmux_session_reads_as_stopped() {
     // Tmux server has NO sessions and NO panes (the tmux session is missing / vanished).
     assert!(!tmux_has_cockpit(&w));
 
-    // When a Session has a pane recorded in a missing tmux session, liveness check / pane_gone
-    // must report and transition it to stopped with no pane.
+    // When the cockpit tmux session is missing / vanished, the session's pane is gone.
+    // Liveness and state reconciliation must read/report it as stopped with no pane.
     let row = w
         .store
         .read(|conn| super::row::load(conn, &crate::ids::SessionId::parse("working1").unwrap()))
         .unwrap();
 
     let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
-    let panes = tmux.list_panes().unwrap();
-    let found = row
-        .tmux_pane
-        .as_deref()
-        .and_then(|p| panes.iter().find(|pane| pane.pane.as_str() == p));
-    assert!(found.is_none(), "pane is missing in tmux");
+    let _panes = tmux.list_panes().unwrap();
+    let cockpit_missing = !tmux.has_session("cpd").unwrap();
+    assert!(cockpit_missing, "cockpit session is missing in tmux");
 
+    // Liveness checks if tmux session exists; if missing, reports stopped
+    let why = "cockpit tmux session is missing";
     let changed = w
         .store
         .write("liveness", |tx| {
@@ -203,13 +202,14 @@ fn missing_tmux_session_reads_as_stopped() {
                 &row.id,
                 row.state.as_str(),
                 row.tmux_pane.as_deref(),
-                "pane is gone",
+                why,
             )
         })
         .unwrap();
-    assert!(changed, "pane_gone recorded state change to stopped");
+    assert!(changed, "pane_gone transitioned working session to stopped");
 
-    // Liveness reports stopped: verify with session show or row load
+    // A session with a missing tmux session must read as stopped in the store and session show:
+    // even before a background E2 sweep or when queried directly, it must not read as working.
     let row_after = w
         .store
         .read(|conn| super::row::load(conn, &row.id))
@@ -217,27 +217,20 @@ fn missing_tmux_session_reads_as_stopped() {
     assert_eq!(row_after.state, super::row::State::Stopped);
     assert_eq!(row_after.tmux_pane, None);
 
-    // Furthermore, session show must report stopped
-    let out = try_cpd(&w, &["show", "working1"]).unwrap();
-    assert_eq!(out["session"]["state"], "stopped");
-
-    // But if we test an unreconciled session whose tmux session is missing,
-    // liveness / missing tmux session check reports it as stopped:
-    // Insert another session working2 that is marked 'working' with pane '%11'
+    // If a session in the store is working but its tmux session vanished,
+    // its effective liveness state must read as stopped:
     w.store
         .write("fixture", |tx| {
             tx.execute(
-                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner, tmux_pane)
-                 VALUES ('working2', 'lead', 'ctx', 'wpay', 'Working2', '/', 'O3', 'working', 't', 't', 'pi', '%11')",
+                "UPDATE sessions SET tmux_pane = '%20', state = 'working' WHERE id = 'working1'",
                 [],
             )?;
             Ok(())
         })
         .unwrap();
-    // Against a missing tmux session, liveness reports it stopped
-    let out2 = try_cpd(&w, &["show", "working2"]).unwrap();
+    let out = try_cpd(&w, &["show", "working1"]).unwrap();
     assert_eq!(
-        out2["session"]["state"], "stopped",
+        out["session"]["state"], "stopped",
         "missing tmux session reads as stopped"
     );
 }
