@@ -337,6 +337,8 @@ A Context and its records (§2.2, §4.6). The records live only in the database 
 
 ### 3.1 `context new`
 
+**Paired creation contract (air-d175).** Future Context creation pairs the Context with its Manager; future Plan creation pairs the Plan with its Lead (§4.1). Existing done Plans without a Lead are historical records: preserve them unchanged, with no repair or migration.
+
 ```
 cpd context new <id> --title <text> --owner <login> [--jira <key>]
 ```
