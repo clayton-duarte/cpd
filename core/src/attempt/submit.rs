@@ -316,6 +316,9 @@ fn run_checks(
     // an approval reaches a running Attempt).
     let touches = crate::job::guard::touches(job);
     let approved = crate::job::guard::approved_touches(job);
+    let waived = env
+        .store
+        .read(|conn| crate::job::approve::waived_untouched(conn, plan, key))?;
     let check = git::tamper::Touches {
         kind: &job.kind,
         touches: &touches,
@@ -335,6 +338,32 @@ fn run_checks(
         .with("touches", json!(touches))
         .with("generated", json!(policy.generated.paths)));
     }
+    // Every declared touch needs a diff (b69), unless the Lead waived it; `open`, `update` and explore Jobs are exempt.
+    if !check.skipped() {
+        let changed = written(root, branch, &lead, &base_refs, base, sha)?;
+        let mut unchanged: Vec<String> = Vec::new();
+        for entry in &touches {
+            if !waived.contains(entry)
+                && !unchanged.contains(entry)
+                && !changed
+                    .iter()
+                    .any(|p| git::tamper::touches_matches(entry, p))
+            {
+                unchanged.push(entry.clone());
+            }
+        }
+        if !unchanged.is_empty() {
+            return Err(CpdError::new(
+                ErrorCode::TouchesUnchanged,
+                format!(
+                    "The diff leaves declared touches unchanged: {}. Change them, or ask the Lead, who waives a path with `cpd job approve-untouched`.",
+                    unchanged.join(", ")
+                ),
+            )
+            .with("paths", json!(unchanged))
+            .with("touches", json!(touches)));
+        }
+    }
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
@@ -342,11 +371,22 @@ fn run_checks(
     if kind::has_checks(env, plan, job, &policy)? {
         kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
     }
-    // The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's
-    // branch is the Lead Branch, so the Lead tip is not a comparison ref.
-    let mut compare_with: Vec<&str> = base_refs.clone();
-    if !git::worktree::is_linear(branch, &lead) {
-        compare_with.push(&lead);
+    written(root, branch, &lead, &base_refs, base, sha)
+}
+
+/// The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's
+/// branch is the Lead Branch, so the Lead tip is not a comparison ref. A base merge's paths are not the Job's work.
+fn written(
+    root: &Path,
+    branch: &str,
+    lead: &str,
+    base_refs: &[&str],
+    base: &str,
+    sha: &str,
+) -> Result<Vec<String>, CpdError> {
+    let mut compare_with: Vec<&str> = base_refs.to_vec();
+    if !git::worktree::is_linear(branch, lead) {
+        compare_with.push(lead);
     }
     git::tamper::written_paths(root, base, sha, &compare_with)
 }

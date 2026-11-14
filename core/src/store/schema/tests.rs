@@ -5043,7 +5043,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             })
             .collect()
     };
-    assert_eq!(strip(&after["jobs"], 9, "work"), before["jobs"]);
+    assert_eq!(strip(&after["jobs"], 10, "work"), before["jobs"]);
     // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
     assert_eq!(strip(&after["workflows"], 6, "free"), before["prs"]);
     assert_eq!(

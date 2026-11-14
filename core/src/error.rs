@@ -238,6 +238,7 @@ error_codes! {
     NoCommits = "no_commits" => Refused,
     GateTampered = "gate_tampered" => Refused,
     TouchesViolation = "touches_violation" => Refused,
+    TouchesUnchanged = "touches_unchanged" => Refused,
     TestsRemoved = "tests_removed" => Refused,
     NotAwaitingReview = "not_awaiting_review" => Refused,
     EscalationAnswered = "escalation_answered" => Refused,

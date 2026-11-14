@@ -104,19 +104,23 @@ fn materialize(root: &Path, files: &[(&str, &str)]) {
 }
 
 /// What a fixture models.
-struct Spec<'a> {
+pub(super) struct Spec<'a> {
     /// The Job's kind.
-    kind: &'a str,
+    pub(super) kind: &'a str,
     /// The Job's stored Spec `touches`, as the JSON array `jobs.touches` holds.
-    touches: &'a str,
+    pub(super) touches: &'a str,
     /// The repo policy's `[generated] paths`.
-    generated: &'a [&'a str],
+    pub(super) generated: &'a [&'a str],
     /// The files the Attempt's commit changes, over the base's tree.
-    changed: &'a [(&'a str, &'a str)],
+    pub(super) changed: &'a [(&'a str, &'a str)],
     /// The files the base branch `main` gains after the Attempt branched, which the Attempt merges when `brings_base`.
-    base_ahead: &'a [(&'a str, &'a str)],
+    pub(super) base_ahead: &'a [(&'a str, &'a str)],
     /// Whether the Attempt's commit is the merge of the base's tip (a base merge), or its own commit on the branch point.
-    brings_base: bool,
+    pub(super) brings_base: bool,
+    /// Files an earlier Job added on the Lead Branch: in the Attempt's base, absent from `main`.
+    pub(super) lead_only: &'a [(&'a str, &'a str)],
+    /// Paths the Attempt's commit deletes.
+    pub(super) deleted: &'a [&'a str],
 }
 
 impl<'a> Default for Spec<'a> {
@@ -128,27 +132,29 @@ impl<'a> Default for Spec<'a> {
             changed: &[],
             base_ahead: &[],
             brings_base: false,
+            lead_only: &[],
+            deleted: &[],
         }
     }
 }
 
 /// A PR `pay/api` on its Lead Branch `cpd/pay/api`, one Job `a` of the Spec's kind whose Attempt `a-a1` is `running` on
 /// `cpd/pay/a` in a worktree of the fake git, and a `$CPD_HOME` whose owner and repo policy files are written.
-struct Rig {
+pub(super) struct Rig {
     _tmp: TempDir,
     fakes: Fakes,
-    env: Env,
+    pub(super) env: Env,
     universe: Arc<Mutex<Universe>>,
     repo: RepoId,
     /// The branch point of the Attempt: the Lead Branch tip, and the merge base of the base branch.
     base: Oid,
     /// The Attempt's worktree, a real temp directory of the fake git.
     root: PathBuf,
-    plan: PlanId,
-    id: AttemptId,
+    pub(super) plan: PlanId,
+    pub(super) id: AttemptId,
 }
 
-fn rig(spec: Spec<'_>) -> Rig {
+pub(super) fn rig(spec: Spec<'_>) -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().canonicalize().unwrap();
     let fakes = Fakes::new();
@@ -164,8 +170,25 @@ fn rig(spec: Spec<'_>) -> Rig {
     for (path, text) in BASE {
         repo.write(path, text);
     }
-    let base = repo.commit("base");
+    let main_base = repo.commit("base");
     repo.branch("cpd/pay/api");
+    // An earlier Job's commit on the Lead Branch: the Attempt branches from it, `main` does not have it.
+    let mut start = BASE.to_vec();
+    start.extend(spec.lead_only.iter().copied());
+    let base = if spec.lead_only.is_empty() {
+        main_base.clone()
+    } else {
+        let mut u = universe.lock().unwrap();
+        let lead = commit(
+            &mut u,
+            repo.id(),
+            std::slice::from_ref(&main_base),
+            &start,
+            "earlier job",
+        );
+        u.set_ref(repo.id(), "refs/heads/cpd/pay/api", &lead, "earlier job");
+        lead
+    };
     // The base branch may move ahead: a commit over the branch point that the Attempt does not have.
     if !spec.base_ahead.is_empty() {
         let mut ahead = BASE.to_vec();
@@ -174,18 +197,19 @@ fn rig(spec: Spec<'_>) -> Rig {
         let tip = commit(
             &mut u,
             repo.id(),
-            std::slice::from_ref(&base),
+            std::slice::from_ref(&main_base),
             &ahead,
             "the base moved",
         );
         u.set_ref(repo.id(), "refs/heads/main", &tip, "the base moved");
     }
     // The Attempt: its own commit, or the merge of the base's tip.
-    let mut tree = BASE.to_vec();
+    let mut tree = start.clone();
     if spec.brings_base {
         tree.extend(spec.base_ahead.iter().copied());
     }
     tree.extend(spec.changed.iter().copied());
+    tree.retain(|(path, _)| !spec.deleted.contains(path));
     {
         let mut u = universe.lock().unwrap();
         let parents = if spec.brings_base {
@@ -270,7 +294,7 @@ fn rig(spec: Spec<'_>) -> Rig {
 
 impl Rig {
     /// `cpd attempt submit a-a1 --plan pay`, from the Attempt's worktree, on the fakes' ports.
-    fn submit(&mut self) -> Result<Output, CpdError> {
+    pub(super) fn submit(&mut self) -> Result<Output, CpdError> {
         let previous = std::env::current_dir().unwrap();
         std::env::set_current_dir(&self.root).unwrap();
         let args = SubmitArgs {
@@ -303,14 +327,14 @@ impl Rig {
     }
 
     /// One column of the Attempt's row.
-    fn attempt(&mut self, column: &str) -> Option<String> {
+    pub(super) fn attempt(&mut self, column: &str) -> Option<String> {
         self.one(&format!(
             "SELECT {column} FROM attempts WHERE plan = 'pay' AND id = 'a-a1'"
         ))
     }
 
     /// One column of Job `a`'s row.
-    fn job(&mut self, column: &str) -> Option<String> {
+    pub(super) fn job(&mut self, column: &str) -> Option<String> {
         self.one(&format!(
             "SELECT {column} FROM jobs WHERE plan = 'pay' AND key = 'a'"
         ))
@@ -340,7 +364,7 @@ impl Rig {
 }
 
 /// The refusal `code` (exit 3) of `result`.
-fn refused(result: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
+pub(super) fn refused(result: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
     match result {
         Ok(out) => panic!("expected {code:?}, got a success: {out:?}"),
         Err(e) => {
@@ -416,7 +440,10 @@ fn a_stray_edit_outside_touches_is_refused() {
 fn a_generated_path_change_passes() {
     // The lockfile is generated: the repo policy's `[generated] paths` allow it without an approval.
     let mut generated = rig(Spec {
-        changed: &[(LOCKFILE, "lockfileVersion: 9\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            (LOCKFILE, "lockfileVersion: 9\n"),
+        ],
         ..Spec::default()
     });
     assert!(generated.submit().is_ok(), "a generated path is exempt");
@@ -424,7 +451,10 @@ fn a_generated_path_change_passes() {
 
     // The control: the same commit, the same Job, and no `[generated]` entry: refused.
     let mut stray = rig(Spec {
-        changed: &[(LOCKFILE, "lockfileVersion: 9\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            (LOCKFILE, "lockfileVersion: 9\n"),
+        ],
         generated: &[],
         ..Spec::default()
     });
@@ -441,6 +471,7 @@ fn a_base_merge_change_passes() {
     // The Attempt merged the base, whose own commit changed `src/from_base.rs`: the same blob as `main`'s, so exempt.
     let ahead = [("src/from_base.rs", "// from the base\n")];
     let mut merging = rig(Spec {
+        changed: &[("docs/research/x.md", "# Findings\n\nEdited.\n")],
         base_ahead: &ahead,
         brings_base: true,
         ..Spec::default()
@@ -453,7 +484,10 @@ fn a_base_merge_change_passes() {
 
     // The control: a commit of the Attempt's own that writes the same path with other content: refused.
     let mut stray = rig(Spec {
-        changed: &[("src/from_base.rs", "// the Attempt's own edit\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            ("src/from_base.rs", "// the Attempt's own edit\n"),
+        ],
         base_ahead: &ahead,
         ..Spec::default()
     });
@@ -495,7 +529,10 @@ fn an_open_and_an_update_job_are_exempt() {
 #[test]
 fn an_approved_touch_passes() {
     let mut rig = rig(Spec {
-        changed: &[("src/stray.rs", "// stray\n")],
+        changed: &[
+            ("docs/research/x.md", "# Findings\n\nEdited.\n"),
+            ("src/stray.rs", "// stray\n"),
+        ],
         ..Spec::default()
     });
     // Without an approval the stray path is refused.
@@ -600,4 +637,33 @@ fn an_explore_job_runs_no_touches_check() {
         ..Spec::default()
     });
     refused(work.submit(), ErrorCode::TouchesViolation);
+}
+
+#[test]
+fn written_path_comparisons_use_constant_git_calls_per_reference() {
+    let r = rig(Spec {
+        changed: &[("new/a", "a"), ("new/b", "b"), ("new/c", "c")],
+        ..Spec::default()
+    });
+    let before = r.fakes.runner.calls().len();
+    let paths = Ports::scope(&r.fakes.ports, || {
+        crate::git::tamper::written_paths(&r.root, &r.base.to_string(), "cpd/pay/a", &["main"])
+    })
+    .unwrap();
+    assert_eq!(paths, ["new/a", "new/b", "new/c"]);
+    let calls = r.fakes.runner.calls();
+    let git: Vec<_> = calls[before..]
+        .iter()
+        .filter(|c| c.program == "git")
+        .collect();
+    assert_eq!(
+        git.len(),
+        4,
+        "one range diff, two tree diffs and one merge-base lookup, independent of path count: {git:?}"
+    );
+    assert!(
+        !git.iter()
+            .any(|c| c.args.first().is_some_and(|a| a == "rev-parse")),
+        "no per-path blob lookups"
+    );
 }
