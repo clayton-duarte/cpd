@@ -73,6 +73,8 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Replace an attempted locked test Job with corrected selectors
     ReplaceTest(ReplaceTestArgs),
+    /// Re-seal a Job's fingerprint after replace-test redirects of its needs
+    Reseal(ResealArgs),
     /// Abandon a pending test replacement after the source is quiescent
     AbandonTestReplacement(AbandonTestReplacementArgs),
     /// Queue a failed Job again at a Tier (§5.4)
@@ -110,6 +112,14 @@ pub struct ReplaceTestArgs {
     /// Replace a pending intent after its source has stopped
     #[arg(long)]
     revise: bool,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ResealArgs {
+    #[arg(value_name = "key")]
+    key: JobKey,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -303,6 +313,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Edit(args) => edit::edit(args),
         Command::Cancel(args) => cancel::cancel(args),
         Command::ReplaceTest(args) => replace_test::command(args),
+        Command::Reseal(args) => replace_test::reseal_command(args),
         Command::AbandonTestReplacement(args) => replace_test::abandon_command(args),
         Command::Retry(args) => retry::retry(args),
         Command::Urgent(args) => urgent::urgent(args),

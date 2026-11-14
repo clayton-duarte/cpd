@@ -3,14 +3,24 @@ import "../tools/repo-qa/scripts/portability.test.mjs";
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MARKER, REPOS, batchMarker, day, run, status } from "./qa.mjs";
 
 test("the CPD entry point preserves historical attribution and the legacy batch variable", () => {
   assert.equal(MARKER, "<!-- cpd-repo-qa:v1 -->");
   assert.deepEqual(REPOS, ["clayton-duarte/cpd", "clayton-duarte/dotfiles", "clayton-duarte/skills"]);
-  const previous = { legacy: process.env.CPD_QA_BATCH, generic: process.env.QA_BATCH };
+  const usageDir = mkdtempSync(join(tmpdir(), "cpd-qa-usage-test-"));
+  const usageFile = join(usageDir, "usage.json");
+  writeFileSync(usageFile, JSON.stringify({ version: 1, source: "codex-app-server", sampled_at: new Date().toISOString(),
+    limit_id: "codex", window_minutes: 10080, remaining_percent: 50,
+    resets_at: new Date(Date.now() + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false }));
+  const previous = { usage: process.env.QA_USAGE_FILE, legacy: process.env.CPD_QA_BATCH, generic: process.env.QA_BATCH };
   const batch = `${day(new Date())}-compat`;
+  const descriptor = {version:1,id:"compat",started_at:new Date().toISOString(),limits:null,authorization:"Synthetic test approval"};
   try {
+    process.env.QA_USAGE_FILE = usageFile;
     delete process.env.QA_BATCH;
     process.env.CPD_QA_BATCH = batch;
     const s = status(() => [{ number: 1, created_at: new Date().toISOString(), body: `${MARKER}\n${batchMarker(batch)}` }]);
@@ -21,17 +31,18 @@ test("the CPD entry point preserves historical attribution and the legacy batch 
       if (!args.includes("POST")) return [];
       posts++;
       assert.equal(payload.base, "main");
-      assert.equal(payload.body, `${MARKER}\n${batchMarker(batch)}\n\nreason`);
+      assert.equal(payload.body, `${MARKER}\n${batchMarker(batch)}\n<!-- cpd-repo-qa-run:compat -->\n\nreason`);
       return { number: 1 };
-    }, () => "reason");
+    }, () => "reason", undefined, descriptor);
     assert.equal(result.exit, 0);
     assert.equal(posts, 1);
     process.env.QA_BATCH = `${day(new Date())}-different`;
     assert.throws(() => status(() => assert.fail("Conflicting batch variables must not reach GitHub")), /Conflicting/);
   } finally {
-    for (const [key, value] of [["CPD_QA_BATCH", previous.legacy], ["QA_BATCH", previous.generic]]) {
+    for (const [key, value] of [["QA_USAGE_FILE", previous.usage], ["CPD_QA_BATCH", previous.legacy], ["QA_BATCH", previous.generic]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
+    rmSync(usageDir, { recursive: true, force: true });
   }
 });
 

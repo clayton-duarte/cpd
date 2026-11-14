@@ -822,7 +822,7 @@ impl Sample {
                 Reply::ok(""),
             )
             .on("cargo.sh", first("nextest"), Reply::ok(""))
-            .on("node", has("--test"), Reply::ok(""))
+            .on("node", node_report, Reply::ok(""))
             .on("pnpm", has("typecheck"), Reply::ok(""));
         fakes
     }
@@ -854,9 +854,52 @@ impl Sample {
     }
 }
 
-/// The node calls: `node --test <patterns…> <file>`.
+/// Emit execution metadata for the sample runner's requested literal titles.
+fn node_report(call: &Call) -> bool {
+    let args = words(call);
+    if !args.contains(&"--test") {
+        return false;
+    }
+    let Some(destination) = args
+        .iter()
+        .rev()
+        .find_map(|a| a.strip_prefix("--test-reporter-destination="))
+    else {
+        return false;
+    };
+    let file = call.cwd.as_ref().unwrap().join(args.last().unwrap());
+    let mut events = Vec::new();
+    for title in [
+        "passes",
+        "fails",
+        "a.c (1+1) [x]",
+        "single",
+        "double",
+        "tick",
+    ] {
+        if args.iter().any(|a| *a == pattern(title)) {
+            events.push(
+                json!({"type":"test:pass", "data":{"name":title,"file":file,"kind":"test"}})
+                    .to_string(),
+            );
+        }
+    }
+    events.push(json!({"type":"test:summary","data":{"success":true}}).to_string());
+    fs::write(destination, events.join("\n")).unwrap();
+    true
+}
+
+/// Selection arguments only; reporter configuration is checked separately.
 fn node_calls(out: &Out) -> Vec<Vec<&str>> {
-    out.calls_of("node").into_iter().map(words).collect()
+    out.calls_of("node")
+        .into_iter()
+        .map(|c| {
+            words(c)
+                .into_iter()
+                .filter(|a| !a.starts_with("--test-reporter"))
+                .collect()
+        })
+        .collect()
 }
 
 // Ported from cli/tests/tooling/tests_script.rs, name for name.
@@ -864,7 +907,7 @@ fn node_calls(out: &Out) -> Vec<Vec<&str>> {
 #[test]
 fn a_rust_name_and_a_pi_name_each_run_and_pass() {
     let s = Sample::new();
-    let fakes = s.fakes(|r| r.on("node", has("--test"), Reply::ok("✔ passes (0.4ms)\n")));
+    let fakes = s.fakes(|r| r.on("node", node_report, Reply::ok("✔ passes (0.4ms)\n")));
     let rust = s.run(&fakes, &["green_one"]);
     assert_eq!(rust.status, 0, "{}", rust.what());
     let both = s.run(&fakes, &["green_one", &pi("passes")]);
@@ -933,13 +976,7 @@ fn a_misspelled_name_makes_list_and_run_exit_non_zero() {
 fn a_pi_title_with_regex_characters_runs_exactly_that_test() {
     let s = Sample::new();
     let title = "a.c (1+1) [x]";
-    let fakes = s.fakes(|r| {
-        r.on(
-            "node",
-            has("--test"),
-            Reply::ok("✔ a.c (1+1) [x] (0.3ms)\n"),
-        )
-    });
+    let fakes = s.fakes(|r| r.on("node", node_report, Reply::ok("✔ a.c (1+1) [x] (0.3ms)\n")));
     let out = s.run(&fakes, &[&pi(title)]);
     assert_eq!(out.status, 0, "{}", out.what());
     assert!(out.stdout.contains(title), "{}", out.what());
@@ -1671,5 +1708,62 @@ fn web_run_confirms_nested_titles_and_rejects_a_skipped_matching_assertion() {
         let out = s.run(&fakes, &["web/sample.test.tsx::suite > wanted"]);
         assert_eq!(out.status, if skipped { 1 } else { 0 }, "{}", out.what());
         assert!(out.stdout.contains("output preserved"));
+    }
+}
+#[test]
+fn named_node_tests_require_complete_matching_execution_metadata() {
+    let s = Sample::new();
+    let file = s.root.join(PI);
+    let pass = json!({"type":"test:pass","data":{"name":"passes","file":file,"kind":"test"}});
+    let summary = json!({"type":"test:summary","data":{"success":true}});
+    let accepted = format!("{pass}\n{summary}\n");
+    assert!(super::pi_ran(accepted.as_bytes(), &file, "passes"));
+    for field in ["skip", "todo"] {
+        let mut skipped = pass.clone();
+        skipped["data"][field] = json!(true);
+        assert!(!super::pi_ran(
+            format!("{skipped}\n{summary}").as_bytes(),
+            &file,
+            "passes"
+        ));
+    }
+    for report in [
+        String::new(),
+        summary.to_string(),
+        pass.to_string(),
+        format!("{accepted}broken"),
+        format!("{pass}\n{{\"type\":\"test:summary\",\"data\":{{\"success\":false}}}}"),
+        accepted.replace("passes", "different"),
+        accepted.replace("sample.test.ts", "other.test.ts"),
+        accepted.replace("test:pass", "test:fail"),
+    ] {
+        assert!(
+            !super::pi_ran(report.as_bytes(), &file, "passes"),
+            "{report}"
+        );
+    }
+    let fakes = s.fakes(|r| r.on("node", has("--test"), Reply::ok("human output says passed")));
+    assert_eq!(s.run(&fakes, &[&pi("passes")]).status, 1);
+}
+
+#[test]
+fn node_report_files_are_private_and_removed_after_the_run() {
+    let s = Sample::new();
+    let fakes = s.fakes(|r| r);
+    let out = s.run(&fakes, &[&pi("passes")]);
+    assert_eq!(out.status, 0, "{}", out.what());
+    let args = words(out.calls_of("node")[0]);
+    assert!(args.contains(&"--test-reporter=spec"));
+    assert!(args.contains(&"--test-reporter-destination=stdout"));
+    for prefix in ["--test-reporter=", "--test-reporter-destination="] {
+        let path = args
+            .iter()
+            .rev()
+            .find_map(|a| a.strip_prefix(prefix))
+            .unwrap();
+        assert!(
+            !Path::new(path).exists(),
+            "temporary output retained: {path}"
+        );
     }
 }

@@ -235,24 +235,59 @@ pub fn run(
         }
     }
     for (file, titles) in pi {
-        let mut node = vec!["--test".to_owned()];
+        let mut selected = Vec::new();
         for title in titles {
             if pi_has(&root, &file, &title) {
-                node.push(format!("--test-name-pattern={}", pi_pattern(&title)));
+                selected.push(title);
             } else {
                 write(err, &no_title(&file, &title))?;
                 status = 1;
             }
         }
-        if node.len() == 1 {
+        // Source presence is only a preflight; runtime metadata proves execution.
+        if selected.is_empty() {
+            status = 1;
             continue;
         }
-        node.push(file);
+        let reports = tempfile::Builder::new()
+            .prefix("cpd-node-test-")
+            .tempdir()
+            .map_err(|e| internal(format!("cpd test: cannot create report directory: {e}.")))?;
+        let reporter = reports.path().join("reporter.mjs");
+        let report = reports.path().join("events.jsonl");
+        fs::write(&reporter, NODE_REPORTER)
+            .map_err(|e| internal(format!("cpd test: cannot write Node reporter: {e}.")))?;
+        let mut node = vec![
+            "--test".to_owned(),
+            "--test-reporter=spec".to_owned(),
+            "--test-reporter-destination=stdout".to_owned(),
+            format!("--test-reporter={}", reporter.display()),
+            format!("--test-reporter-destination={}", report.display()),
+        ];
+        node.extend(
+            selected
+                .iter()
+                .map(|title| format!("--test-name-pattern={}", pi_pattern(title))),
+        );
+        node.push(file.clone());
         let args: Vec<&str> = node.iter().map(String::as_str).collect();
         let output = process(ports, "node", "node", &args, &root)?;
         forward(out, err, &output)?;
         if !output.status.success() {
             status = 1;
+        } else {
+            let bytes = fs::read(&report).unwrap_or_default();
+            for title in selected {
+                if !pi_ran(&bytes, &root.join(&file), &title) {
+                    write(
+                        err,
+                        &format!(
+                            "cpd test: no passed execution confirmed for '{title}' in {file}\n"
+                        ),
+                    )?;
+                    status = 1;
+                }
+            }
         }
     }
     for (file, title) in web {
@@ -501,6 +536,44 @@ fn web_has(report: &[u8], title: &str) -> bool {
         }),
         _ => text(report).lines().any(segments),
     }
+}
+
+// Node's supported custom reporter API keeps machine metadata separate from human output.
+const NODE_REPORTER: &str = r#"export default async function* (source) {
+  for await (const { type, data } of source) {
+    if (!["test:pass", "test:fail", "test:summary"].includes(type)) continue;
+    const { name, file, skip, todo, success, details } = data;
+    yield JSON.stringify({ type, data: { name, file, skip, todo, success, kind: details?.type } }) + "\n";
+  }
+}
+"#;
+
+fn pi_ran(bytes: &[u8], file: &Path, title: &str) -> bool {
+    let Ok(file) = file.canonicalize() else {
+        return false;
+    };
+    let mut passed = false;
+    let mut completed = false;
+    for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+        let Ok(event) = serde_json::from_slice::<Value>(line) else {
+            return false;
+        };
+        let data = &event["data"];
+        if event["type"] == "test:summary" && data["file"].is_null() {
+            completed = data["success"] == true;
+        }
+        let same_file = data["file"]
+            .as_str()
+            .and_then(|p| Path::new(p).canonicalize().ok())
+            .is_some_and(|p| p == file);
+        if same_file && data["name"] == title && data["kind"] == "test" {
+            if event["type"] != "test:pass" || !data["skip"].is_null() || !data["todo"].is_null() {
+                return false;
+            }
+            passed = true;
+        }
+    }
+    passed && completed
 }
 
 /// Whether `title` is in a `test(` or `it(` call of the file, quoted `'`, `"` or `` ` ``.

@@ -841,6 +841,17 @@
       "--reason"
     ]
   },
+  "job reseal": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "job retry": {
     "flags": {
       "--help": false,
