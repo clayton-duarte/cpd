@@ -45,9 +45,17 @@ pub fn enqueue(
     now: OffsetDateTime,
     target: &str,
     op_kind: &str,
-    vars: Value,
+    mut vars: Value,
     patch: Option<Value>,
 ) -> Result<i64, CpdError> {
+    // Execution metadata survives polling, but does not change the logical reply identity.
+    let context = if op_kind == "reply" {
+        vars.as_object_mut()
+            .and_then(|v| v.remove("resolve_uncached"))
+            .map(|resolve| json!({"resolve_uncached": resolve}))
+    } else {
+        None
+    };
     let coalesce = match coalesce_of(op_kind) {
         Coalesce::Dedupe(_) => Coalesce::Dedupe(vars.to_string()),
         other => other,
@@ -61,7 +69,7 @@ pub fn enqueue(
             op_kind: op_kind.into(),
             vars,
             patch,
-            context: None,
+            context,
         },
         coalesce,
     )
@@ -274,10 +282,19 @@ impl GithubSource {
         let Some((kind, repo, number)) = target(&m.target_key) else {
             return failed(format!("{:?} is not a github target.", m.target_key));
         };
-        let vars: Value = match serde_json::from_str(&m.vars_json) {
+        let mut vars: Value = match serde_json::from_str(&m.vars_json) {
             Ok(v) => v,
             Err(e) => return failed(format!("The vars of mutation {} are not JSON: {e}.", m.id)),
         };
+        if m.op_kind == "reply"
+            && let Some(context) = m
+                .context_json
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            && let Some(resolve) = context.get("resolve_uncached")
+        {
+            vars["resolve_uncached"] = resolve.clone();
+        }
         let ports = cx.ports.clone();
         let runner = &*ports.runner;
         let cwd = cx.home.root().to_path_buf();

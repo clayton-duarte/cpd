@@ -105,6 +105,7 @@ fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
         None,
         stderr,
     )
+    .with("transient", true)
 }
 
 /// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a

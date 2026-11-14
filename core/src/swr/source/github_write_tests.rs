@@ -953,3 +953,68 @@ fn uncached_reply_cannot_be_delivered_to_another_pull_request() {
     assert!(!matches!(outcome, ExecOutcome::Done), "{outcome:?}");
     assert_eq!(gh_calls(&rig).len(), 1, "only the lookup, never a write");
 }
+
+#[test]
+fn uncached_reply_metadata_does_not_change_reply_deduplication() {
+    let rig = rig();
+    let mut store = store(&rig);
+    let mut ids = Vec::new();
+    for uncached in [true, false] {
+        ids.push(
+            crate::swr::source::github_write::enqueue(
+                &mut store,
+                now(&rig),
+                KEY,
+                "reply",
+                json!({"to": "PRRT_one", "body": "Fixed.", "resolve_uncached": uncached}),
+                None,
+            )
+            .unwrap(),
+        );
+    }
+    assert_eq!(ids[0], ids[1]);
+    let mutation = outbox::get(&mut store, ids[0]).unwrap().unwrap();
+    assert!(!mutation.vars_json.contains("resolve_uncached"));
+    assert!(mutation.context_json.unwrap().contains("true"));
+}
+
+#[test]
+fn uncached_reply_rest_timeout_is_retryable() {
+    let rig = rig();
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route(
+            "gh",
+            Arc::new(UncachedReply {
+                kind: "PullRequestReviewComment",
+                wrong_pull: false,
+            }),
+        )
+        .once(
+            "gh",
+            |c| c.args.iter().any(|a| a.contains("/replies")),
+            Reply::ok("").takes(Duration::from_secs(61)),
+        );
+    let mut store = store(&rig);
+    let id = super::github_write::enqueue(
+        &mut store,
+        now(&rig),
+        KEY,
+        "reply",
+        json!({"to": "PRRC_one", "body": "Fixed.", "resolve_uncached": true}),
+        None,
+    )
+    .unwrap();
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert!(matches!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Retry { .. }
+    ));
+}
