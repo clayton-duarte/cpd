@@ -10,8 +10,10 @@
 - Reproducer (inline minimal code/fixture + exact command; no temp-only dependency):
 - Changed behavior, tests and environment; original/fixed results:
 - Baseline failures reproduced on unchanged code, blocked checks and limits:
-- PR URLs, latest head/CI status, review feedback and unfinished CI work:
+- PR URLs, inspected head/base SHAs and mergeability (including pending/conflicted),
+  latest CI/review status and unfinished upkeep:
 - Human-input questions/labels; no open question is silently decided:
+- Authorized weekly window/reset and immutable run start (if configured):
 - Account meter, if supplied: source/time, remaining percent before/after,
   resolution/uncertainty, unrelated usage; never infer a precise token amount:
 - Stop reason and next safe action; User review/merge remains pending:

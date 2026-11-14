@@ -1172,6 +1172,53 @@ fn a_304_deploys_read_still_commits_changed_rows_and_records_ok() {
 }
 
 #[test]
+fn a_deploys_rate_limit_pauses_until_the_rest_reset_not_the_graphql_one() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let rest_reset = rig.t0 + time::Duration::seconds(120);
+    let stdout = format!(
+        "HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Reset: {}\r\n\r\n{{\"message\":\"API rate limit exceeded\"}}",
+        rest_reset.unix_timestamp()
+    );
+    *handler.deploys.lock().unwrap() = Reply::exit(1, &stdout, "gh: HTTP 403\n");
+    let error = rig.pass(10).unwrap_err();
+    assert_eq!(error.details()["rate_limited"], true);
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(
+        row.paused_until,
+        Some(rest_reset + time::Duration::seconds(3)),
+        "the REST reset plus grace, earlier than the stored GraphQL reset"
+    );
+}
+
+#[test]
+fn a_deploys_rate_limit_never_shortens_an_active_graphql_floor_pause() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let graphql_reset = rig.t0 + time::Duration::seconds(3600);
+    rig.state().remaining = 99;
+    rig.state().reset = graphql_reset;
+    let rest_reset = rig.t0 + time::Duration::seconds(120);
+    let stdout = format!(
+        "HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Reset: {}\r\n\r\n{{\"message\":\"API rate limit exceeded\"}}",
+        rest_reset.unix_timestamp()
+    );
+    *handler.deploys.lock().unwrap() = Reply::exit(1, &stdout, "gh: HTTP 403\n");
+    let error = rig.pass(10).unwrap_err();
+    assert_eq!(error.details()["rate_limited"], true);
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(
+        row.paused_until,
+        Some(graphql_reset),
+        "the later floor pause stands"
+    );
+}
+
+#[test]
 fn gh_poll_failed_deploys_commit_restarts_the_discovery_sweep() {
     let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
     let (mut rig, handler) = deploys_rig(empty.clone());

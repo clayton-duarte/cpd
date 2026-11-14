@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WebError } from "../../protocol/domain.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { ContextTreeModel, InboxModel, PlanViewModel } from "../../protocol/cockpit.ts";
@@ -460,4 +461,71 @@ describe("cockpit service stale pane updates", () => {
     expect(updates.filter((u) => u.kind === "error")).toEqual([]);
     service.stop();
   });
+});
+
+
+it.each(["retry", "read", "failure"])("stopping during initial %s retires startup and readiness without successors", async (phase) => {
+  const scheduler = new FakeScheduler();
+  let reads = 0, follows = 0, settled = false;
+  let release: () => void = () => {}, fail: (error: Error) => void = () => {};
+  const gate = new Promise<void>((resolve, reject) => { release = resolve; fail = reject; });
+  const service = createCockpitService({ scheduler,
+    cpd: { json: async () => ({ ok: true }) },
+    follow: { start: () => { follows++; return new FakeFollow([]); } },
+    readModel: {
+      loadAll: async () => { reads++; if (phase === "retry") throw new WebError("cpd_failed", "lock wait", { cpdCode: "lock_timeout" }); await gate; return { tree: tree(40), plan: null, inbox }; },
+      loadPanes: async () => ({}),
+    },
+  });
+  const flush = async () => { for (let n = 0; n < 20; n++) await Promise.resolve(); };
+  const readiness = service.ready().then(() => null, (error: unknown) => error);
+  const starting = service.start().then(() => { settled = true; }, () => { settled = true; });
+  await flush();
+  expect(reads).toBe(1);
+  service.stop(); service.stop();
+  await flush();
+  const stopped = { settled, timers: scheduler.pending(), reads };
+  if (phase === "failure") fail(new Error("late failure")); else release();
+  // Let the old finite loop finish too, so a failing baseline test leaves no work behind.
+  for (let n = 0; n < 10; n++) { scheduler.advance(10_000); await flush(); }
+  await starting;
+  const ready = await readiness;
+  expect(stopped).toEqual({ settled: true, timers: 0, reads: 1 });
+  expect(ready).toMatchObject({ details: { reason: "stopped" } });
+  expect(reads).toBe(1);
+  expect(follows).toBe(0);
+  expect(service.snapshot().tree).toBeNull();
+});
+
+it("a cockpit stopped before startup performs no initial read", async () => {
+  const s = setup();
+  s.service.stop();
+  await s.service.start();
+  expect(s.allCount()).toBe(0);
+});
+
+it.each(["recover", "exhaust", "terminal"])("preserves initial load retry policy: %s", async (scenario) => {
+  const scheduler = new FakeScheduler();
+  let reads = 0;
+  const service = createCockpitService({ scheduler,
+    cpd: { json: async () => ({ ok: true }) }, follow: { start: () => new FakeFollow([]) },
+    readModel: {
+      loadAll: async () => {
+        reads++;
+        if (scenario !== "recover" || reads < 3) throw new WebError("cpd_failed", "initial load failed", { cpdCode: scenario === "terminal" ? "bad_command" : "lock_timeout" });
+        return { tree: tree(40), plan: null, inbox };
+      },
+      loadPanes: async () => ({}),
+    },
+  });
+  const readiness = service.ready().then(() => null, (error: unknown) => error);
+  const starting = service.start().then(() => null, (error: unknown) => error);
+  for (let n = 0; n < 10; n++) { for (let m = 0; m < 20; m++) await Promise.resolve(); scheduler.advance(10_000); }
+  const result = await starting;
+  expect(await readiness).toBe(result);
+  expect(reads).toBe(scenario === "recover" ? 3 : scenario === "exhaust" ? 8 : 1);
+  if (scenario === "recover") expect(service.snapshot().tree?.cursor).toBe(40);
+  else expect(result).toMatchObject({ code: "cpd_failed" });
+  service.stop();
+  expect(scheduler.pending()).toBe(0);
 });

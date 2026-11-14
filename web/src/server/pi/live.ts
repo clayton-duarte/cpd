@@ -109,12 +109,16 @@ export function createLiveSource(deps: LiveDeps): LiveSource {
       out({ type: "session.append", sessionId, items: [{ kind: "assistant", id: `live:${ts}`, blocks, streaming: true, ...(model === undefined ? {} : { model }) }] });
     };
 
-    const frame = (f: Obj): void => {
+    const protocolError = (message: string, line: string, field?: string): void => {
+      try {
+        out({ type: "session.error", sessionId, error: toWireError(new WebError("protocol_error", message, { line, ...(field === undefined ? {} : { field }) })) });
+      } finally { stop(); }
+    };
+    const frame = (f: Obj, line: string): void => {
       switch (f.t) {
         case "hello":
           if (f.protocol !== 1) {
-            out({ type: "session.error", sessionId, error: toWireError(new WebError("protocol_error", `unsupported pi live protocol ${String(f.protocol)}`, { field: "protocol" })) });
-            stop();
+            protocolError(`unsupported pi live protocol ${String(f.protocol)}`, line, "protocol");
           }
           return;
         case "inflight": {
@@ -173,19 +177,26 @@ export function createLiveSource(deps: LiveDeps): LiveSource {
         case "tool_end":
           if (typeof f.toolCallId === "string") updateTool(f.toolCallId, f.isError === true ? "failed" : "done", f.result, f.isError === true);
           return;
+        case "agent_start":
+        case "agent_end":
+          return;
         default:
+          protocolError(`unknown pi live frame ${String(f.t)}`, line, "t");
           return;
       }
     };
 
     const onLine = (line: string): void => {
+      if (stopped) return;
       let value: unknown;
       try {
         value = JSON.parse(line);
       } catch {
+        protocolError("pi live frame is not valid JSON", line);
         return;
       }
-      if (isObj(value) && typeof value.t === "string") frame(value);
+      if (isObj(value) && typeof value.t === "string") frame(value, line);
+      else protocolError("pi live frame needs an object with a string t", line, "t");
     };
 
     const retry = (): void => {

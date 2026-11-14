@@ -716,7 +716,7 @@ pub(crate) fn start_parked(
     let window_name = parked_window(row);
     let created = if tmux.has_session(&cockpit)? {
         None
-    } else if command == "session send" {
+    } else if matches!(command, "session send" | "session resume") {
         tmux.create_session(&cockpit, &window_name, &spawn)?
     } else {
         return Ok(None);
