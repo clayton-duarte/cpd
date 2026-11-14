@@ -8435,7 +8435,28 @@ Records a bug and opens its protocol state. `--title` is the one-line name (1 to
 
 **Not idempotent:** every call reports a new bug.
 
-### 33.2 `protocol bug mitigate`
+### 33.2 `protocol bug associate-issue`
+
+```
+cpd protocol bug associate-issue <id> --issue <url>
+```
+
+Associates an already-created GitHub issue with a bug without recording a mitigation. `<id>` is a bug id (`b<k>`); `--issue` must match `https://github.com/<owner>/<repo>/issues/<N>`, where `<owner>` and `<repo>` contain only ASCII letters, digits, `-`, `_` or `.`, and `<N>` is a positive integer. This validates the URL's shape; it does not check whether the issue exists on GitHub. An invalid URL is refused `issue_invalid` (exit 2), and an id with no bug row is refused `bug_not_found` (exit 4).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--issue` is present and matches the GitHub issue URL format above | `usage` or `issue_invalid` | 2 |
+| `<id>` names a `bug_records` row | `bug_not_found` | 4 |
+| the bug already has a different issue URL | `issue_conflict` | 3 |
+| the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
+
+**Effects:** when the bug has no issue, one transaction sets only the row's `issue` to `--issue`. The command does not set or change the mitigation, cause, status, or any other bug field. No Event is appended. If the stored issue already equals `--issue`, no write transaction opens and the command succeeds as already recorded. A different issue is refused; the existing association is preserved.
+
+**Output:** the `bug` object of §33.1, with `issue` set to the supplied URL.
+
+**Idempotent:** yes; repeating the same association makes no write and reports `already: true` with the unchanged bug object. A different existing issue is never replaced.
+
+### 33.3 `protocol bug mitigate`
 
 ```
 cpd protocol bug mitigate <id> --mitigation <text> --issue <url> [--cause <text>]
@@ -8458,7 +8479,7 @@ Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b
 
 **Idempotent:** the same `--mitigation`, `--issue` (and `--cause`) on an open bug whose stored values already equal them is `{"ok": true, "already": true}` with the `bug` object, nothing written.
 
-### 33.3 `protocol bug close`
+### 33.4 `protocol bug close`
 
 ```
 cpd protocol bug close <id> --root-fix <ref> --regression-test <text>
@@ -8480,7 +8501,7 @@ Closes a bug whose root fix is in and its regression test recorded (air-d107). `
 
 **Idempotent:** a close of a bug whose `status` is already `closed` is `{"ok": true, "already": true}` with the `bug` object, nothing written, whatever the flags say.
 
-### 33.4 `protocol bug list`
+### 33.5 `protocol bug list`
 
 ```
 cpd protocol bug list [--plan <id>] [--status open|closed] [--mitigated yes|no]
@@ -8501,7 +8522,7 @@ Lists bug records, `id` ascending (b1, b2, …). The filters combine: `--plan <i
 
 **Idempotent:** a read; the same store gives the same list.
 
-### 33.5 `protocol bug show`
+### 33.6 `protocol bug show`
 
 ```
 cpd protocol bug show <id>
@@ -8531,7 +8552,7 @@ Production servers publish `run/webui.pid` only after listening. Legacy instance
 are discovered from their existing per-PID WebUI token records and checked
 against the living production server command before signaling.
 
-### 33.6 `protocol bug escalate`
+### 33.7 `protocol bug escalate`
 
 `cpd protocol bug escalate <id> --reason <text>` records a bug-specific request
 for User input (`escalated_at`, `escalated_by`, `escalation_reason`). Only the
