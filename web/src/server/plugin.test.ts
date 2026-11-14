@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { FakeScheduler } from "../testing/scheduler.ts";
-import { cpdWebPlugin, type PluginBoundaries } from "./plugin.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServices, cpdWebPlugin, type PluginBoundaries } from "./plugin.ts";
 
 // Every cpd call fails: the cockpit never becomes ready, which is observable without cpd JSON fixtures.
 const boundaries = () => {
@@ -71,4 +74,27 @@ describe("cpd web plugin", () => {
     httpHandlers.get("close")?.(); // idempotent
     expect(cpdRuns.length).toBe(runsAfterStart);
   });
+});
+
+
+it("production services share persisted action results across connections and restarts", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cpd-dedup-"));
+  try {
+    const { b } = boundaries();
+    b.cpdHome = dir;
+    const services = createServices(b);
+    const run = vi.fn(async () => ({ stdout: "created" }));
+    services.cockpit.runAction = run;
+    const action = { type: "cockpit.action", actionId: "reload-safe", action: { kind: "inbox.dismiss", itemId: 4 } };
+    await services.newConnection(() => {}).handle(action);
+    await services.newConnection(() => {}).handle(action);
+    expect(run).toHaveBeenCalledTimes(1);
+    const restarted = createServices(b);
+    const rerun = vi.fn(async () => ({ stdout: "duplicate" }));
+    restarted.cockpit.runAction = rerun;
+    const sent: unknown[] = [];
+    await restarted.newConnection((m) => sent.push(m)).handle(action);
+    expect(rerun).not.toHaveBeenCalled();
+    expect(sent).toContainEqual({ type: "action.result", actionId: "reload-safe", ok: true, output: { stdout: "created" } });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

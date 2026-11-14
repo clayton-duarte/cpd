@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCockpitAction } from "./cockpit.ts";
+import { parseCockpitAction, parseInboxEngine } from "./cockpit.ts";
 
 describe("parseCockpitAction", () => {
   it("parseCockpitAction rejects an unknown kind with unknown_action", () => {
@@ -31,5 +31,17 @@ describe("parseCockpitAction", () => {
   it("parseCockpitAction accepts error.report with target cpd", () => {
     const a = { kind: "error.report", target: "cpd", code: "protocol_error", message: "bad" };
     expect(parseCockpitAction(a)).toEqual(a);
+  });
+});
+
+describe("parseInboxEngine", () => {
+  it("parses engineDownSince and engineRestartReason", () => {
+    expect(parseInboxEngine({ engineRunning: false, engineDownSince: "2026-01-15T12:00:00Z", engineRestartReason: "install" })).toEqual({
+      engineRunning: false, engineDownSince: "2026-01-15T12:00:00Z", engineRestartReason: "install",
+    });
+    expect(parseInboxEngine({ engineRunning: true, engineDownSince: null, engineRestartReason: null })).toEqual({
+      engineRunning: true, engineDownSince: null, engineRestartReason: null,
+    });
+    expect(() => parseInboxEngine({ engineRunning: false, engineDownSince: 5 })).toThrowError(expect.objectContaining({ code: "invalid_message" }));
   });
 });

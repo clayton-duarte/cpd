@@ -30,6 +30,23 @@ pub struct ReplyArgs {
     body_file: Option<PathBuf>,
 }
 
+#[cfg(test)]
+impl ReplyArgs {
+    pub(super) fn for_test(plan: &str, workflow: &str, to: &str, body: &str) -> ReplyArgs {
+        ReplyArgs {
+            workflow: WorkflowArg {
+                workflow: Some(crate::ids::WorkflowKey::parse(workflow).unwrap()),
+            },
+            plan: PlanArg {
+                plan: Some(crate::ids::PlanId::parse(plan).unwrap()),
+            },
+            to: to.into(),
+            body: Some(body.into()),
+            body_file: None,
+        }
+    }
+}
+
 fn usage(message: &str) -> CpdError {
     CpdError::new(ErrorCode::Usage, message)
 }
@@ -73,26 +90,47 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         .pull_request
         .expect("an open Workflow has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
-    let list = pull.feedback.unwrap_or_default();
-    let Some(item) = list.iter().find(|i| i.id == args.to) else {
-        let open: Vec<&str> = list.iter().map(|i| i.id.as_str()).collect();
-        return Err(CpdError::new(
-            ErrorCode::FeedbackNotFound,
-            format!(
-                "Workflow {} has no open feedback item {:?}.",
-                workflow.key, args.to
-            ),
-        )
-        .with("pr", workflow.key.as_str())
-        .with("to", args.to.as_str())
-        .with("open", json!(open)));
+    // Never polled (feedback NULL): a node id is enqueued unlooked; the drain validates it against GitHub.
+    let item = match &pull.feedback {
+        None => {
+            if !["PRRC_", "PRRT_", "PRR_"].iter().any(|p| {
+                args.to.strip_prefix(p).is_some_and(|rest| {
+                    !rest.is_empty()
+                        && rest
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                })
+            }) {
+                return Err(usage(&format!(
+                    "{:?} is not an item id or a GitHub node id (PRRC_, PRRT_, PRR_).",
+                    args.to
+                )));
+            }
+            None
+        }
+        Some(list) => {
+            let Some(item) = list.iter().find(|i| i.id == args.to) else {
+                let open: Vec<&str> = list.iter().map(|i| i.id.as_str()).collect();
+                return Err(CpdError::new(
+                    ErrorCode::FeedbackNotFound,
+                    format!(
+                        "Workflow {} has no open feedback item {:?}.",
+                        workflow.key, args.to
+                    ),
+                )
+                .with("pr", workflow.key.as_str())
+                .with("to", args.to.as_str())
+                .with("open", json!(open)));
+            };
+            Some(item)
+        }
     };
 
     let key = workflow.key.clone();
     let approval = match approval::agent_session() {
         Some(session)
             if bots_only(&workflow_policy(&mut env, &id, &key)?)
-                && !(item.bot && item.kind == Kind::Thread) =>
+                && !item.is_some_and(|i| i.bot && i.kind == Kind::Thread) =>
         {
             let need = approval::Need {
                 kind: approval::Kind::Reply,
@@ -104,13 +142,13 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         }
         _ => approval::Guard::none(),
     };
-    let id_text = item.id.clone();
+    let id_text = args.to.clone();
     let mutation = enqueue(
         &mut env.store,
         ports.clock.utc(),
         &target_of(&pull.repo, pull.number),
         "reply",
-        json!({"to": id_text, "body": text}),
+        payload(&id_text, text, item.is_none()),
         Some(json!({"feedback_without": id_text})),
     )?;
     let out = queued(
@@ -118,8 +156,17 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         &pull.repo,
         pull.number,
         mutation,
-        json!({"replied": {"pr": workflow.key, "to": args.to, "url": item.url}}),
+        json!({"replied": {"pr": workflow.key, "to": args.to, "url": item.map(|i| i.url.clone())}}),
     )?;
     approval.consume()?;
     Ok(out)
+}
+
+/// The outbox payload of a reply; `resolve_uncached` is present only when true.
+pub(super) fn payload(to: &str, body: &str, resolve_uncached: bool) -> serde_json::Value {
+    let mut value = json!({"to": to, "body": body});
+    if resolve_uncached {
+        value["resolve_uncached"] = json!(true);
+    }
+    value
 }
