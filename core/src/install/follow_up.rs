@@ -197,11 +197,11 @@ impl FollowUps<'_> {
 
     /// `cpd webui --prepare`: starts the new WebUI beside the old one; its pid. A failure is reported and the old
     /// WebUI is left to the new engine's own supervision.
-    fn prepare_webui(&mut self) -> Option<Pid> {
+    fn prepare_webui(&mut self) -> Result<Option<Pid>, ()> {
         let prepared = self.cpd(&["webui", "--prepare"]);
         // A successful prepare that says nothing has no WebUI to hand over: the engine supervises it as before.
         if prepared.ok() && prepared.stdout.trim().is_empty() {
-            return None;
+            return Ok(None);
         }
         let pid = prepared.ok().then(|| {
             serde_json::from_str::<serde_json::Value>(&prepared.stdout)
@@ -211,14 +211,14 @@ impl FollowUps<'_> {
                 .and_then(|p| u32::try_from(p).ok())
         });
         match pid.flatten() {
-            Some(pid) => Some(Pid(pid)),
+            Some(pid) => Ok(Some(Pid(pid))),
             None => {
                 self.fail(format!(
                     "cpd webui --prepare: {} {}; the old WebUI keeps serving",
                     describe(&prepared.stdout),
                     prepared.stderr
                 ));
-                None
+                Err(())
             }
         }
     }
@@ -262,7 +262,10 @@ impl FollowUps<'_> {
         );
         // Prepare the new WebUI beside the old one, which keeps serving until the hand-off (pro-d592).
         let old_webui = self.old_webui_pid();
-        let prepared = self.prepare_webui();
+        let prepared = match self.prepare_webui() {
+            Ok(prepared) => prepared,
+            Err(()) => return,
+        };
         let mark = self.cpd(&["watch", "--mark-restart"]);
         if !mark.ok() {
             self.fail(format!(
