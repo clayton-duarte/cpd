@@ -958,10 +958,14 @@ fn test_commands(command: &str, cwd: &Path) -> Reply {
         ("run", _) => Reply::exit(i32::from(!cwd.join("GREEN").exists()), "running\n", ""),
         ("related", _) => Reply::exit(
             i32::from(cwd.join("RELATED_BROKEN").exists()),
-            "[\"t::three\"]",
+            "[\"t::three\"]\n",
+            "related discovery diagnostics\n",
+        ),
+        ("list", name) => Reply::exit(
+            i32::from(!["t::one", "t::two", "t::three"].contains(&name)),
+            "",
             "",
         ),
-        ("list", name) => Reply::exit(i32::from(!["t::one", "t::two"].contains(&name)), "", ""),
         _ => panic!("a command nothing scripted: {command}"),
     }
 }
@@ -2409,7 +2413,16 @@ fn a_failing_related_refuses_the_submit_gate_related_failed() {
     fx.commit("src/lib.rs", "// green\n");
     fx.commit("GREEN", "x\n");
     fx.commit("RELATED_BROKEN", "x\n");
-    refused(&fx.submit(), "gate_related_failed", 3);
+    let error = refused(&fx.submit(), "gate_related_failed", 3);
+    assert!(
+        error["details"]["tail"]
+            .as_str()
+            .unwrap()
+            .contains("related discovery diagnostics"),
+        "{error}"
+    );
+    assert!(error["details"]["log"].as_str().is_some(), "{error}");
+    assert!(error["details"]["job"].as_str().is_some(), "{error}");
     assert_eq!(fx.status(), "running");
     assert!(fx.ran("run").is_empty(), "the run does not start");
 }
