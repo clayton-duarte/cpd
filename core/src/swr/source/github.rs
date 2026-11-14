@@ -153,7 +153,7 @@ impl GithubSource {
                         pr.authored = 1 OR EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pr.id AND w.status = 'open'),
                         pr.review_requested = 1,
                         d.hydrated_at, d.head_oid IS pr.head_oid AND d.updated_at IS pr.gh_updated_at, d.repo IS NOT NULL,
-                        pr.checks = 'failed', pr.labels_json, pr.created_at
+                        pr.checks IN ('failed', 'pending'), pr.labels_json, pr.created_at
                  FROM pull_requests pr LEFT JOIN swr_pr_detail d ON d.repo = pr.repo AND d.number = pr.number
                  WHERE pr.state = 'open' AND pr.archived = 0 ORDER BY pr.id",
             )?;
@@ -609,10 +609,11 @@ impl GithubSource {
                 .ok()
                 .and_then(|j| serde_json::from_str(&j).ok()))
             })?;
+            let excused = self.excused_for(cx.home, repo)?;
             if let Some(detail) = &stored {
-                let excused = self.excused_for(cx.home, repo)?;
                 swr_read::excuse_from_detail(node, detail, &excused);
             }
+            swr_read::hold_unknown_failure(node, stored.as_ref(), &excused);
             let node = &*node;
             let stored_hash: Option<String> = cx.store.read(|c| {
                 Ok(c.query_row(
