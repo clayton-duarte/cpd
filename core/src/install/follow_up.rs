@@ -308,34 +308,95 @@ const WAITER_BOUND: Duration = Duration::from_secs(3600);
 
 /// Writes `run/cpd-install.json` as `{"status":<status>,"since":<now>}`.
 fn write_install_state(ports: &Ports, cpd_home: &CpdHome, status: &str) {
+    let _ = record_install_state(ports, cpd_home, status, None);
+}
+
+fn record_install_state(
+    ports: &Ports,
+    home: &CpdHome,
+    status: &str,
+    reason: Option<&str>,
+) -> Result<(), crate::error::CpdError> {
     use time::format_description::well_known::Rfc3339;
-    let run_dir = cpd_home.run_dir();
     let since = ports
         .clock
         .utc()
         .to_offset(time::UtcOffset::UTC)
         .format(&Rfc3339)
         .unwrap_or_default();
-    let line = format!("{{\"status\":\"{status}\",\"since\":\"{since}\"}}\n");
-    let _ = std::fs::create_dir_all(&run_dir);
-    let _ = std::fs::write(run_dir.join("cpd-install.json"), line);
+    let mut state = serde_json::json!({"status": status, "since": since});
+    if let Some(reason) = reason {
+        state["reason"] = reason.into();
+    }
+    std::fs::create_dir_all(home.run_dir())
+        .and_then(|()| {
+            crate::atomic::write_atomic(
+                &home.run_dir().join("cpd-install.json"),
+                format!("{state}\n"),
+            )
+        })
+        .map_err(|e| {
+            crate::error::CpdError::new(
+                crate::error::ErrorCode::StoreFailed,
+                format!("Cannot record install state: {e}"),
+            )
+        })
 }
 
-/// The waiter's body: waits (on the clock) for `locks/watch.lock` to be free, then runs `cpd watch --ensure` once,
-/// and marks the install `ok` again. Idempotent: `cpd watch --ensure` is.
-pub fn restart_waiter(ports: &Ports, cpd_home: &CpdHome, dest: &Path) {
-    let lock = cpd_home.watch_lock();
-    let mut waited = Duration::ZERO;
-    while waited < WAITER_BOUND && !FollowUps::lock_free(&lock).unwrap_or(true) {
-        ports.clock.sleep(LOCK_STEP);
-        waited += LOCK_STEP;
+/// Waits for the engine lock, starts the replacement once, and records the final result.
+pub fn restart_waiter(
+    ports: &Ports,
+    cpd_home: &CpdHome,
+    dest: &Path,
+) -> Result<(), crate::error::CpdError> {
+    use crate::error::{CpdError, ErrorCode};
+    let result = (|| {
+        let lock = cpd_home.watch_lock();
+        std::fs::create_dir_all(lock.parent().expect("watch lock has a parent")).map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot create engine lock directory: {e}"),
+            )
+        })?;
+        let mut waited = Duration::ZERO;
+        loop {
+            if FollowUps::lock_free(&lock).map_err(|e| {
+                CpdError::new(
+                    ErrorCode::StoreFailed,
+                    format!("Cannot probe engine lock: {e}"),
+                )
+            })? {
+                break;
+            }
+            if waited >= WAITER_BOUND {
+                return Err(CpdError::new(
+                    ErrorCode::SetupFailed,
+                    "Restart waiter timed out waiting for the engine lock.",
+                ));
+            }
+            ports.clock.sleep(LOCK_STEP);
+            waited += LOCK_STEP;
+        }
+        let mut cmd = Command::new(dest);
+        cmd.args(["watch", "--ensure"])
+            .env("CPD_HOME", cpd_home.root());
+        let ensured = done(ports.runner.output(&mut cmd, "cpd", NO_DEADLINE));
+        if !ensured.ok() {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!(
+                    "Restart waiter: watch --ensure failed (exit {}): {}",
+                    ensured.code,
+                    ensured.text()
+                ),
+            ));
+        }
+        record_install_state(ports, cpd_home, "ok", None)
+    })();
+    if let Err(error) = &result {
+        let _ = record_install_state(ports, cpd_home, "failed", Some(error.message()));
     }
-    let mut cmd = Command::new(dest);
-    cmd.args(["watch", "--ensure"])
-        .env("CPD_HOME", cpd_home.root());
-    if done(ports.runner.output(&mut cmd, "cpd", NO_DEADLINE)).ok() {
-        write_install_state(ports, cpd_home, "ok");
-    }
+    result
 }
 
 /// The last step: the tagger. It never fails the install; the next install retries the tag.

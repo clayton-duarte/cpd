@@ -11,7 +11,7 @@ class FakeSocket implements SocketLike {
   write(line: string): void {
     this.lines.push(line);
   }
-  end(): void {
+  destroy(): void {
     this.ended += 1;
   }
   onData(handler: (chunk: string) => void): Disposable {
@@ -273,4 +273,30 @@ it("a synchronous startup write failure retires its deadline", async () => {
   await expect(client.listModels()).rejects.toThrow("write failed");
   expect(scheduler.pending()).toBe(0);
   client.close();
+});
+
+
+it.each(["acknowledged", "silent", "closed"])("bounds detach and retires its timer when %s", async (outcome) => {
+  const scheduler = new FakeScheduler();
+  const { client, socket } = await open(scheduler);
+  const detaching = client.detach().then(() => null, (error: unknown) => error);
+  expect(scheduler.pending()).toBe(1);
+  if (outcome === "acknowledged") socket.reply({});
+  else if (outcome === "silent") scheduler.advance(5000);
+  else client.close();
+  const result = await detaching;
+  if (outcome === "acknowledged") expect(result).toBeNull();
+  else expect(result).toMatchObject({ code: outcome === "silent" ? "host_unreachable" : "host_disconnected" });
+  expect(scheduler.pending()).toBe(0);
+  client.close();
+  client.close();
+  expect(socket.ended).toBe(1);
+});
+
+it("a host bye destroys the owned socket exactly once", async () => {
+  const { client, socket } = await open();
+  socket.emitFrame({ type: "bye", reason: "shutdown", reconnect: false });
+  expect(socket.ended).toBe(1);
+  client.close();
+  expect(socket.ended).toBe(1);
 });

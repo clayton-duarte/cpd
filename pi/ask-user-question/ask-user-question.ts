@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { appendDiagLine } from "../lib/ask-diag.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -269,6 +270,9 @@ const INERT_COMPONENT: QuestionnaireSessionComponent = {
  * overlay's `component.handleInput`). Inline has no handle to hide and keeps focus while
  * collapsed, so it needs no listener.
  */
+/** Diagnostic-log seam: appends one line to the log file. Tests replace `append`. */
+export const askDiagIo: { append(file: string, line: string): void } = { append: appendDiagLine };
+
 async function mountQuestionnaire(config: {
 	ctx: ExtensionContext;
 	typed: QuestionParams;
@@ -296,6 +300,22 @@ async function mountQuestionnaire(config: {
 	let boundTimer: ReturnType<typeof setTimeout> | undefined;
 	let externalTimer: ReturnType<typeof setInterval> | undefined;
 	const cpdSession = process.env.CPD_SESSION;
+	const cpdHome = process.env.CPD_HOME || join(homedir(), ".cpd");
+	const diag = (event: string, data: Record<string, unknown> = {}): void => {
+		try {
+			askDiagIo.append(
+				join(cpdHome, "run", "ask-diag.log"),
+				JSON.stringify({ at: new Date().toISOString(), side: "pi", event, session: cpdSession, ...data }),
+			);
+		} catch {
+			// diagnostics never change behaviour
+		}
+	};
+	diag("mount.start");
+	const settled = (source: "tui" | "external" | "bound", r: QuestionnaireResult | undefined): void =>
+		diag("mount.settled", { source, cancelled: r === undefined ? undefined : Boolean((r as { cancelled?: boolean }).cancelled) });
+	let boundFired = false;
+	let externalFired = false;
 	const answerFile = cpdSession
 		? join(process.env.CPD_HOME || join(homedir(), ".cpd"), "run", "ask", `${cpdSession}.json`)
 		: undefined;
@@ -308,6 +328,7 @@ async function mountQuestionnaire(config: {
 	}
 	const bound = new Promise<QuestionnaireResult>((resolve) => {
 		boundTimer = setTimeout(() => {
+			boundFired = true;
 			guardRef.current?.stop();
 			doneRef.current?.(STUCK_RESULT);
 			resolve(STUCK_RESULT);
@@ -320,11 +341,20 @@ async function mountQuestionnaire(config: {
 					rmSync(answerFile, { force: true });
 					const parsed = JSON.parse(raw) as { result?: QuestionnaireResult };
 					if (parsed?.result) {
+						const answers = (parsed.result as { answers?: { kind?: unknown }[] }).answers;
+						diag("answer.consumed", {
+							dialogId: (parsed as { dialogId?: string }).dialogId,
+							kinds: Array.isArray(answers) ? answers.map((a) => a?.kind) : [],
+							cancelled: Boolean((parsed.result as { cancelled?: boolean }).cancelled),
+						});
+						externalFired = true;
 						guardRef.current?.stop();
 						doneRef.current?.(parsed.result);
 						resolve(parsed.result);
 					}
-				} catch {
+				} catch (error) {
+					// Never log the exception message: JSON.parse errors can quote the answer text.
+					diag("answer.parse_failed", { error: error instanceof SyntaxError ? "json_syntax" : "read_or_parse" });
 					// ignore transient read/parse errors
 				}
 			}, 120);
@@ -332,7 +362,7 @@ async function mountQuestionnaire(config: {
 		}
 	});
 	try {
-		return await Promise.race([
+		const result = await Promise.race([
 			ctx.ui.custom<QuestionnaireResult>(
 				makeSessionFactory({ ...config, canReopenWhileHidden, sessionRef, guardRef, doneRef }),
 				presentation.overlay
@@ -353,6 +383,8 @@ async function mountQuestionnaire(config: {
 			),
 			bound,
 		]);
+		settled(boundFired ? "bound" : externalFired ? "external" : "tui", result);
+		return result;
 	} finally {
 		clearTimeout(boundTimer);
 		clearInterval(externalTimer);

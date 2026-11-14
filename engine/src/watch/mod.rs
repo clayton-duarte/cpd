@@ -213,7 +213,7 @@ fn ensure_when_free(
 ) -> Result<Output, CpdError> {
     let exe = ports.spawn.self_exe()?;
     if waiting {
-        cpd_core::install::restart_waiter(ports, home, &exe);
+        cpd_core::install::restart_waiter(ports, home, &exe)?;
         return Ok(Output::success(serde_json::json!({"waited": true})));
     }
     let failed = |why: String| {
@@ -415,6 +415,11 @@ mod ensure_when_free_tests {
         let (_dir, home) = home();
         let fakes = Fakes::new();
         fakes.spawn.set_self_exe("/x/bin/cpd");
+        let _ = (*fakes.runner).clone().once(
+            "/x/bin/cpd",
+            |_| true,
+            cpd_core::host::runner::Reply::ok(r#"{"ok":true,"started":true}"#),
+        );
         ensure_when_free(&fakes.ports, &home, true).unwrap();
         let calls: Vec<_> = fakes
             .runner
@@ -424,6 +429,20 @@ mod ensure_when_free_tests {
             .map(|c| c.args)
             .collect();
         assert_eq!(calls, [["watch", "--ensure"]]);
+        assert!(fakes.spawn.launches().is_empty());
+    }
+    #[test]
+    fn a_failed_detached_ensure_is_reported_to_the_caller() {
+        let (_dir, home) = home();
+        let fakes = Fakes::new();
+        fakes.spawn.set_self_exe("/x/bin/cpd");
+        let _ = (*fakes.runner).clone().once(
+            "/x/bin/cpd",
+            |_| true,
+            cpd_core::host::runner::Reply::exit(1, "", "tmux cannot start"),
+        );
+        let error = ensure_when_free(&fakes.ports, &home, true).unwrap_err();
+        assert!(error.message().contains("tmux cannot start"), "{error}");
         assert!(fakes.spawn.launches().is_empty());
     }
 }
