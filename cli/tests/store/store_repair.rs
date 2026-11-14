@@ -956,7 +956,7 @@ fn repair_leaves_pending_waiver_migration_to_add_its_column() {
     let conn = Connection::open(h.db()).unwrap();
     conn.execute_batch("ALTER TABLE jobs DROP COLUMN touches_waived;
         DROP TRIGGER schema_migrations_no_delete;
-        DELETE FROM schema_migrations WHERE name = '20261113T0802-job-touches-waived';
+        DELETE FROM schema_migrations WHERE name = '20261113T0804-job-touches-waived';
         CREATE TRIGGER schema_migrations_no_delete BEFORE DELETE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;").unwrap();
     drop(conn);
     let result = repair(
