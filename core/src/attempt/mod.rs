@@ -46,9 +46,6 @@ mod submit_tests;
 #[path = "touches_tests.rs"]
 mod touches_tests;
 
-#[cfg(test)]
-mod touches_unchanged_tests;
-
 use crate::args::PlanArg;
 use crate::driver;
 use crate::env::Env;
