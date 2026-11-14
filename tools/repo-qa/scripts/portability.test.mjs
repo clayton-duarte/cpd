@@ -37,6 +37,10 @@ if (args.includes("POST")) {
   rows.push(item);
   fs.writeFileSync(process.env.QA_TEST_ROWS, JSON.stringify(rows));
   console.log(JSON.stringify({ number: item.number, html_url: "https://example.test/" + item.number }));
+} else if (args[3].includes("/pulls?state=open")) console.log(JSON.stringify(rows.filter((r) => r.pull_request)));
+else if (args[3].includes("/pulls/")) {
+  const row = rows.find((r) => r.number === Number(args[3].split("/").at(-1)));
+  console.log(JSON.stringify({ ...row, state: "open", head: { sha: "a".repeat(40), ref: "qa/fix" }, base: { sha: "b".repeat(40), ref: "trunk" }, mergeable: true }));
 } else console.log(JSON.stringify(rows));
 `, { mode: 0o755 });
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, QA_TEST_ROWS: rows, QA_TEST_CALLS: calls };
@@ -47,6 +51,9 @@ if (args.includes("POST")) {
     let result = invoke(["status"]);
     assert.equal(result.status, 0, result.stderr + result.stdout + String(result.error ?? ""));
     assert.deepEqual(JSON.parse(result.stdout).run.counts, { issues: 0, prs: 0 });
+    result = invoke(["pr-status"]);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.deepEqual(JSON.parse(result.stdout).pull_requests, []);
     const bodyFile = join(repo, "literal body.md");
     writeFileSync(bodyFile, "literal $(command) `text`\nresearch");
     result = invoke(["issue", "acme/unrelated", "literal $(title)", bodyFile]);
@@ -60,6 +67,9 @@ if (args.includes("POST")) {
     result = invoke(["pr", "acme/unrelated", "qa/fix", "fix", bodyFile]);
     assert.equal(result.status, 0, result.stderr + result.stdout + String(result.error ?? ""));
     assert.equal(invoke(["pr", "acme/unrelated", "qa/extra", "extra", bodyFile]).status, 3);
+    result = invoke(["pr-status"]); // maintenance remains read-only even when run creation caps are exhausted
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.equal(JSON.parse(result.stdout).pull_requests[0].base_branch, "trunk");
     const writes = readFileSync(calls, "utf8").trim().split("\n").map(JSON.parse);
     assert.equal(writes.length, 2);
     assert.equal(writes[0].title, "literal $(title)");

@@ -24,6 +24,7 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 time.workspace = true
 toml.workspace = true
 ts-rs.workspace = true
@@ -41,4 +42,3 @@ cpd-core = { path = ".", features = ["fakes"] }
 # it the first `-p cpd-core` run after a workspace build rebuilt 12 dependencies
 # (20-30 s). Dev-only: core's library and `cargo build` never see ratatui.
 ratatui.workspace = true
-tempfile.workspace = true

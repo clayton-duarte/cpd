@@ -282,3 +282,171 @@ describe("completion service", () => {
     expect(t.payloads[t.payloads.length - 1]?.session.hasOpenDialog).toBe(false);
   });
 });
+
+
+it("reconciles live and committed tools once in the completion ledger", async () => {
+  const t = setup();
+  t.tracker.observe(tail([user("u1")]));
+  await flush();
+  const running: TranscriptItem = { kind: "tool", id: "tool:c1", callId: "c1", name: "bash", args: { command: "cpd plan lock p" }, status: "running" };
+  t.tracker.observe(status(true));
+  t.tracker.observe({ type: "session.append", sessionId: "s1", items: [running] });
+  t.tracker.observe({ type: "session.append", sessionId: "s1", items: [running] });
+  t.tracker.observe({ type: "session.update", sessionId: "s1", items: [{ ...running, status: "done", result: { text: "locked", isError: false } }] });
+  t.tracker.observe(status(false));
+  await flush();
+  expect(t.payloads.at(-1)?.ledgerActions).toEqual(["cpd plan lock p"]);
+  expect(t.payloads.at(-1)?.transcript.filter((i) => i.kind === "tool")).toHaveLength(1);
+});
+
+it("applies deltas and ignores unknown updates like the client transcript", async () => {
+  const t = setup();
+  t.tracker.observe(tail([user("u1")]));
+  await flush();
+  t.tracker.observe(status(true));
+  t.tracker.observe({ type: "session.append", sessionId: "s1", items: [{ kind: "assistant", id: "live:1", blocks: [], streaming: true }] });
+  t.tracker.observe({ type: "session.delta", sessionId: "s1", itemId: "live:1", blockIndex: 0, blockType: "text", text: "done" });
+  t.tracker.observe({ type: "session.update", sessionId: "s1", items: [user("unknown")] });
+  t.tracker.observe(status(false));
+  await flush();
+  expect(t.payloads.at(-1)?.transcript).toEqual([{ kind: "user", text: "u1" }, { kind: "assistant", text: "done" }]);
+});
+
+it("an older classification cannot overwrite the latest completed badge", async () => {
+  const t = setup({ manualClassify: true });
+  t.tracker.observe(tail([user("u1")]));
+  await flush();
+  t.tracker.observe(status(true));
+  t.tracker.observe({ type: "session.append", sessionId: "s1", items: [user("u2", "new unfinished work")] });
+  t.tracker.observe(status(false));
+  await flush();
+  expect(t.pending).toHaveLength(2);
+  const openWork: Completion = { label: "open_work", text: "Open work · 10%", score: 10, tone: "blocked" };
+  t.pending[1]!(openWork);
+  await flush();
+  expect(completions(t.sent).at(-1)).toMatchObject({ completion: openWork });
+  t.pending[0]!(done);
+  await flush();
+  t.tracker.dispose();
+  expect(completions(t.sent).at(-1)).toMatchObject({ completion: openWork });
+});
+
+
+it.each([false, true])("an older tracker cannot replace shared replay or optional persistence (disposed=%s)", async (dispose) => {
+  const pending: Array<(c: Completion | null) => void> = [];
+  const writes: string[] = [];
+  const service = createCompletionService({
+    classifier: { classify: () => new Promise<Completion | null>((resolve) => pending.push(resolve)) },
+    planOf: async () => plan(1), store: { get: async () => null, put: async (_id, entry) => { writes.push(entry); } },
+  });
+  const old = service.track(lead, () => {});
+  old.observe(tail([user("u1")])); await flush();
+  const newer = service.track(lead, () => {});
+  newer.observe(tail([user("u2")])); await flush();
+  const open: Completion = { ...done, label: "open_work", text: "Open work", tone: "blocked" };
+  pending[1]!(open); await flush();
+  if (dispose) old.dispose();
+  pending[0]!(done); await flush();
+  const replay: SessionServerMessage[] = [];
+  service.track(lead, (m) => replay.push(m));
+  expect(completions(replay)).toEqual([{ type: "session.completion", sessionId: "s1", completion: open }]);
+  expect(writes).toEqual(["u2"]);
+});
+
+it.each([false, true])("optional completion writes stay ordered and skip superseded queue entries (supersede=%s)", async (supersede) => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const entered: string[] = [], committed: string[] = [];
+  const service = createCompletionService({
+    classifier: { classify: async () => done }, planOf: async () => plan(1),
+    store: { get: async () => null, put: async (_id, entry) => { entered.push(entry); if (entry === "u1") await gate; committed.push(entry); } },
+  });
+  const tracker = service.track(lead, () => {});
+  tracker.observe(tail([user("u1")])); await flush();
+  tracker.observe(tail([user("u2")])); await flush();
+  if (supersede) { tracker.observe(tail([user("u3")])); await flush(); }
+  const beforeRelease = [...entered];
+  release(); await flush();
+  expect(beforeRelease).toEqual(["u1"]);
+  expect(committed).toEqual(["u1", supersede ? "u3" : "u2"]);
+});
+
+
+it("current trackers share one keyed classification while only the newest owns persistence", async () => {
+  let resolve: (c: Completion | null) => void = () => {};
+  let calls = 0, writes = 0;
+  const service = createCompletionService({
+    classifier: { classify: () => { calls++; return new Promise<Completion | null>((r) => { resolve = r; }); } },
+    planOf: async () => plan(1), store: { get: async () => null, put: async () => { writes++; } },
+  });
+  const a: SessionServerMessage[] = [], b: SessionServerMessage[] = [];
+  const first = service.track(lead, (m) => a.push(m)), second = service.track(lead, (m) => b.push(m));
+  first.observe(tail([user("u1")])); second.observe(tail([user("u1")])); await flush();
+  expect(calls).toBe(1);
+  resolve(done); await flush();
+  expect(completions(a)).toHaveLength(1); expect(completions(b)).toHaveLength(1);
+  expect(writes).toBe(1);
+});
+
+it("a slow obsolete plan read cannot start classification or publish over the newer input", async () => {
+  let resolve: (p: PlanViewModel | null) => void = () => {};
+  const gate = new Promise<PlanViewModel | null>((r) => { resolve = r; });
+  let plans = 0;
+  const payloads: CompletionPayload[] = [];
+  const service = createCompletionService({
+    classifier: { classify: async (payload) => { payloads.push(payload); return done; } },
+    planOf: () => ++plans === 1 ? gate : Promise.resolve(plan(1)),
+  });
+  const sent: SessionServerMessage[] = [];
+  const tracker = service.track(lead, (m) => sent.push(m));
+  tracker.observe(tail([user("u1")])); tracker.observe(tail([user("u2")])); await flush();
+  resolve(plan(1)); await flush();
+  expect(payloads.map((p) => p.transcript.map((i) => i.text))).toEqual([["u2"]]);
+  expect(completions(sent)).toHaveLength(1);
+});
+
+it.each(["null", "rejected"])("does not persist an older fallback under the new entry when classification is %s", async (failure) => {
+  let stored = { entryId: "u1", completion: done };
+  let calls = 0;
+  const writes: string[] = [];
+  const fresh: Completion = { ...done, label: "open_work", text: "Open work", tone: "blocked" };
+  const service = createCompletionService({
+    classifier: { classify: () => {
+      calls++;
+      if (calls === 1) return failure === "rejected" ? Promise.reject(new Error("offline")) : Promise.resolve(null);
+      return Promise.resolve(fresh);
+    } },
+    planOf: async () => plan(1),
+    store: { get: async () => stored, put: async (_id, entryId, completion) => { writes.push(entryId); stored = {entryId, completion}; } },
+  });
+  const sent: SessionServerMessage[] = [];
+  const tracker = service.track(lead, (m) => sent.push(m));
+  tracker.observe(tail([user("u2")])); await flush();
+  const afterFailure = { writes: [...writes], entry: stored.entryId };
+  expect(completions(sent).at(-1)).toMatchObject({ completion: done });
+  tracker.observe(tail([user("u2")])); await flush();
+  expect(afterFailure).toEqual({ writes: [], entry: "u1" });
+  expect(calls).toBe(2);
+  expect(completions(sent).at(-1)).toMatchObject({ completion: fresh });
+  expect(writes).toEqual(["u2"]);
+});
+
+it.each([true, false])("only a surviving same-input tracker inherits disposed shared ownership (same=%s)", async (same) => {
+  const pending: Array<(c: Completion | null) => void> = [];
+  const writes: string[] = [];
+  const service = createCompletionService({ classifier: { classify: () => new Promise<Completion | null>((r) => pending.push(r)) },
+    planOf: async () => plan(1), store: { get: async () => null, put: async (_id, entry) => { writes.push(entry); } } });
+  const sent: SessionServerMessage[] = [];
+  const first = service.track(lead, (m) => sent.push(m));
+  first.observe(tail([user("u1")])); await flush();
+  const second = service.track(lead, () => {});
+  second.observe(tail([user(same ? "u1" : "u2")])); await flush();
+  second.dispose();
+  pending[0]!(done); await flush();
+  const replay: SessionServerMessage[] = [];
+  service.track(lead, (m) => replay.push(m));
+  expect(completions(sent)).toHaveLength(1);
+  expect(completions(replay)).toHaveLength(same ? 1 : 0);
+  expect(writes).toEqual(same ? ["u1"] : []);
+  expect(pending).toHaveLength(same ? 1 : 2);
+});

@@ -324,6 +324,20 @@ describe("optimistic merge", () => {
     expect(ids(failed)).toEqual([1, 2, 3]);
   });
 
+  it.each([false, true])("interrupting optimistic merges restores unknown rows and preserves confirmed ones (confirmed=%s)", (confirmed) => {
+    const store = createStore(loaded());
+    for (const [actionId, pull] of [["a1", "acme/api#3"], ["a2", "acme/api#4"]]) {
+      store.dispatch({ type: "actionStart", actionId: actionId! });
+      store.dispatch({ type: "actionOptimistic", actionId: actionId!, action: { kind: "pr.merge", planId: "p1", pull: pull! } });
+    }
+    if (confirmed) store.dispatch(server({ type: "action.result", actionId: "a2", ok: true, output: {} }));
+    store.dispatch({ type: "actionsInterrupted", actionIds: ["a1", "a2"], error: err });
+    expect(ids(store.getState())).toEqual(confirmed ? [1, 3] : [1, 2, 3]);
+    expect(store.getState().pendingActionIds).toEqual([]);
+    expect(store.getState().completedActionIds).toEqual(confirmed ? ["a2"] : []);
+    expect(Object.keys(store.getState().optimistic)).toEqual(confirmed ? ["a2"] : []);
+  });
+
   it("merge_success_keeps_row_removed_until_refresh", () => {
     const removed = run(loaded(), merge);
     const ok = run(removed, server({ type: "action.result", actionId: "a1", ok: true, output: {} }));

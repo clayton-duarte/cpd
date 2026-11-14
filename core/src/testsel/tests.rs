@@ -822,7 +822,7 @@ impl Sample {
                 Reply::ok(""),
             )
             .on("cargo.sh", first("nextest"), Reply::ok(""))
-            .on("node", has("--test"), Reply::ok(""))
+            .on("node", node_report, Reply::ok(""))
             .on("pnpm", has("typecheck"), Reply::ok(""));
         fakes
     }
@@ -854,9 +854,52 @@ impl Sample {
     }
 }
 
-/// The node calls: `node --test <patterns…> <file>`.
+/// Emit execution metadata for the sample runner's requested literal titles.
+fn node_report(call: &Call) -> bool {
+    let args = words(call);
+    if !args.contains(&"--test") {
+        return false;
+    }
+    let Some(destination) = args
+        .iter()
+        .rev()
+        .find_map(|a| a.strip_prefix("--test-reporter-destination="))
+    else {
+        return false;
+    };
+    let file = call.cwd.as_ref().unwrap().join(args.last().unwrap());
+    let mut events = Vec::new();
+    for title in [
+        "passes",
+        "fails",
+        "a.c (1+1) [x]",
+        "single",
+        "double",
+        "tick",
+    ] {
+        if args.iter().any(|a| *a == pattern(title)) {
+            events.push(
+                json!({"type":"test:pass", "data":{"name":title,"file":file,"kind":"test"}})
+                    .to_string(),
+            );
+        }
+    }
+    events.push(json!({"type":"test:summary","data":{"success":true}}).to_string());
+    fs::write(destination, events.join("\n")).unwrap();
+    true
+}
+
+/// Selection arguments only; reporter configuration is checked separately.
 fn node_calls(out: &Out) -> Vec<Vec<&str>> {
-    out.calls_of("node").into_iter().map(words).collect()
+    out.calls_of("node")
+        .into_iter()
+        .map(|c| {
+            words(c)
+                .into_iter()
+                .filter(|a| !a.starts_with("--test-reporter"))
+                .collect()
+        })
+        .collect()
 }
 
 // Ported from cli/tests/tooling/tests_script.rs, name for name.
@@ -864,7 +907,7 @@ fn node_calls(out: &Out) -> Vec<Vec<&str>> {
 #[test]
 fn a_rust_name_and_a_pi_name_each_run_and_pass() {
     let s = Sample::new();
-    let fakes = s.fakes(|r| r.on("node", has("--test"), Reply::ok("✔ passes (0.4ms)\n")));
+    let fakes = s.fakes(|r| r.on("node", node_report, Reply::ok("✔ passes (0.4ms)\n")));
     let rust = s.run(&fakes, &["green_one"]);
     assert_eq!(rust.status, 0, "{}", rust.what());
     let both = s.run(&fakes, &["green_one", &pi("passes")]);
@@ -933,13 +976,7 @@ fn a_misspelled_name_makes_list_and_run_exit_non_zero() {
 fn a_pi_title_with_regex_characters_runs_exactly_that_test() {
     let s = Sample::new();
     let title = "a.c (1+1) [x]";
-    let fakes = s.fakes(|r| {
-        r.on(
-            "node",
-            has("--test"),
-            Reply::ok("✔ a.c (1+1) [x] (0.3ms)\n"),
-        )
-    });
+    let fakes = s.fakes(|r| r.on("node", node_report, Reply::ok("✔ a.c (1+1) [x] (0.3ms)\n")));
     let out = s.run(&fakes, &[&pi(title)]);
     assert_eq!(out.status, 0, "{}", out.what());
     assert!(out.stdout.contains(title), "{}", out.what());
@@ -1260,14 +1297,38 @@ fn classify_web_name() {
     );
 }
 
+fn writes_web_report(receipt: Option<String>) -> impl Fn(&Call) -> bool + Send + Sync + 'static {
+    move |call| {
+        if !call.args.iter().any(|a| a == "vitest") {
+            return false;
+        }
+        if let Some(body) = &receipt
+            && let Some(path) = call
+                .args
+                .windows(2)
+                .find(|a| a[0] == "--outputFile")
+                .map(|a| &a[1])
+        {
+            fs::write(path, body).unwrap();
+        }
+        true
+    }
+}
+
+fn passed_web_report(root: &Path, title: &str) -> String {
+    write(root, "web/sample.test.tsx", "// a collected fixture");
+    json!({ "success": true, "testResults": [{ "name": root.join("web/sample.test.tsx"), "assertionResults": [{ "title": title, "status": "passed", "ancestorTitles": ["suite"] }] }] }).to_string()
+}
+
 /// A web name runs through the web package's vitest, filtered by the exact title.
 #[test]
 fn dispatch_web_name_runs_vitest() {
     let s = Sample::new();
+    let report = passed_web_report(&s.root, "renders a button");
     let fakes = s.fakes(|r| {
         r.on(
             "pnpm",
-            |c| c.args.iter().any(|a| a == "vitest"),
+            writes_web_report(Some(report)),
             Reply::ok("✓ renders a button (2ms)\n"),
         )
     });
@@ -1278,6 +1339,16 @@ fn dispatch_web_name_runs_vitest() {
         .filter(|c| c.args.iter().any(|a| a == "vitest"))
         .map(words)
         .collect();
+    assert_eq!(out.status, 0, "{}", out.what());
+    let report_at = vitest[0]
+        .iter()
+        .position(|a| *a == "--outputFile")
+        .expect("isolated JSON report");
+    let report_path = vitest[0][report_at + 1];
+    assert!(
+        !Path::new(report_path).exists(),
+        "execution report is cleaned after the run"
+    );
     assert_eq!(
         vitest,
         [vec![
@@ -1286,6 +1357,10 @@ fn dispatch_web_name_runs_vitest() {
             "exec",
             "vitest",
             "run",
+            "--reporter=default",
+            "--reporter=json",
+            "--outputFile",
+            report_path,
             "--testNamePattern",
             "(?:^| > )renders a button$",
             "web/sample.test.tsx"
@@ -1309,10 +1384,11 @@ fn dispatch_web_name_runs_vitest() {
 #[test]
 fn web_title_with_regex_metacharacters_is_escaped_and_anchored() {
     let s = Sample::new();
+    let report = passed_web_report(&s.root, "a.c (1+1) [x]");
     let fakes = s.fakes(|r| {
         r.on(
             "pnpm",
-            |c| c.args.iter().any(|a| a == "vitest"),
+            writes_web_report(Some(report)),
             Reply::ok("✓ a.c (1+1) [x] (2ms)\n"),
         )
     });
@@ -1323,6 +1399,16 @@ fn web_title_with_regex_metacharacters_is_escaped_and_anchored() {
         .filter(|c| c.args.iter().any(|a| a == "vitest"))
         .map(words)
         .collect();
+    assert_eq!(out.status, 0, "{}", out.what());
+    let report_at = vitest[0]
+        .iter()
+        .position(|a| *a == "--outputFile")
+        .expect("isolated JSON report");
+    let report_path = vitest[0][report_at + 1];
+    assert!(
+        !Path::new(report_path).exists(),
+        "execution report is cleaned after the run"
+    );
     assert_eq!(
         vitest,
         [vec![
@@ -1331,6 +1417,10 @@ fn web_title_with_regex_metacharacters_is_escaped_and_anchored() {
             "exec",
             "vitest",
             "run",
+            "--reporter=default",
+            "--reporter=json",
+            "--outputFile",
+            report_path,
             "--testNamePattern",
             r"(?:^| > )a\.c \(1\+1\) \[x\]$",
             "web/sample.test.tsx"
@@ -1511,4 +1601,169 @@ fn pi_and_rust_names_unchanged() {
         Kind::Rust,
         "a Rust name stays a Rust name"
     );
+}
+
+#[test]
+fn web_run_rejects_missing_skipped_and_unrelated_execution_reports() {
+    for (label, status, file, title, contents, expected) in [
+        (
+            "missing",
+            "passed",
+            "web/sample.test.tsx",
+            "wanted",
+            None,
+            1,
+        ),
+        (
+            "malformed",
+            "passed",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("not JSON"),
+            1,
+        ),
+        (
+            "skipped",
+            "pending",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("report"),
+            1,
+        ),
+        (
+            "todo",
+            "todo",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("report"),
+            1,
+        ),
+        (
+            "other title",
+            "passed",
+            "web/sample.test.tsx",
+            "other",
+            Some("report"),
+            1,
+        ),
+        (
+            "other file",
+            "passed",
+            "web/other.test.tsx",
+            "wanted",
+            Some("report"),
+            1,
+        ),
+        (
+            "ran",
+            "passed",
+            "web/sample.test.tsx",
+            "wanted",
+            Some("report"),
+            0,
+        ),
+    ] {
+        let s = Sample::new();
+        write(&s.root, "web/sample.test.tsx", "// a collected fixture");
+        write(
+            &s.root,
+            "web/other.test.tsx",
+            "// another collected fixture",
+        );
+        let receipt = contents.map(|body| if body == "report" {
+            json!({ "success": true, "testResults": [{ "name": s.root.join(file), "assertionResults": [{ "title": title, "status": status, "ancestorTitles": ["suite"] }] }] }).to_string()
+        } else { body.to_owned() });
+        let fakes = s.fakes(|r| {
+            r.on(
+                "pnpm",
+                writes_web_report(receipt),
+                Reply::ok("all skipped can still exit zero\n"),
+            )
+        });
+        let out = s.run(&fakes, &["web/sample.test.tsx::wanted"]);
+        assert_eq!(out.status, expected, "{label}: {}", out.what());
+    }
+}
+
+#[test]
+fn web_run_confirms_nested_titles_and_rejects_a_skipped_matching_assertion() {
+    for skipped in [false, true] {
+        let s = Sample::new();
+        write(&s.root, "web/sample.test.tsx", "// a collected fixture");
+        let mut assertions =
+            vec![json!({ "title": "wanted", "status": "passed", "ancestorTitles": ["suite"] })];
+        if skipped {
+            assertions.push(
+                json!({ "title": "wanted", "status": "pending", "ancestorTitles": ["suite"] }),
+            );
+        }
+        let report = json!({ "success": true, "testResults": [{ "name": s.root.join("web/sample.test.tsx"), "assertionResults": assertions }] }).to_string();
+        let fakes = s.fakes(|r| {
+            r.on(
+                "pnpm",
+                writes_web_report(Some(report)),
+                Reply::ok("output preserved\n"),
+            )
+        });
+        let out = s.run(&fakes, &["web/sample.test.tsx::suite > wanted"]);
+        assert_eq!(out.status, if skipped { 1 } else { 0 }, "{}", out.what());
+        assert!(out.stdout.contains("output preserved"));
+    }
+}
+#[test]
+fn named_node_tests_require_complete_matching_execution_metadata() {
+    let s = Sample::new();
+    let file = s.root.join(PI);
+    let pass = json!({"type":"test:pass","data":{"name":"passes","file":file,"kind":"test"}});
+    let summary = json!({"type":"test:summary","data":{"success":true}});
+    let accepted = format!("{pass}\n{summary}\n");
+    assert!(super::pi_ran(accepted.as_bytes(), &file, "passes"));
+    for field in ["skip", "todo"] {
+        let mut skipped = pass.clone();
+        skipped["data"][field] = json!(true);
+        assert!(!super::pi_ran(
+            format!("{skipped}\n{summary}").as_bytes(),
+            &file,
+            "passes"
+        ));
+    }
+    for report in [
+        String::new(),
+        summary.to_string(),
+        pass.to_string(),
+        format!("{accepted}broken"),
+        format!("{pass}\n{{\"type\":\"test:summary\",\"data\":{{\"success\":false}}}}"),
+        accepted.replace("passes", "different"),
+        accepted.replace("sample.test.ts", "other.test.ts"),
+        accepted.replace("test:pass", "test:fail"),
+    ] {
+        assert!(
+            !super::pi_ran(report.as_bytes(), &file, "passes"),
+            "{report}"
+        );
+    }
+    let fakes = s.fakes(|r| r.on("node", has("--test"), Reply::ok("human output says passed")));
+    assert_eq!(s.run(&fakes, &[&pi("passes")]).status, 1);
+}
+
+#[test]
+fn node_report_files_are_private_and_removed_after_the_run() {
+    let s = Sample::new();
+    let fakes = s.fakes(|r| r);
+    let out = s.run(&fakes, &[&pi("passes")]);
+    assert_eq!(out.status, 0, "{}", out.what());
+    let args = words(out.calls_of("node")[0]);
+    assert!(args.contains(&"--test-reporter=spec"));
+    assert!(args.contains(&"--test-reporter-destination=stdout"));
+    for prefix in ["--test-reporter=", "--test-reporter-destination="] {
+        let path = args
+            .iter()
+            .rev()
+            .find_map(|a| a.strip_prefix(prefix))
+            .unwrap();
+        assert!(
+            !Path::new(path).exists(),
+            "temporary output retained: {path}"
+        );
+    }
 }

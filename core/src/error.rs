@@ -155,6 +155,10 @@ error_codes! {
     InvalidName = "invalid_name" => Usage,
     FileUnreadable = "file_unreadable" => Usage,
     SpecInvalid = "spec_invalid" => Usage,
+    // `protocol bug mitigate --issue` that is not https://github.com/<owner>/<repo>/issues/<N> (commands.md §33.2).
+    IssueInvalid = "issue_invalid" => Usage,
+    // `workflow add --adopt --bug`: an adopted pull request is not described by cpd, so it gets no closing reference.
+    AdoptBugUnsupported = "adopt_bug_unsupported" => Usage,
     OutlineInvalid = "outline_invalid" => Usage,
     TierInvalid = "tier_invalid" => Usage,
     TierNotAllowed = "tier_not_allowed" => Usage,
@@ -234,6 +238,7 @@ error_codes! {
     NoCommits = "no_commits" => Refused,
     GateTampered = "gate_tampered" => Refused,
     TouchesViolation = "touches_violation" => Refused,
+    TestsRemoved = "tests_removed" => Refused,
     NotAwaitingReview = "not_awaiting_review" => Refused,
     EscalationAnswered = "escalation_answered" => Refused,
     EscalationExpired = "escalation_expired" => Refused,
@@ -287,6 +292,11 @@ error_codes! {
     PresetModelUnoffered = "preset_model_unoffered" => Refused,
     // `protocol bug close` without a root-fix link and a regression test (air-d107; commands.md §33.3).
     RootFixRequired = "root_fix_required" => Refused,
+    // `protocol bug mitigate` without `--issue`; a bug with no issue linked by `workflow add --bug` or closed with a root fix.
+    IssueRequired = "issue_required" => Refused,
+    BugIssueRequired = "bug_issue_required" => Refused,
+    // `protocol bug mitigate` of a bug that has an issue, with another `--issue`: the linked open PRs would keep the old closing reference.
+    IssueConflict = "issue_conflict" => Refused,
     // Context curation and message bus (contract §5.9).
     NearDuplicate = "near_duplicate" => Refused,
     NotPermitted = "not_permitted" => Refused,
@@ -303,6 +313,8 @@ error_codes! {
     SessionNotFound = "session_not_found" => NotFound,
     // A bug id no `bug_records` row holds (commands.md §33).
     BugNotFound = "bug_not_found" => NotFound,
+    // `workflow add --bug` of an id no `bug_records` row holds (commands.md §9.4).
+    BugUnknown = "bug_unknown" => NotFound,
     McpUnknown = "mcp_unknown" => NotFound,
     SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
@@ -332,6 +344,7 @@ error_codes! {
     SessionRunning = "session_running" => Refused,
     DescriptionRequired = "description_required" => Refused,
     JiraRequired = "jira_required" => Refused,
+    DocsForbidden = "docs_forbidden" => Refused,
     JiraTitleInvalid = "jira_title_invalid" => Refused,
     DescriptionInvalid = "description_invalid" => Refused,
     AdoptNotOpen = "adopt_not_open" => Refused,
@@ -506,6 +519,16 @@ impl Serialize for ErrorObject<'_> {
     }
 }
 
+/// `docs_forbidden` (exit 3): the owner's policy sets `workflow.local_docs = false`, so no docs Job, docs shape or new `docs/**/*.md` file.
+pub fn docs_forbidden(what: &str) -> CpdError {
+    CpdError::new(
+        ErrorCode::DocsForbidden,
+        format!(
+            "{what}: the policy sets workflow.local_docs = false, so this repo keeps no local markdown docs. Record decisions in the Context (cpd context decide), as missionlane-style repos do."
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +588,7 @@ mod tests {
             (ErrorCode::DirtyTree, 3),
             (ErrorCode::GateFailed, 3),
             (ErrorCode::TouchesViolation, 3),
+            (ErrorCode::TestsRemoved, 3),
             (ErrorCode::CasLost, 3),
             (ErrorCode::LockedJobTampered, 3),
             (ErrorCode::RecordNotFound, 3),

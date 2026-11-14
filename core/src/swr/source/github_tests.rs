@@ -157,9 +157,27 @@ impl Handler for World {
             "rateLimit".into(),
             json!({"remaining": st.remaining, "resetAt": timestamp(st.reset), "cost": 1}),
         );
-        for (alias, list) in [("authored", &st.authored), ("reviews", &st.reviews)] {
+        for (alias, list) in [
+            ("authored", &st.authored),
+            ("reviews", &st.reviews),
+            ("authoredMore", &st.authored),
+            ("reviewsMore", &st.reviews),
+        ] {
+            let Some(at) = query.find(&format!("{alias}: search(")) else {
+                continue;
+            };
+            let selection = &query[at..][..query[at..].find(" { pageInfo").unwrap()];
+            let offset = selection
+                .split("after: \"")
+                .nth(1)
+                .map(|s| s.split('"').next().unwrap().parse::<usize>().unwrap())
+                .unwrap_or(0);
+            let has_next = list.len() > offset + 100;
+            let cursor = has_next.then(|| (offset + 100).to_string());
             let nodes: Vec<Value> = list
                 .iter()
+                .skip(offset)
+                .take(100)
                 .map(|p| {
                     let mut node = p.node();
                     if st.light_only {
@@ -175,7 +193,7 @@ impl Handler for World {
                 .collect();
             data.insert(
                 alias.into(),
-                json!({"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": nodes}),
+                json!({"pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}),
             );
         }
         for (i, repo, number) in pr_aliases(query) {
@@ -189,8 +207,19 @@ impl Handler for World {
                         node.as_object_mut().unwrap().remove("comments");
                     }
                 }
-                node["viewerDidAuthor"] = json!(false);
-                node["viewerLatestReviewRequest"] = Value::Null;
+                node["viewerDidAuthor"] = json!(
+                    st.authored
+                        .iter()
+                        .any(|p| p.repo == node["repository"]["nameWithOwner"]
+                            && p.number == node["number"])
+                );
+                node["viewerLatestReviewRequest"] = if st.reviews.iter().any(|p| {
+                    p.repo == node["repository"]["nameWithOwner"] && p.number == node["number"]
+                }) {
+                    json!({"id":"request"})
+                } else {
+                    Value::Null
+                };
                 node
             });
             data.insert(format!("p{i}"), json!({"pullRequest": found}));
@@ -379,6 +408,7 @@ fn gh_poll_selects_heavy_fields_only_for_moved_or_unhydrated_prs() {
         heavy: vec![("acme/pay".into(), 1)],
         absent: vec![("acme/pay".into(), 2)],
         meta: vec![],
+        ..PollPlan::default()
     });
     let (first, second) = q
         .split_once("p1: repository")
@@ -848,6 +878,7 @@ fn non_empty_heavy_uses_reviewthreads_first_100_in_both_fragments() {
         heavy: vec![("acme/pay".to_owned(), 1)],
         absent: vec![],
         meta: vec![],
+        ..PollPlan::default()
     });
     assert!(q.contains("fragment Light"), "{q}");
     assert!(q.contains("fragment Heavy"), "{q}");
@@ -863,4 +894,388 @@ fn empty_heavy_omits_the_heavy_fragment() {
     let q = build_poll_query(&PollPlan::default());
     assert!(!q.contains("fragment Heavy"), "{q}");
     assert!(!q.contains("...Heavy"), "{q}");
+}
+
+#[test]
+fn gh_poll_discovers_continuation_pages_fairly_without_extra_calls() {
+    let mut rig = Rig::new();
+    {
+        let mut state = rig.state();
+        state.authored = (1..=205).map(pr).collect();
+        state.reviews = (301..=401).map(pr).collect();
+        state.light_only = true;
+        for p in state
+            .authored
+            .clone()
+            .into_iter()
+            .chain(state.reviews.clone())
+        {
+            state.world.insert((p.repo.into(), p.number), p);
+        }
+    }
+    for (pass, expected) in [(0, 200), (1, 301), (2, 306)] {
+        rig.pass(pass * 60).unwrap();
+        let count: i64 = rig
+            .store
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(count, expected, "each search progresses independently");
+        assert_eq!(rig.graphql().len(), pass as usize + 1, "one call per pass");
+    }
+    let q = rig.graphql();
+    assert!(q[1].contains("after: \"100\""), "second page: {}", q[1]);
+    assert!(q[2].contains("after: \"200\""), "third page: {}", q[2]);
+    assert!(
+        !q[2].contains("reviewsMore:"),
+        "finished peer sweep restarts at first page"
+    );
+    assert!(
+        q.iter()
+            .all(|q| q.contains("authored: search(") && q.contains("reviews: search("))
+    );
+    rig.pass(180).unwrap();
+    assert!(
+        !rig.graphql()[3].contains("authoredMore:"),
+        "completed sweep returns to first page"
+    );
+    let flags: (bool, bool) = rig
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT authored, review_requested FROM pull_requests WHERE number = 401",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    // Fake aliases reflect peer membership as the real GitHub alias would.
+    assert!(
+        flags.1,
+        "an unvisited page does not itself clear membership"
+    );
+}
+
+#[test]
+fn gh_poll_failed_continuation_restarts_discovery_without_advancing() {
+    let mut rig = Rig::new();
+    rig.state().authored = (1..=101).map(pr).collect();
+    rig.pass(0).unwrap();
+    rig.state().fail = Some(Reply::ok("{broken-json"));
+    assert!(rig.pass(60).is_err());
+    rig.state().fail = None;
+    rig.pass(120).unwrap();
+    assert!(
+        !rig.graphql()[2].contains("authoredMore:"),
+        "failure resets an invalid cursor"
+    );
+    rig.pass(180).unwrap();
+    let found: bool = rig
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pull_requests WHERE number = 101)",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert!(found);
+}
+
+struct BrokenDiscoveryPage {
+    world: Arc<World>,
+    fault: u8,
+}
+impl Handler for BrokenDiscoveryPage {
+    fn handle(&self, call: &Call) -> Reply {
+        let Reply::Exit { stdout, .. } = self.world.handle(call) else {
+            panic!("world reply");
+        };
+        let mut reply: Value = serde_json::from_slice(&stdout).unwrap();
+        match self.fault {
+            0 => {
+                reply["data"]["authoredMore"]["pageInfo"] =
+                    json!({"hasNextPage":true,"endCursor":null})
+            }
+            1 => {
+                reply["data"]["authoredMore"]["pageInfo"] =
+                    json!({"hasNextPage":true,"endCursor":"100"})
+            }
+            2 => {
+                reply["data"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("authoredMore");
+            }
+            3 => reply["data"]["viewer"]["login"] = json!("grace"),
+            _ => unreachable!(),
+        }
+        Reply::ok(&reply.to_string())
+    }
+}
+
+#[test]
+fn gh_poll_invalid_discovery_page_does_not_commit_partial_rows() {
+    for fault in 0..3 {
+        let mut rig = Rig::new();
+        rig.state().authored = (1..=101).map(pr).collect();
+        rig.pass(0).unwrap();
+        (*rig.fakes.runner).clone().route(
+            "gh",
+            Arc::new(BrokenDiscoveryPage {
+                world: rig.world.clone(),
+                fault,
+            }),
+        );
+        assert!(
+            rig.pass(60).is_err(),
+            "bad cursor or missing page must be visible"
+        );
+        let count: i64 = rig
+            .store
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(count, 100, "no partial-page commit");
+        (*rig.fakes.runner).clone().route("gh", rig.world.clone());
+        rig.pass(120).unwrap();
+        assert!(
+            !rig.graphql()[2].contains("authoredMore:"),
+            "restart after malformed cursor"
+        );
+        rig.pass(180).unwrap();
+        let found: bool = rig
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pull_requests WHERE number = 101)",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert!(found);
+    }
+}
+
+#[test]
+fn gh_poll_account_change_restarts_both_search_sweeps() {
+    let mut rig = Rig::new();
+    rig.state().authored = (1..=205).map(pr).collect();
+    rig.pass(0).unwrap();
+    (*rig.fakes.runner).clone().route(
+        "gh",
+        Arc::new(BrokenDiscoveryPage {
+            world: rig.world.clone(),
+            fault: 3,
+        }),
+    );
+    rig.pass(60).unwrap();
+    (*rig.fakes.runner).clone().route("gh", rig.world.clone());
+    rig.pass(120).unwrap();
+    assert!(
+        !rig.graphql()[2].contains("authoredMore:"),
+        "@me changed: discard the old account cursor"
+    );
+}
+
+#[test]
+fn gh_poll_escapes_opaque_discovery_cursor_as_a_graphql_string() {
+    let cursor = "cursor\"with\\escapes\n";
+    let query = build_poll_query(&PollPlan {
+        authored_after: Some(cursor.into()),
+        ..PollPlan::default()
+    });
+    assert!(query.contains(&format!(
+        "after: {}",
+        serde_json::to_string(cursor).unwrap()
+    )));
+}
+
+/// `gh` for a pass that also reads deploys: GraphQL goes to the [`World`], every other call to `deploys`.
+struct WithDeploys {
+    world: Arc<World>,
+    deploys: Mutex<Reply>,
+}
+
+impl Handler for WithDeploys {
+    fn handle(&self, call: &Call) -> Reply {
+        if call
+            .args
+            .starts_with(&["api".to_owned(), "graphql".to_owned()])
+        {
+            return self.world.handle(call);
+        }
+        self.deploys.lock().unwrap().clone()
+    }
+}
+
+/// A rig whose repo declares one workflow and whose non-GraphQL `gh` answers `deploys`.
+fn deploys_rig(deploys: Reply) -> (Rig, Arc<WithDeploys>) {
+    let rig = Rig::new();
+    let path = rig.home.root().join("policy/acme/pay.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, "[deploys]\nworkflows = [\"main.yml\"]\n").unwrap();
+    let handler = Arc::new(WithDeploys {
+        world: rig.world.clone(),
+        deploys: Mutex::new(deploys),
+    });
+    let _ = (*rig.fakes.runner).clone().route("gh", handler.clone());
+    (rig, handler)
+}
+
+/// The stored `last_ok_at` of the github endpoint.
+fn last_ok(rig: &mut Rig) -> Option<String> {
+    rig.text("SELECT last_ok_at FROM swr_endpoints WHERE endpoint = 'github'")
+}
+
+#[test]
+fn a_failed_deploys_read_does_not_record_the_endpoint_ok() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let ok_at = last_ok(&mut rig);
+    assert_eq!(ok_at, Some(timestamp(rig.t0)), "the first pass is ok");
+    *handler.deploys.lock().unwrap() = Reply::exit(1, "", "gh: HTTP 500: Server Error\n");
+    assert!(rig.pass(10).is_err(), "the deploys read failed");
+    assert_eq!(last_ok(&mut rig), ok_at, "last_ok_at is unchanged");
+    let row = endpoint::get(&mut rig.store, "github")
+        .unwrap()
+        .expect("endpoint row");
+    assert_eq!(row.error_count, 1, "the failure is recorded");
+}
+
+#[test]
+fn a_304_deploys_read_still_commits_changed_rows_and_records_ok() {
+    let not_modified = Reply::exit(
+        1,
+        "HTTP/2.0 304 Not Modified\r\nEtag: W/\"abc\"\r\n\r\n",
+        "gh: HTTP 304\n",
+    );
+    let (mut rig, _handler) = deploys_rig(not_modified);
+    rig.seed(&pr(1), true);
+    rig.sql(
+        "INSERT INTO swr_deploy_lists (repo, workflow, viewer_login, etag) VALUES ('acme/pay', 'main.yml', 'ada', 'W/\"abc\"')",
+    );
+    let mut moved = pr(1);
+    moved.oid = "b2";
+    moved.updated = "U2";
+    rig.state().authored = vec![moved];
+    let result = rig.pass(0);
+    assert!(result.is_ok(), "a 304 is unchanged: {result:?}");
+    assert_eq!(
+        rig.text("SELECT head_oid FROM pull_requests WHERE number = 1"),
+        Some("b2".into()),
+        "the changed row is committed"
+    );
+    assert_eq!(last_ok(&mut rig), Some(timestamp(rig.t0)), "ok is recorded");
+}
+
+#[test]
+fn a_deploys_rate_limit_pauses_until_the_rest_reset_not_the_graphql_one() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let rest_reset = rig.t0 + time::Duration::seconds(120);
+    let stdout = format!(
+        "HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Reset: {}\r\n\r\n{{\"message\":\"API rate limit exceeded\"}}",
+        rest_reset.unix_timestamp()
+    );
+    *handler.deploys.lock().unwrap() = Reply::exit(1, &stdout, "gh: HTTP 403\n");
+    let error = rig.pass(10).unwrap_err();
+    assert_eq!(error.details()["rate_limited"], true);
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(
+        row.paused_until,
+        Some(rest_reset + time::Duration::seconds(3)),
+        "the REST reset plus grace, earlier than the stored GraphQL reset"
+    );
+}
+
+#[test]
+fn a_deploys_rate_limit_never_shortens_an_active_graphql_floor_pause() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty);
+    rig.state().authored = vec![pr(1)];
+    rig.pass(0).unwrap();
+    let graphql_reset = rig.t0 + time::Duration::seconds(3600);
+    rig.state().remaining = 99;
+    rig.state().reset = graphql_reset;
+    let rest_reset = rig.t0 + time::Duration::seconds(120);
+    let stdout = format!(
+        "HTTP/2.0 403 Forbidden\r\nX-Ratelimit-Reset: {}\r\n\r\n{{\"message\":\"API rate limit exceeded\"}}",
+        rest_reset.unix_timestamp()
+    );
+    *handler.deploys.lock().unwrap() = Reply::exit(1, &stdout, "gh: HTTP 403\n");
+    let error = rig.pass(10).unwrap_err();
+    assert_eq!(error.details()["rate_limited"], true);
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(
+        row.paused_until,
+        Some(graphql_reset),
+        "the later floor pause stands"
+    );
+}
+
+#[test]
+fn gh_poll_failed_deploys_commit_restarts_the_discovery_sweep() {
+    let empty = Reply::ok(&json!({"total_count": 0, "workflow_runs": []}).to_string());
+    let (mut rig, handler) = deploys_rig(empty.clone());
+    rig.state().authored = (1..=101).map(pr).collect();
+    rig.pass(0).unwrap();
+    let ok_at = last_ok(&mut rig);
+    *handler.deploys.lock().unwrap() = Reply::exit(1, "", "gh: HTTP 500: Server Error\n");
+    assert!(rig.pass(60).is_err());
+    assert_eq!(
+        last_ok(&mut rig),
+        ok_at,
+        "a failed commit is not endpoint success"
+    );
+    *handler.deploys.lock().unwrap() = empty;
+    rig.pass(120).unwrap();
+    let queries = rig.graphql();
+    assert!(
+        queries[1].contains("authoredMore:"),
+        "the failed pass tried a continuation"
+    );
+    assert!(
+        !queries[2].contains("authoredMore:"),
+        "a failed deploys commit restarts discovery"
+    );
+    rig.pass(180).unwrap();
+    assert!(rig.graphql()[3].contains("authoredMore:"));
+}
+
+/// b80: a PR listed open, then gone from the search, is read once and ends merged (or closed), even behind a backlog of
+/// older tracked rows the search never lists (they would fill every confirmation slot).
+#[test]
+fn gh_poll_rereads_a_listed_pr_that_leaves_the_open_search() {
+    let mut rig = Rig::new();
+    for n in 20..32 {
+        let stale = pr(n);
+        rig.seed(&stale, true);
+        rig.state().world.insert((stale.repo.into(), n), stale);
+    }
+    let (open_merged, open_closed) = (pr(100), pr(101));
+    rig.seed(&open_merged, true);
+    rig.seed(&open_closed, true);
+    rig.state().authored = vec![open_merged.clone(), open_closed.clone()];
+    for p in [&open_merged, &open_closed] {
+        rig.state()
+            .world
+            .insert((p.repo.into(), p.number), p.clone());
+    }
+    rig.pass(0).unwrap();
+    assert_eq!(rig.pr_state(100).as_deref(), Some("open"));
+    let (mut merged, mut closed) = (open_merged, open_closed);
+    merged.state = "MERGED";
+    closed.state = "CLOSED";
+    rig.state().authored = vec![];
+    rig.state().world.insert(("acme/pay".into(), 100), merged);
+    rig.state().world.insert(("acme/pay".into(), 101), closed);
+    rig.pass(600).unwrap();
+    rig.pass(1200).unwrap();
+    assert_eq!(rig.pr_state(100).as_deref(), Some("merged"));
+    assert_eq!(rig.pr_state(101).as_deref(), Some("closed"));
 }

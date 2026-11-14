@@ -148,3 +148,33 @@ describe("pi watch", () => {
     expect(events).toEqual([]);
   });
 });
+
+
+it("measures allocation while catching up a four MiB valid transcript append", async () => {
+  const { fs, watch, handle, events, errors } = setup("");
+  const lines = Array.from({ length: 1024 }, (_, i) => JSON.stringify({ type: "message", id: `m${i}`, message: { role: "user", content: "x".repeat(4096) } }));
+  fs.append(`${lines.join("\n")}\n`);
+  const bytes = fs.bytes.length;
+  const Original = globalThis.Uint8Array;
+  let allocated = 0;
+  globalThis.Uint8Array = new Proxy(Original, {
+    construct(target, args, newTarget) {
+      if (typeof args[0] === "number") allocated += args[0];
+      return Reflect.construct(target, args, newTarget);
+    },
+  });
+  try {
+    watch.fire();
+    for (let i = 0; i < 250; i++) await Promise.resolve();
+  } finally {
+    globalThis.Uint8Array = Original;
+    handle.dispose();
+  }
+  expect(errors).toEqual([]);
+  expect(events).toHaveLength(1);
+  const append = events[0] as Extract<WatchEvent, { kind: "append" }>;
+  expect(append.result.added).toHaveLength(1024);
+  expect(append.endOffset).toBe(bytes);
+  console.log(JSON.stringify({ append_bytes: bytes, allocated_bytes: allocated, chunks: fs.reads.length }));
+  expect(allocated).toBeLessThanOrEqual(bytes * 2);
+});

@@ -57,7 +57,7 @@ export interface Extras {
 export interface CockpitService {
   start(): Promise<void>;
   stop(): void;
-  /** Resolves once the first `loadAll` has landed; rejects when the bounded retries are exhausted (air-n101). */
+  /** Resolves once the first `loadAll` has landed; rejects when stopped before ready or when bounded retries are exhausted (air-n101). */
   ready(): Promise<void>;
   snapshot(): CockpitSnapshot;
   selectedPlanId(): string | null;
@@ -101,19 +101,26 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   const readyPromise = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   readyPromise.catch(() => undefined);
   const markReady = (): void => { if (!readyResolved) { readyResolved = true; resolveReady(); } };
-  const delay = (ms: number): Promise<void> => new Promise((resolve) => { scheduler.after(ms, resolve); });
+  let startupRetry: Disposable | null = null;
+  let resolveStopped: () => void = () => {};
+  const stoppedPromise = new Promise<void>((resolve) => { resolveStopped = resolve; });
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => {
+    startupRetry = scheduler.after(ms, () => { startupRetry = null; resolve(); });
+  });
   const loadInitial = async (): Promise<void> => {
     let attempt = 1;
-    for (;;) {
+    while (!stopped) {
       try {
-        const all = await readModel.loadAll(planId);
+        const all = await Promise.race([readModel.loadAll(planId), stoppedPromise]);
+        if (stopped || all === undefined) return;
         snap = all;
         lastCursor = all.tree.cursor;
         markReady();
         return;
       } catch (e) {
+        if (stopped) return;
         if (attempt >= LOAD_ATTEMPTS || !isTransientLoadError(e)) throw e;
-        await delay(Math.min(LOAD_RETRY_BASE_MS * 2 ** (attempt - 1), LOAD_RETRY_MAX_MS));
+        await Promise.race([delay(Math.min(LOAD_RETRY_BASE_MS * 2 ** (attempt - 1), LOAD_RETRY_MAX_MS)), stoppedPromise]);
         attempt += 1;
       }
     }
@@ -127,6 +134,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   let restart: Disposable | null = null;
   let safety: Disposable | null = null;
   let raw: RawPanes | null = null;
+  let mapped: ReturnType<typeof mapPanes> | null = null;
   let snapEmit: Disposable | null = null;
   let planDue = false;
 
@@ -276,10 +284,6 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     inbox: checkOk(p.inbox, "inbox"),
     owners: checkOwners(p.owners),
   });
-  const emitRaw = (): void => {
-    if (raw === null) return;
-    try { const m = mapPanes(raw); apply({ tree: m.tree, inbox: m.inbox }); } catch (e) { emitError(e); }
-  };
   const loadPlanView = async (): Promise<void> => {
     const id = planId;
     if (id === null || stream === undefined) return;
@@ -293,19 +297,26 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   const onSnapshot = (s: StreamSnapshot): void => {
     if (stopped) return;
     stopFollow();
-    try { raw = toRaw(s.panes); } catch (e) { emitError(e); return; }
-    if (s.panes.status !== undefined) {
-      let pane: StatusPane;
-      try { pane = checkOk(s.panes.status, "status") as unknown as StatusPane; } catch (e) { emitError(e); return; }
-      if (JSON.stringify(pane) !== JSON.stringify(serveStatus)) {
-        serveStatus = pane;
+    let next: RawPanes;
+    let nextMapped: ReturnType<typeof mapPanes>;
+    let nextStatus: StatusPane | undefined;
+    try {
+      next = toRaw(s.panes);
+      nextMapped = mapPanes(next);
+      nextStatus = s.panes.status === undefined ? undefined : checkOk(s.panes.status, "status") as unknown as StatusPane;
+    } catch (e) { emitError(e); return; }
+    raw = next;
+    mapped = nextMapped;
+    if (nextStatus !== undefined) {
+      if (JSON.stringify(nextStatus) !== JSON.stringify(serveStatus)) {
+        serveStatus = nextStatus;
         void refreshStatus();
       }
     }
     if (snapEmit === null) {
       snapEmit = scheduler.after(COALESCE_MS, () => {
         snapEmit = null;
-        emitRaw();
+        if (mapped !== null) apply({ tree: mapped.tree, inbox: mapped.inbox });
         if (planDue) { planDue = false; void loadPlanView(); }
       });
     }
@@ -325,8 +336,13 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       return r;
     });
     if (!hit) return;
-    raw = { ...raw, session: { ...raw.session, sessions } };
-    try { apply({ tree: mapPanes(raw).tree }); } catch (e) { emitError(e); }
+    const next = { ...raw, session: { ...raw.session, sessions } };
+    try {
+      const nextMapped = mapPanes(next);
+      raw = next;
+      mapped = nextMapped;
+      apply({ tree: nextMapped.tree });
+    } catch (e) { emitError(e); }
   };
   const onStreamState = (ready: boolean): void => {
     if (stopped) return;
@@ -336,7 +352,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
 
   return {
     async start() {
-      if (started) return;
+      if (started || stopped) return;
       started = true;
       try {
         await loadInitial();
@@ -356,6 +372,12 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     ready: () => readyPromise,
     stop() {
       stopped = true;
+      startupRetry?.dispose(); startupRetry = null;
+      resolveStopped();
+      if (!readyResolved) {
+        readyResolved = true;
+        rejectReady(new WebError("internal", "cockpit stopped before startup completed", { reason: "stopped" }));
+      }
       stream?.stop();
       snapEmit?.dispose(); snapEmit = null;
       for (const s of procSubs) s.dispose();

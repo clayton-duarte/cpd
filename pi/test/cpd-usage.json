@@ -825,6 +825,17 @@
       "--reason"
     ]
   },
+  "job reseal": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "job retry": {
     "flags": {
       "--help": false,
@@ -1363,6 +1374,7 @@
     "flags": {
       "--cause": true,
       "--help": false,
+      "--issue": true,
       "--mitigation": true
     },
     "positionals": {
@@ -1991,6 +2003,7 @@
     "flags": {
       "--adopt": true,
       "--base": true,
+      "--bug": true,
       "--confirm-author": true,
       "--help": false,
       "--jira": true,

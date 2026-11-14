@@ -344,3 +344,87 @@ fn swr_transient_failure_backs_off_and_retries() {
     assert_eq!(again.id, id);
     assert_eq!(again.attempt_count, 2);
 }
+
+/// A jira `transition` with no `target_key` waits for its Workflow's ticket (swr-jira.md §7) and is never claimed. Once
+/// its Workflow is merged, cancelled or gone with no ticket, `discard_ended_ticketless` marks it `failed`
+/// (`workflow_ended_no_ticket`), never retried. A row of an open Workflow stays pending; a keyed row is untouched.
+#[test]
+fn ticketless_jira_mutation_discarded_only_for_ended_workflows() {
+    let (_dir, mut store) = store();
+    let clock = ManualClock::new();
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+                 INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, mergeable, merge_state, authored, review_requested)
+                   VALUES (7, 'o/r', 7, 'https://e/7', 'Ship', 0, 'merged', 'none', 'none', 't', 't', 't', 'unknown', 'unknown', 0, 0);
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at)
+                   VALUES ('pay', 'done', '/n', 'main', 'merged', 'cpd/pay/done', '/n/done', cpd_txn(), 't', 't', 7, 'https://e/7', 't', 7, 't');
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                   VALUES ('pay', 'live', '/n', 'main', 'dispatch', 'cpd/pay/live', '/n/live', cpd_txn(), 't', 't');",
+            )?;
+            for workflow in ["done", "live", "gone"] {
+                tx.execute(
+                    "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, submitted_at, context_json)
+                     VALUES ('jira', NULL, 'transition', '{\"target\":\"in_review\",\"rank\":2}', 'pending', ?1, ?2)",
+                    [
+                        crate::clock::timestamp(clock.utc()),
+                        format!("{{\"plan\":\"pay\",\"workflow\":\"{workflow}\"}}"),
+                    ],
+                )?;
+            }
+            Ok::<(), crate::error::CpdError>(())
+        })
+        .unwrap();
+    let mut keyed = op("transition", json!({"ticket": "EEC-1", "target": "done"}));
+    keyed.system = "jira".into();
+    let keyed = outbox::enqueue(&mut store, at(&clock, 1), keyed, Coalesce::LatestWins).unwrap();
+
+    let now = at(&clock, 1);
+    let discarded = super::source::jira::discard_ended_ticketless(&mut store, now).unwrap();
+    assert_eq!(
+        discarded, 2,
+        "the merged Workflow's row and the missing one's"
+    );
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = store
+        .read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT COALESCE(json_extract(context_json, '$.workflow'), 'keyed'), status, error, next_attempt_at
+                 FROM swr_mutations ORDER BY id",
+            )?;
+            Ok(stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .unwrap();
+    let state = |name: &str| rows.iter().find(|r| r.0 == name).unwrap().clone();
+    for ended in ["done", "gone"] {
+        let (_, status, error, retry) = state(ended);
+        assert_eq!(status, "failed", "{ended}");
+        assert!(
+            error
+                .unwrap_or_default()
+                .contains("workflow_ended_no_ticket")
+        );
+        assert_eq!(retry, None, "never retried");
+    }
+    assert_eq!(state("live").1, "pending", "an open Workflow's row waits");
+    assert_eq!(state("keyed").1, "pending", "a ticketed row is untouched");
+    assert_eq!(
+        outbox::claim_next(&mut store, now, "jira")
+            .unwrap()
+            .unwrap()
+            .id,
+        keyed,
+        "only the keyed row is claimed"
+    );
+    assert!(
+        outbox::claim_next(&mut store, now, "jira")
+            .unwrap()
+            .is_none()
+    );
+}

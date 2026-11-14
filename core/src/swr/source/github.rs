@@ -62,6 +62,18 @@ fn no_effects(store: &mut crate::store::Store, _now: OffsetDateTime) -> Result<V
 /// and the next one confirms every flagged row the first one did not list.
 type Listed = HashMap<String, BTreeSet<(String, i64)>>;
 static LISTED: Mutex<Option<Listed>> = Mutex::new(None);
+/// What the previous pass listed and this one did not (b80): confirmed before any older row the searches never list, so a
+/// merged or closed pull request is not starved of a confirmation slot.
+static VANISHED: Mutex<Option<Listed>> = Mutex::new(None);
+
+/// Discovery progress is expendable engine memory, scoped by store and authenticated viewer.
+#[derive(Clone, Default)]
+struct SearchPages {
+    viewer: String,
+    authored_after: Option<String>,
+    reviews_after: Option<String>,
+}
+static SEARCH_PAGES: Mutex<Option<HashMap<String, SearchPages>>> = Mutex::new(None);
 
 /// The real `github` source (swr-github.md §4).
 #[derive(Default)]
@@ -126,6 +138,14 @@ impl GithubSource {
                 .and_then(|m| m.get(&cx.store.path().display().to_string()))
                 .cloned()
         };
+        let vanished = {
+            let guard = VANISHED.lock().expect("vanished memory");
+            guard
+                .as_ref()
+                .and_then(|m| m.get(&cx.store.path().display().to_string()))
+                .cloned()
+                .unwrap_or_default()
+        };
         let home = cx.home;
         let stored: Vec<Stored> = cx.store.read(|c| {
             let mut stmt = c.prepare(
@@ -133,7 +153,7 @@ impl GithubSource {
                         pr.authored = 1 OR EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pr.id AND w.status = 'open'),
                         pr.review_requested = 1,
                         d.hydrated_at, d.head_oid IS pr.head_oid AND d.updated_at IS pr.gh_updated_at, d.repo IS NOT NULL,
-                        pr.checks = 'failed', pr.labels_json, pr.created_at
+                        pr.checks IN ('failed', 'pending'), pr.labels_json, pr.created_at
                  FROM pull_requests pr LEFT JOIN swr_pr_detail d ON d.repo = pr.repo AND d.number = pr.number
                  WHERE pr.state = 'open' AND pr.archived = 0 ORDER BY pr.id",
             )?;
@@ -183,12 +203,12 @@ impl GithubSource {
         let heavy: Vec<(String, i64)> = heavy.iter().map(|s| (s.repo.clone(), s.number)).collect();
         // (peer, created_at, key): the User's own first, then the oldest. A cold memory (an engine restart) lists nothing, so
         // every tracked row not listed by a search is confirmed, a few per pass.
-        let mut absent: Vec<(bool, String, (String, i64))> = Vec::new();
+        let mut absent: Vec<(bool, bool, String, (String, i64))> = Vec::new();
         let prev = memory.unwrap_or_default();
         for s in stored.iter().filter(|s| s.tracked) {
             let key = (s.repo.clone(), s.number);
             if !prev.contains(&key) && !heavy.contains(&key) {
-                absent.push((!s.own, s.created_at.clone(), key));
+                absent.push((!vanished.contains(&key), !s.own, s.created_at.clone(), key));
             }
         }
         let floor = now.unix_timestamp() - SLACK_WINDOW;
@@ -226,16 +246,36 @@ impl GithubSource {
             Ok(rows)
         })?;
         for key in first_seen {
-            if !absent.iter().any(|(_, _, k)| *k == key)
+            if !absent.iter().any(|(_, _, _, k)| *k == key)
                 && !heavy.contains(&key)
                 && !tombstoned.contains(&key.0)
             {
-                absent.push((true, String::new(), key));
+                absent.push((true, true, String::new(), key));
+            }
+        }
+        // A `revalidating` mutation's target is read each pass until its own commit settles it (swr.md §10): a merged PR is
+        // omitted from open searches, and only its confirmed raw row may drop the overlay. Sorted before every other candidate.
+        for target in cache::unsettled_targets(cx.store, "github")? {
+            let Some((repo, number)) = target
+                .strip_prefix("github:pr:")
+                .and_then(|k| k.rsplit_once('#'))
+                .and_then(|(r, n)| Some((r.to_owned(), n.parse::<i64>().ok()?)))
+            else {
+                continue;
+            };
+            let key = (repo, number);
+            absent.retain(|(_, _, _, k)| *k != key);
+            if !heavy.contains(&key) && !tombstoned.contains(&key.0) {
+                absent.push((false, false, String::new(), key));
             }
         }
         absent.sort();
         let room = ABSENT_CAP.saturating_sub(heavy.len());
-        let absent: Vec<(String, i64)> = absent.into_iter().take(room).map(|(_, _, k)| k).collect();
+        let absent: Vec<(String, i64)> = absent
+            .into_iter()
+            .take(room)
+            .map(|(_, _, _, k)| k)
+            .collect();
         let repos: BTreeSet<&str> = stored
             .iter()
             .map(|s| s.repo.as_str())
@@ -265,7 +305,16 @@ impl GithubSource {
             })
             .map(str::to_owned)
             .collect();
+        let pages = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&cx.store.path().display().to_string()))
+            .cloned()
+            .unwrap_or_default();
         Ok(PollPlan {
+            authored_after: pages.authored_after,
+            reviews_after: pages.reviews_after,
             heavy,
             absent,
             meta,
@@ -314,14 +363,46 @@ impl GithubSource {
         if read.remaining < RATE_FLOOR {
             endpoint::pause_until(cx.store, "github", reset)?;
         }
-        endpoint::record_ok(cx.store, "github", now)?;
-        self.commit(cx, &plan, read, now, poll_started_at)
+        let mut next = SearchPages {
+            viewer: read.viewer.clone(),
+            authored_after: read.authored_after.clone(),
+            reviews_after: read.reviews_after.clone(),
+        };
+        let store = cx.store.path().display().to_string();
+        // @me changed accounts: the old opaque cursor belongs to a different search.
+        let previous = SEARCH_PAGES
+            .lock()
+            .expect("search pages")
+            .as_ref()
+            .and_then(|m| m.get(&store))
+            .cloned();
+        if previous.is_some_and(|p| p.viewer != next.viewer) {
+            next.authored_after = None;
+            next.reviews_after = None;
+        }
+        // A successful read is not enough: deploys and every commit step must succeed too.
+        match self.commit(cx, &plan, read, now, poll_started_at) {
+            Ok(effects) => {
+                endpoint::record_ok(cx.store, "github", now)?;
+                SEARCH_PAGES
+                    .lock()
+                    .expect("search pages")
+                    .get_or_insert_with(HashMap::new)
+                    .insert(store, next);
+                Ok(effects)
+            }
+            Err(e) => self.failed(cx, now, e),
+        }
     }
 
     /// A failed call is the endpoint's failure; the cached rows stay (swr.md §6). A hard rate limit pauses the endpoint
-    /// until its future stored reset plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
+    /// until its future reset (the error's own, else the stored one) plus grace (or [`RATE_LIMITED_PAUSE`] when absent/expired) and is returned to E5, which
     /// pauses its own poll; it is not an error.
     fn failed(&self, cx: &mut Cx<'_>, now: OffsetDateTime, e: CpdError) -> Result<Value, CpdError> {
+        // A failed read or commit restarts discovery rather than retaining an invalid/incomplete sweep.
+        if let Some(pages) = SEARCH_PAGES.lock().expect("search pages").as_mut() {
+            pages.remove(&cx.store.path().display().to_string());
+        }
         let flag = |name: &str| {
             e.details()
                 .get(name)
@@ -329,11 +410,24 @@ impl GithubSource {
                 .unwrap_or(false)
         };
         if flag("rate_limited") {
-            let until = endpoint::get(cx.store, "github")?
-                .and_then(|row| row.rate_reset_at)
+            // The failing call's own reset (a REST budget) wins over the stored GraphQL one (pro-d588).
+            let own = e
+                .details()
+                .get("reset_at")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|at| {
+                    OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
+                });
+            let until = own
+                .or(endpoint::get(cx.store, "github")?.and_then(|row| row.rate_reset_at))
                 .map(|reset| reset + RATE_GRACE)
                 .filter(|until| *until > now)
                 .unwrap_or(now + RATE_LIMITED_PAUSE);
+            // Never shorten an active pause (e.g. the GraphQL rate-floor one set earlier in this pass).
+            let until = endpoint::get(cx.store, "github")?
+                .filter(|row| endpoint::is_paused(row, now))
+                .and_then(|row| row.paused_until)
+                .map_or(until, |active| active.max(until));
             endpoint::pause_until(cx.store, "github", until)?;
             return Err(e);
         }
@@ -515,10 +609,11 @@ impl GithubSource {
                 .ok()
                 .and_then(|j| serde_json::from_str(&j).ok()))
             })?;
+            let excused = self.excused_for(cx.home, repo)?;
             if let Some(detail) = &stored {
-                let excused = self.excused_for(cx.home, repo)?;
                 swr_read::excuse_from_detail(node, detail, &excused);
             }
+            swr_read::hold_unknown_failure(node, stored.as_ref(), &excused);
             let node = &*node;
             let stored_hash: Option<String> = cx.store.read(|c| {
                 Ok(c.query_row(
@@ -570,11 +665,22 @@ impl GithubSource {
                 })?;
             }
         }
-        LISTED
+        let store = cx.store.path().display().to_string();
+        let mut memory = LISTED.lock().expect("listed memory");
+        let gone: BTreeSet<(String, i64)> = memory
+            .as_ref()
+            .and_then(|m| m.get(&store))
+            .map(|before| before.difference(&listed).cloned().collect())
+            .unwrap_or_default();
+        VANISHED
             .lock()
-            .expect("listed memory")
+            .expect("vanished memory")
             .get_or_insert_with(HashMap::new)
-            .insert(cx.store.path().display().to_string(), listed);
+            .insert(store.clone(), gone);
+        memory
+            .get_or_insert_with(HashMap::new)
+            .insert(store, listed);
+        drop(memory);
         // pro-d469: every pass fills `swr_deploys`, so E8 opens deploy items without a manual `cpd pr poll`.
         crate::pr::deploys::read_into_store(&*cx.ports.runner, cx.store, cx.home, now)?;
         Ok(effects)
