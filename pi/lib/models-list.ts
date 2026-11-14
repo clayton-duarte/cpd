@@ -1,15 +1,13 @@
 // The model-discovery helper (docs/contract.md §3.7 E15; docs/commands.md §14.5; Context decisions pro-d13, pro-d17,
 // pro-d20). Lists the models of every provider pi can use and a list can change for: `github-copilot` when pi has a
 // login for it (pi's own API: the account's list) and every custom provider of `models.json` with a `baseUrl`
-// (`GET <baseUrl>/models`, the key resolved by pi from that provider's own `apiKey`). Built-in providers are not listed.
-// With `--all` (docs/commands.md §14.6 step 5) the built-in providers are listed too: for each, when pi has auth for
-// it and it offers models, an entry with its ids — the full registry `cpd preset apply` validates against; the answer
-// is otherwise the same shape.
+// (`GET <baseUrl>/models`, the key resolved by pi from that provider's own `apiKey`), and built-in providers
+// when pi has auth for them and offers models. `--all` retains the same full registry for preset validation.
 // The key is never printed, logged, put in an argument or in an error. Prints ONE JSON value on stdout (`Answer`);
 // writes nothing. `pi/test/models-list.test.ts` pins it.
 //
 //   node pi/lib/models-list.ts        (no argument; pi's Node; the engine's environment)
-//   node pi/lib/models-list.ts --all  (the built-ins included, for `cpd preset apply`)
+//   node pi/lib/models-list.ts --all  (the full registry, for `cpd preset apply`)
 //
 // The runtime is injected, so a test needs no login: `rt` is what pi's `ModelRuntime` offers. Built-in providers have
 // a `refreshModels`; a `models.json` provider has none (docs/research/models-discovery.md D1, D2).
@@ -36,7 +34,7 @@ export interface ListDeps {
   fetch?: typeof fetch;
   /** The timeout of one fetch; 60 000 by default. */
   fetchTimeoutMs?: number;
-  /** `--all`: list the built-in providers pi has auth for and models to offer, besides the usual entries (§14.6). */
+  /** `--all`: request the full registry for preset validation (§14.6). */
   all?: boolean;
 }
 
@@ -135,7 +133,7 @@ async function listCopilot(deps: ListDeps): Promise<Entry | undefined> {
   }
 }
 
-/** A built-in provider other than `github-copilot`, in `--all` mode (docs/commands.md §14.6 step 5): when pi has
+/** A built-in provider other than `github-copilot`: when pi has
  * auth for it and it offers models, an entry with its ids; else left out (never a failure that hides the others). */
 async function listBuiltin(deps: ListDeps, provider: string): Promise<Entry | undefined> {
   const { rt } = deps;
@@ -150,18 +148,18 @@ async function listBuiltin(deps: ListDeps, provider: string): Promise<Entry | un
   }
 }
 
-/** Lists every provider pi can use: with `deps.all` the built-in providers too. */
+/** Lists every provider pi can use. */
 export async function listModels(deps: ListDeps): Promise<Answer> {
   const providers = deps.rt.getProviders();
   const work: Promise<Entry | undefined>[] = [];
   for (const p of providers) {
     if (p.id === COPILOT) work.push(listCopilot(deps));
     // A built-in provider has a `refreshModels`; one of `models.json` has none.
-    else if (p.refreshModels !== undefined && deps.all) work.push(listBuiltin(deps, p.id));
+    else if (p.refreshModels !== undefined) work.push(listBuiltin(deps, p.id));
     else if (p.refreshModels === undefined && p.baseUrl) work.push(listCustom(deps, p.id, p.baseUrl));
   }
   const entries = (await Promise.all(work)).filter((e): e is Entry => e !== undefined);
-  if (entries.length === 0) return { ok: false, ...fail("models_no_provider", "pi can use no provider whose model list this helper reads (github-copilot with a login, or a models.json provider with a baseUrl).") };
+  if (entries.length === 0) return { ok: false, ...fail("models_no_provider", "pi can use no provider whose model list this helper reads.") };
   return { ok: true, pi_version: deps.piVersion, providers: entries };
 }
 
