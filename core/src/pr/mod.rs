@@ -31,6 +31,8 @@ mod deploys_tests;
 mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod merge_gate_tests;
 pub mod merge_green;
 #[cfg(test)]
 mod merge_green_tests;
@@ -52,6 +54,8 @@ mod query_tests;
 mod rate_limit_tests;
 #[cfg(test)]
 mod reply_tests;
+#[cfg(test)]
+mod rereview_tests;
 #[cfg(test)]
 mod settings_cache_tests;
 
@@ -77,6 +81,7 @@ mod push;
 pub(crate) mod rebase;
 mod reply;
 mod repost;
+pub mod rereview;
 mod rerun;
 pub mod review;
 pub mod swr_read;

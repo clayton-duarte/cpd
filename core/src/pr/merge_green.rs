@@ -45,6 +45,17 @@ pub(super) fn merge_green(ports: &Ports, args: MergeArgs) -> Result<Output, CpdE
         .with("number", number)
         .with("checks", e.row.checks.as_str()));
     }
+    // The threads GitHub shows unresolved, answered ones included: a queued or posted reply does not clear the gate.
+    let open_threads = store.read(|conn| super::pulls::unresolved_threads(conn, &repo, number))?;
+    if open_threads > 0 {
+        return Err(CpdError::new(
+            ErrorCode::ChecksNotGreen,
+            format!("{repo}#{number}: {open_threads} review thread(s) are unresolved; nothing was changed."),
+        )
+        .with("repo", repo.as_str())
+        .with("number", number)
+        .with("open_threads", open_threads));
+    }
     // Prerequisites gate (§9.5b): unmet external prerequisites refuse before any gh call
     let owning_workflow: Option<(String, String)> = store.read(|conn| {
         use rusqlite::OptionalExtension;

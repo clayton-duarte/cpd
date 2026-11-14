@@ -14,16 +14,16 @@ fn store(dir: &tempfile::TempDir) -> Store {
 }
 
 /// Inserts one open pull request row: `number`, its `base_ref` and `default_branch`, and the persisted containment
-/// flag `base_contained` (`None` = NULL, the new `pull_requests` column).
+/// flag `base_contained` (`None` = NULL, the new `pull_requests` column). Reviews are known empty.
 fn insert(store: &mut Store, number: i64, base: &str, default: &str, contained: Option<i64>) {
     store
         .write("test", |tx| {
             tx.execute(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks,
                                             created_at, changed_at, mergeable, merge_state, authored, review_requested,
-                                            base_ref, default_branch, archived, base_contained, head_oid)
+                                            base_ref, default_branch, archived, base_contained, head_oid, open_threads)
                  VALUES ('acme/pay', ?1, 'https://github.com/acme/pay/pull/' || ?1, 'T', 0, 'open', 'none', 'passed',
-                         'c', 'c', 'mergeable', 'clean', 1, 0, ?2, ?3, 0, ?4, 'abc')",
+                         'c', 'c', 'mergeable', 'clean', 1, 0, ?2, ?3, 0, ?4, 'abc', '[]')",
                 rusqlite::params![number, base, default, contained],
             )?;
             Ok(())

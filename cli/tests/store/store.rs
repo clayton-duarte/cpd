@@ -330,6 +330,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     expected.insert("pull_requests_hist_del".to_owned());
     expected.insert("swr_deploy_lists".to_owned());
     expected.insert("workflow_prereqs".to_owned());
+    expected.insert("pr_rereview_asks".to_owned());
     let found = names(
         &raw(&env),
         "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -342,7 +343,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     );
     assert_eq!(
         tables.len(),
-        50, // 32 (33 less `jira_transitions`, dropped by `jira-swr`), the 14 tables of `swr`, `bug_records`, `test_replacements`, `workflow_prereqs` and `refactor_coverage_baselines`
+        51, // 32 (33 less `jira_transitions`, dropped by `jira-swr`), the 14 tables of `swr`, `bug_records`, `test_replacements`, `workflow_prereqs`, `refactor_coverage_baselines` and `pr_rereview_asks`
         "§4.4's tables, the three lookup tables and schema_migrations"
     );
     for table in tables {
@@ -478,6 +479,9 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
                 "labels_json",
                 "merge_armed",
                 "base_contained",
+                "open_threads",
+                "reviewers",
+                "rereview_head",
             ];
             for column in columns
                 .iter()

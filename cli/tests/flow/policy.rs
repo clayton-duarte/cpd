@@ -176,7 +176,8 @@ fn the_output_has_exactly_the_documented_fields() {
             "pr.post.merged_reaction",
             "pr.post.require_approval",
             "pr.post.template",
-            "pr.required_checks"
+            "pr.required_checks",
+            "pr.rereview_bots"
         ]
     );
     let mut gate: Vec<&str> = out["policy"]["gate"]["keys"]

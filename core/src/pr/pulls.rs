@@ -52,14 +52,68 @@ pub struct PullRequest {
 
 /// The expression "ready to merge" (pro-d118) over the `pull_requests` row aliased `alias`: 1 or 0, never NULL. The
 /// pull request is open, not a draft, its merge state is clean, its base is the repo's default branch and it has
-/// a head commit. Behind main is not a condition (b79): the containment flag is not read; an unknown (NULL)
+/// a head commit and no unresolved review threads. Behind main is not a condition (b79): the containment flag is not read; an unknown (NULL)
 /// base or default branch is not ready. The one definition: every reader uses it.
 pub fn ready_to_merge_sql(alias: &str) -> String {
     format!(
         "COALESCE({alias}.state = 'open' AND {alias}.draft = 0 AND {alias}.merge_state = 'clean' \
          AND {alias}.base_ref IS NOT NULL AND {alias}.base_ref = {alias}.default_branch \
-         AND {alias}.head_oid IS NOT NULL, 0)"
+         AND {alias}.head_oid IS NOT NULL AND {no_threads}, 0)",
+        no_threads = no_open_thread_sql(alias)
     )
+}
+
+/// 1 when no review thread is unresolved on GitHub (pro-d588): the stored `open_threads` (answered threads included), else, for a row
+/// read before that column, the thread items of `feedback`.
+pub fn no_open_thread_sql(alias: &str) -> String {
+    format!(
+        "(CASE WHEN json_valid({alias}.open_threads) THEN json_array_length({alias}.open_threads) = 0 \
+         WHEN json_valid({alias}.feedback) THEN NOT EXISTS (SELECT 1 FROM json_each({alias}.feedback) f \
+                          WHERE json_extract(f.value, '$.kind') = 'thread') ELSE 0 END)"
+    )
+}
+
+/// The review threads unresolved on GitHub, answered or not (pro-d588).
+pub fn unresolved_threads(conn: &Connection, repo: &str, number: i64) -> Result<usize, CpdError> {
+    let n: Option<i64> = conn
+        .query_row(
+            "SELECT CASE WHEN json_valid(open_threads) THEN json_array_length(open_threads)
+             WHEN json_valid(feedback) THEN (SELECT count(*) FROM json_each(feedback) f
+                 WHERE json_extract(f.value, '$.kind') = 'thread') ELSE NULL END
+         FROM pull_requests WHERE repo = ?1 AND number = ?2",
+            rusqlite::params![repo, number],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let n = n.ok_or_else(|| CpdError::new(crate::error::ErrorCode::ChecksNotGreen,
+        format!("{repo}#{number}: review threads have not been read; refresh the pull request before merging."))
+        .with("transient", true))?;
+    Ok(usize::try_from(n).unwrap_or(0))
+}
+
+/// Metadata can change without feedback or updatedAt changing (notably a resolved, previously answered thread).
+pub(super) fn metadata_held(conn: &Connection, id: i64, read: &Read) -> Result<bool, CpdError> {
+    let held = conn.query_row(
+        "SELECT open_threads IS ?2 AND reviewers IS ?3 FROM pull_requests WHERE id = ?1",
+        rusqlite::params![
+            id,
+            serde_json::to_string(&read.open_threads).unwrap(),
+            serde_json::to_string(&read.reviewers).unwrap()
+        ],
+        |r| r.get(0),
+    )?;
+    Ok(held)
+}
+
+/// Stores what `read` found beyond the feedback: the unresolved threads and the review history. Writes nothing when both are held.
+fn store_read(tx: &WriteTxn<'_>, id: i64, read: &Read) -> Result<(), CpdError> {
+    let text = |v: &[String]| serde_json::to_string(v).expect("logins are plain data");
+    tx.execute(
+        "UPDATE pull_requests SET open_threads = ?1, reviewers = ?2 WHERE id = ?3 AND (open_threads IS NOT ?1 OR reviewers IS NOT ?2)",
+        rusqlite::params![text(&read.open_threads), text(&read.reviewers), id],
+    )?;
+    Ok(())
 }
 
 pub(crate) const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
@@ -322,11 +376,18 @@ pub(super) fn upsert(
         membership,
     } = listed;
     let Some(before) = find(tx, &polled.repo, polled.number)? else {
+        let after = insert(tx, polled, *membership, read)?;
+        if let Some(r) = read {
+            store_read(tx, after.id, r)?;
+        }
         return Ok(Some(Change {
             before: None,
-            after: insert(tx, polled, *membership, read)?,
+            after,
         }));
     };
+    if let Some(r) = read {
+        store_read(tx, before.id, r)?;
+    }
     // A listing that carries a head stores it at once (never erases it), whether or not anything else changed.
     if let Some(head) = &polled.head_oid {
         tx.execute(

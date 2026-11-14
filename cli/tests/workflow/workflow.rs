@@ -3186,7 +3186,7 @@ impl Poll {
     /// the poll then makes no comments read for it (pr-comments).
     fn mark_read(&self, number: i64) {
         let sql = format!(
-            "UPDATE pull_requests SET updated_at = 'U1', feedback = '[]' WHERE number = {number}"
+            "UPDATE pull_requests SET updated_at = 'U1', feedback = '[]', open_threads = '[]', reviewers = '[]' WHERE number = {number}"
         );
         self.store()
             .write("fixture", |tx| Ok(tx.execute_batch(&sql)?))

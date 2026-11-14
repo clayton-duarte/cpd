@@ -1077,3 +1077,32 @@ fn uncached_reply_accepted_before_timeout_is_not_posted_again() {
     );
     assert_eq!(wire.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[test]
+fn every_queued_merge_waits_for_answered_unresolved_threads() {
+    let rig = rig();
+    rig.sql(
+        "UPDATE pull_requests SET open_threads = '[\"T1\"]', feedback = '[]' WHERE number = 801",
+    );
+    let id = enqueue_merge(&rig);
+    let mut store = store(&rig);
+    let m = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let execute = |store: &mut Store| {
+        let mut cx = Cx {
+            store,
+            ports: &rig.fakes.ports,
+            home: &rig.home,
+            config: &config,
+        };
+        GithubSource::default().execute(&mut cx, &m)
+    };
+    assert!(matches!(execute(&mut store), ExecOutcome::Retry { .. }));
+    assert!(
+        gh_calls(&rig).is_empty(),
+        "blocked before any provider request"
+    );
+    rig.sql("UPDATE pull_requests SET open_threads = '[]' WHERE number = 801");
+    assert!(matches!(execute(&mut store), ExecOutcome::Done));
+    assert!(gh_calls(&rig).iter().any(|c| c.contains("pr merge")));
+}

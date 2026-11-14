@@ -1308,3 +1308,24 @@ fn gh_poll_rereads_a_listed_pr_that_leaves_the_open_search() {
     assert_eq!(rig.pr_state(100).as_deref(), Some("merged"));
     assert_eq!(rig.pr_state(101).as_deref(), Some("closed"));
 }
+
+#[test]
+fn engine_poll_persists_reviewers_even_without_a_legacy_comment_read() {
+    let mut rig = Rig::new();
+    let mut p = pr(1);
+    p.reviews = vec![("codex-bot", "COMMENTED", "a1")];
+    rig.state().authored.push(p);
+    rig.pass(0).unwrap();
+    let reviewers = rig
+        .text("SELECT reviewers FROM pull_requests WHERE number = 1")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Vec<String>>(&reviewers).unwrap(),
+        ["codex-bot"]
+    );
+    assert_eq!(
+        rig.text("SELECT open_threads FROM pull_requests WHERE number = 1")
+            .as_deref(),
+        Some("[]")
+    );
+}

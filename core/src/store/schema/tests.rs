@@ -3004,6 +3004,8 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
         assert_eq!(rows_after.remove("job_addenda"), Some(Vec::new()));
         // `workflow-prereqs` adds an empty table.
         assert_eq!(rows_after.remove("workflow_prereqs"), Some(Vec::new()));
+        // `20261113T0900-pr-rereview-asks` adds an empty table.
+        assert_eq!(rows_after.remove("pr_rereview_asks"), Some(Vec::new()));
         assert_eq!(rows_after.remove("context_reads"), Some(Vec::new())); // `context-reads`: a new empty table
         assert_eq!(rows_after.remove("record_topics"), Some(Vec::new())); // `record-topics`: a new empty table
         // `swr` made the SWR data tables, and they are empty.

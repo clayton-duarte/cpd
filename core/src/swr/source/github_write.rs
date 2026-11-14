@@ -307,6 +307,14 @@ impl GithubSource {
         };
         crate::ports::Ports::scope(&ports, || match (kind, m.op_kind.as_str()) {
             ("pr", "merge") => {
+                match cx
+                    .store
+                    .read(|conn| crate::pr::pulls::unresolved_threads(conn, repo, number))
+                {
+                    Ok(0) => {}
+                    Ok(_) => return ExecOutcome::Retry { after: RETRY },
+                    Err(e) => return retry(&e),
+                }
                 let head = text("expected_head_oid");
                 let method = match merge_method(cx.store, repo) {
                     Ok(Some(Ok(method))) => method,
@@ -471,7 +479,7 @@ impl GithubSource {
                 }
             }
             ("pr", "reply") => self.reply(cx, runner, cwd, repo, number, &vars),
-            ("pr", "post_comment") => {
+            ("pr", "post_comment" | "comment") => {
                 let sent = gh::pull_request_id(runner, cwd, repo, number)
                     .and_then(|id| gh::reply_to_comment(runner, cwd, &id, &text("body")));
                 sent.map_or_else(|e| retry(&e), |_| ExecOutcome::Done)

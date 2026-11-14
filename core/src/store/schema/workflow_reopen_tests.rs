@@ -65,6 +65,9 @@ fn dump(store: &mut Store) -> String {
                             "labels_json",
                             "merge_armed",
                             "base_contained",
+                            "open_threads",
+                            "reviewers",
+                            "rereview_head",
                             "repair",
                             "bug_id",
                         ]
