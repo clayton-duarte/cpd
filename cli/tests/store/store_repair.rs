@@ -956,7 +956,7 @@ fn repair_leaves_pending_removal_approval_migration_to_add_its_column() {
     let conn = Connection::open(h.db()).unwrap();
     conn.execute_batch("ALTER TABLE jobs DROP COLUMN test_removal_approved;
         DROP TRIGGER schema_migrations_no_delete;
-        DELETE FROM schema_migrations WHERE name = '20261113T0802-job-test-removal-approved';
+        DELETE FROM schema_migrations WHERE name = '20261113T0804-job-test-removal-approved';
         CREATE TRIGGER schema_migrations_no_delete BEFORE DELETE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;").unwrap();
     drop(conn);
     let result = repair(
