@@ -900,15 +900,13 @@ The Manager row carries **no counters**: a Context row shows its Manager's dot, 
 
 **New Manager (tree header button).** The tree header's right action is `Button[type="button"][data-action="new-manager"][aria-label="New Manager"]`: `variant="ghost"`, `size="icon-xs"`, with `MessageCirclePlusIcon` from lucide-react (`aria-hidden`). It renders only with `onAction`. Clicking it opens `NewContextDialog`, the same dialog as the empty-tree `New Context…` item (Title, Owner, and an id slug-derived from the title; Prompts, 3g).
 
-Confirm sends one action, `context.new` (`{ contextId, title, owner }`), which the server runs as two `cpd` commands in order:
-1. `cpd context new <id> --title=<title> --owner=<owner>`
-2. `cpd context manager --context=<id> --by-user`
+**Paired-creation target** (air-d175; not yet delivered by the current two-command action). Confirm sends one action, `context.new` (`{ contextId, title, owner }`), through `cpd context new <id> --title=<title> --owner=<owner> --by-user`. The command persists the Context and its Manager together and returns `{ context, manager: { session, ... } }`; the server does not run a second `context manager` command. `--by-user` preserves hs-d540/hs-d542: the Manager gets no first message and takes no turn until the User's first prompt. The reply lets `selectCreated` (`connection.ts`) select and attach the new Manager's chat, as in the air-d111 paragraph (3g).
 
-Step 2 runs only after step 1 succeeds. The Manager is created with `--by-user`: it has no first message and takes no turn until the User's first prompt. The action's reply is the `context manager` reply (`{ manager: { session }, started }`), so `selectCreated` (`connection.ts`) selects and attaches the new Manager's chat, as in the air-d111 paragraph (3g).
+**Errors and retry (A2).** The dialog closes on confirm; a failed command shows in the global error toast (`cockpit-error-toast`, 3e) with the cpd error code and message. A failed pair transaction leaves neither row. Manager file or pane/host provisioning happens after that transaction: a failure is reported but leaves the persisted pair intact. Repeating `context.new` with the same details and by-user choice resumes incomplete provisioning and reuses the pair, without a duplicate Context or Manager; it does not promise to roll back external effects. The dialog offers no automatic retry.
 
-**Errors (A2).** The dialog closes on confirm, so a failed step shows in the global error toast (`cockpit-error-toast`, 3e) with the cpd error code and message. If step 1 fails, no Context is created. If step 2 fails, the Context exists in the tree without a Manager, and the toast shows the Manager error. The dialog offers no retry of step 2.
+**Current behavior, before the target lands:** the server runs `cpd context new <id> --title=<title> --owner=<owner>`, then `cpd context manager --context=<id> --by-user`. If the second command fails, the Context can exist without a Manager and the toast shows the error; the action offers no retry of that step. The existing `context manager` reply selects and attaches the Manager on success. The audit in `pair-main-audit.md` found the paired call and retry unimplemented; the target above is not a claim that they are already delivered.
 
-Not built: the Active section, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner. Server: until the composite lands, `actions.ts` maps `context.new` to `cpd context new` alone (no Manager, no selection), and `cpd-argv.ts` has no `context.manager` command.
+Not built: the Active section, `▾ N more` overflow rows (all rows render), aggregate glyphs on Context and Plan rows (replaced by the Manager's and Lead's dots), session wake and spinner.
 
 ### 3e. `App.tsx` wiring
 
@@ -960,6 +958,8 @@ The tables below give, per row kind, each item, its web action kind (the `Cockpi
 | Copy id | — (clipboard) | none: `navigator.clipboard.writeText(contextId)` | `CopyId` |
 | Archive | `context.archive` | `context archive <contextId>` | `Archive` |
 | Delete, when deletable, last | `context.delete` | `context delete <contextId> --yes`, after the confirm | `Delete` (appended by `Menu::new`) |
+
+The tree-created Plan and Lead are paired; `--by-user` means the Lead has no first message and takes no turn until the User's first prompt (hs-d540/hs-d542).
 
 **Delete gating (air-d111).** Delete is offered only when the Context is deletable in the TUI's sense (`tui/src/tree/rows.rs:268-283`): the Context is archived, or every one of its Plans is archived or asleep — the web's `stopped` dot stands in for the TUI's asleep, since the web session list carries no `asleep_at`. A standing Context is never deletable; a fork or a Manager row never carries Delete.
 
@@ -1027,7 +1027,7 @@ An archived fork Session has no Delete.
 
 **Chat slot.** Archive (Context, Plan, fork) and Close (fork) run their command. If it fails with `cpd_failed` whose `details.cpdCode` is `in_chat_slot`, the server runs `cpd session park` (no id: the chat-slot Session) and then the same argv once more. Any other error, and an error of the retry, is returned as it is (`runAction` in `actions.ts`).
 
-**After a create.** On an `action.result` with `ok`, when the output has `plan.id`, the new Plan is selected. Its Session (`output.lead.session` for `plan.new`, `output.session.id` for `session.fork`) is selected and attached too when it differs from the selected one (`connection.ts`). A `context.new` action returns the `context manager` reply (3d, New Manager), and selects and attaches the new Context's Manager the same way (air-d111).
+**After a create.** On an `action.result` with `ok`, when the output has `plan.id`, the new Plan is selected. Its Session (`output.lead.session` for `plan.new`, `output.session.id` for `session.fork`) is selected and attached too when it differs from the selected one (`connection.ts`). A `context.new` action selects and attaches the new Context's Manager the same way (air-d111): today its reply comes from `context manager`; the paired-creation target returns the Manager from `context new` (3d, New Manager).
 
 **Copy id.** `navigator.clipboard.writeText(id)`. Tests mock the clipboard.
 
