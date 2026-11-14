@@ -268,11 +268,12 @@ describe("live source", () => {
     expect(s.out).toEqual([]);
   });
 
-  it("a malformed frame is ignored and later frames still apply", () => {
+  it("a malformed frame stops the source before later frames can apply", () => {
     const s = begun();
     conn(s).feed("not json {");
     conn(s).feed({ t: "tool_start", toolCallId: "c1", toolName: "read", args: {} });
-    expect(s.out).toEqual([{ type: "session.append", sessionId: "s1", items: [running("c1", "read", {})] }]);
+    expect(s.out).toHaveLength(1);
+    expect(s.out[0]).toMatchObject({ type: "session.error", error: { code: "protocol_error" } });
   });
 
   it("message end with errorMessage keeps the live item with an Error text block", () => {
@@ -305,4 +306,18 @@ it.each(["tool_start", "tool_update", "tool_end", "inflight"])("ignores %s for a
   expect(s.out).toHaveLength(1);
   expect(s.out[0]).toMatchObject({ type: "session.append", items: [{ callId: "next", status: "running" }] });
   s.live.detach();
+});
+
+it.each(["{broken-json", JSON.stringify({ t: "unknown-frame" }), "null", "[]", "{}", '{"t":1}', '{"t":"hello","protocol":2}'])("reports exactly one terminal protocol error for live frame %s", (line) => {
+  const s = begun();
+  const c = conn(s);
+  c.feed(line);
+  c.feed(line);
+  c.feed({ t: "tool_start", toolCallId: "late", toolName: "read", args: {} });
+  expect(s.out).toHaveLength(1);
+  expect(s.out[0]).toMatchObject({ type: "session.error", error: { code: "protocol_error", details: { line } } });
+  expect(c.closed).toBe(1);
+  s.scheduler.advance(10_000);
+  expect(s.paths).toHaveLength(1);
+  expect(s.scheduler.pending()).toBe(0);
 });

@@ -42,16 +42,16 @@ its PR; significant architectural choices use the repo's ADR/RFC convention.
 
 An iteration is discovery (two defensible findings or 30 minutes), prioritization
 of the whole backlog, and one researched fix PR. A run is an explicitly started
-set of iterations with its own creation caps. Daily caps and explicitly
+set of iterations with explicit creation caps or a User-authorized live weekly allowance threshold. Daily caps and explicitly
 User-reset batches are separate. All are ceilings; never manufacture findings,
 split one cause into extra issues, or weaken validation to fill them.
 
 Use the configured creator and the same immutable run descriptor for every
-creation/status call. GitHub is the count source. Closed/merged/draft items still
+creation/status call. GitHub is the count source. Optional weekly mode requires fresh official account telemetry and an immutable run descriptor for creation; its start must belong to the current weekly window. An old run never renews authorization at reset. Descriptor-free status is inspection only; see the README. Closed/merged/draft items still
 count, and comments/updates do not. Setup work uses the allowance too. A daily
 reset needs a recorded User instruction and preserves aggregate totals; changing
 run IDs, scope or config to regain allowance is forbidden. Status failures mean
-no creation. Failed writes need remote inspection before retry, not blind replay.
+no further work until verification is restored. Failed writes need remote inspection before retry, not blind replay.
 
 One serialized operator per budget group. Different agents may use disjoint
 repository groups; overlapping repositories need one canonical config and
@@ -72,8 +72,12 @@ At the start of a run and every iteration:
 
 1. Read current User scope/decisions, this Protocol, repo profile/config,
    applicable agent/contributor instructions, run descriptor and last canonical
-   handoff. Recover outstanding CI/review work before discovering more. Recheck
-   GitHub budgets; copied counts in a handoff are historical observations.
+   handoff. Recover outstanding CI/review/conflict work before discovering more.
+   Run `pr-status` for every open attributed QA PR, including older runs; resolve
+   conflicts on its existing branch and run scoped checks. Pending mergeability
+   is unconfirmed and must be rechecked. Repeat after observing base/head changes
+   and after pushing a resolution; never merge the PR autonomously. Recheck
+   GitHub budgets and configured live weekly allowance; copied counts in a handoff are historical observations.
 2. Verify working tree ownership/cleanliness, base branch/SHA, origin and tools.
    Use the project's pinned versions. Fetch current base safely; never discard
    others' edits or write fixes on the primary branch. Read current issues/PRs.
@@ -179,7 +183,8 @@ restart is not a root fix and is not authorized by a local QA run.
    or the repo's equivalent: resulting behavior, implementation/tradeoffs,
    validation and material limitations. The issue holds research/rationale.
    User review/merge remains required. A PR is not a resolved issue.
-6. Monitor CI/review feedback and correct failures caused by this change on the
+6. Monitor mergeability, CI and review feedback; resolve conflicts and correct
+   failures caused by this change on the
    same PR, preserving markers. Keep enough state to resume queued/running CI.
    Do not claim it passed because a scoped test passed. Do not modify another
    agent's unrelated PR merely because it is red.
@@ -189,7 +194,7 @@ restart is not a root fix and is not authorized by a local QA run.
    unresolved questions, next action and refreshed guard counts. If no issue
    exists, use the authorized repo/chat handoff; do not manufacture a tracking
    issue. An expiring workspace must not erase the only reproducer or run state.
-8. Repeat only inside the User's run/day caps. On exhaustion or an explicit stop,
+8. Repeat only inside the User's configured count/weekly limits. Refresh weekly usage at every significant stage; stop active work below threshold or when unverifiable. On exhaustion or an explicit stop,
    save the handoff and pause. Starting a new day/run/reset requires the User's
    instruction; no automatic restart is installed. After User merge, verify
    closure and preserve any residual work as linked issues.

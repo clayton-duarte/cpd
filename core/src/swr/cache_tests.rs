@@ -237,3 +237,59 @@ fn swr_freshness_respects_stale_time_and_infinity() {
         t0 + Duration::from_secs(10 * 365 * 24 * 3600)
     ));
 }
+
+#[test]
+fn omitted_merge_target_keeps_its_overlay_until_its_own_row_is_confirmed() {
+    let (_dir, mut store) = store();
+    let clock = ManualClock::new();
+    let done = clock.utc();
+    let target = "github:pr:acme/api#1";
+    store
+        .write("seed", |tx| {
+            tx.execute(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
+                 VALUES ('acme/api', 1, 'u', 't', 0, 'open', 'none', 'none', 't', 't', 1, 0)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, patch_json, status, submitted_at, completed_at)
+                 VALUES ('github', ?1, 'merge', '{}', '{\"state\":\"merging\"}', 'revalidating', ?2, ?2)",
+                rusqlite::params![target, timestamp(done)],
+            )?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+    let state = |store: &mut Store| {
+        crate::swr::github::effective_pr(store, "acme/api", 1)
+            .unwrap()
+            .unwrap()
+            .state
+    };
+    assert_eq!(state(&mut store), "merging");
+
+    // A later poll of unrelated keys (the merged PR is omitted from open searches) settles nothing.
+    let later = after(&clock, 60);
+    cache::commit(&mut store, REPO, "h", later, later, |_| Ok(())).unwrap();
+    assert_eq!(state(&mut store), "merging", "the raw row still says open");
+    assert_eq!(
+        cache::unsettled_targets(&mut store, "github").unwrap(),
+        vec![target.to_string()],
+        "the target is still owed a confirming fetch"
+    );
+
+    // The confirming fetch commits the raw row merged, and only then settles.
+    cache::commit(&mut store, target, "m", later, later, |tx| {
+        tx.execute(
+            "UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE number = 1",
+            [],
+        )?;
+        Ok::<(), CpdError>(())
+    })
+    .unwrap();
+    assert_eq!(state(&mut store), "merged");
+    assert!(
+        cache::unsettled_targets(&mut store, "github")
+            .unwrap()
+            .is_empty()
+    );
+}

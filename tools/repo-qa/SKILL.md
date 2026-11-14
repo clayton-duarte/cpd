@@ -19,15 +19,18 @@ For a started/resumed run:
 
 1. Recover the User's scope, run descriptor and canonical handoff from the repo
    and GitHub, not remembered chat. A descriptor stores intent, not counters.
-2. Read current budget with the configured script and the same `--run` file and
-   authorized `QA_BATCH`, if any. Check open PR feedback/CI before new work.
+2. Refresh the live weekly meter when configured. Read current budget with the configured script and the same `--run` file and
+   authorized `QA_BATCH`, if any. Run `pr-status` and check all open QA PRs for
+   conflicts, pending mergeability, feedback and CI before new discovery. Resolve
+   conflicts on their existing branches, revalidate, and recheck after base/head
+   changes.
 3. Ground the repo and prove candidates through real callers. Find two defensible
    issues or explore for 30 minutes, then prioritize the whole open backlog.
 4. Research one actionable fix, work on a branch, run scoped checks, commit and
    open a PR. Issues hold rationale/research; PRs hold implementation/validation.
    User reviews and merges. No autonomous merge, deployment or live-host changes.
 5. Save a [handoff](assets/handoff.md), recheck counts, and repeat only within
-   the User's run and daily limits. Never manufacture issues to fill a number.
+   the User's configured count/weekly limits. Never manufacture issues to fill a number.
    Do not start another run to evade an exhausted one.
 
 Use `scripts/qa.mjs` for creation; commands are in the README. The script enforces
