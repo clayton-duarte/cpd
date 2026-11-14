@@ -264,9 +264,9 @@ impl GithubSource {
                 continue;
             };
             let key = (repo, number);
-            absent.retain(|(_, _, k)| *k != key);
+            absent.retain(|(_, _, _, k)| *k != key);
             if !heavy.contains(&key) && !tombstoned.contains(&key.0) {
-                absent.push((false, String::new(), key));
+                absent.push((false, false, String::new(), key));
             }
         }
         absent.sort();
