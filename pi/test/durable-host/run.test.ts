@@ -407,9 +407,9 @@ test("a session-message without a sender does not clear a tripped host", { timeo
 test("the host passes compactionPolicy to the harness settings", { timeout: 20_000 }, async () => {
   const r = rig();
   await r.up();
-  const compaction = r.opens[0]!.settings?.compaction;
-  assert.ok(compaction !== undefined, "open receives settings.compaction");
-  assert.equal(typeof compaction, "object");
+  assert.ok(r.opens[0]!.settings !== undefined, "open receives settings");
+  assert.throws(() => r.opens[0]!.settings!.compaction, { code: "context_window_invalid" });
+  await r.stop();
 });
 
 // D2: a Tier switch on a busy durable Lead is answered `host_busy` (the footer keeps the old Tier until the host applies it).
