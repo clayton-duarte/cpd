@@ -1073,7 +1073,8 @@ fn restart_waiter_runs_ensure_once_when_lock_frees() {
     rig.old
         .release_at(Duration::from_secs(90), rig.fakes.clock.elapsed());
 
-    super::follow_up::restart_waiter(&rig.ports, &rig.install.cpd_home, &rig.installed_cpd());
+    super::follow_up::restart_waiter(&rig.ports, &rig.install.cpd_home, &rig.installed_cpd())
+        .unwrap();
 
     let ensures = rig
         .follow_ups()
@@ -1085,4 +1086,39 @@ fn restart_waiter_runs_ensure_once_when_lock_frees() {
         rig.fakes.clock.elapsed() >= Duration::from_secs(90),
         "it waited for the lock on the clock"
     );
+}
+
+#[test]
+fn failed_restart_waiter_reports_ensure_diagnostics_and_records_failed() {
+    let rig = Rig::with(Script {
+        ensure: Ensure::Fails,
+        ..Script::default()
+    });
+    let error =
+        super::follow_up::restart_waiter(&rig.ports, &rig.install.cpd_home, &rig.installed_cpd())
+            .unwrap_err();
+    assert!(error.message().contains("watch --ensure failed"), "{error}");
+    assert!(
+        error.message().contains("The engine did not start"),
+        "{error}"
+    );
+    let state = crate::host::install_state::InstallState::read(&rig.install.cpd_home)
+        .unwrap()
+        .unwrap();
+    assert!(state.alert().unwrap().contains("watch --ensure failed"));
+}
+
+#[test]
+fn expired_restart_waiter_records_failure_without_ensuring_the_old_engine() {
+    let rig = Rig::new();
+    rig.running_old_engine();
+    let error =
+        super::follow_up::restart_waiter(&rig.ports, &rig.install.cpd_home, &rig.installed_cpd())
+            .unwrap_err();
+    assert!(error.message().contains("timed out"), "{error}");
+    assert!(!rig.follow_ups().iter().any(|call| call == "watch --ensure"));
+    let state = crate::host::install_state::InstallState::read(&rig.install.cpd_home)
+        .unwrap()
+        .unwrap();
+    assert!(state.alert().unwrap().contains("timed out"));
 }
