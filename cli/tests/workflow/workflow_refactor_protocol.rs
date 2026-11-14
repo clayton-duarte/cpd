@@ -653,12 +653,22 @@ mod reconciled_publication {
     fn reconciled_commit_with_test_edits_is_refused() {
         let (rig, attempt) = rig(false, "tests/remote.rs");
         let moved = rig.remote_sha();
+        let submitted = rig
+            .store()
+            .read(|conn| merge::load(conn, &PlanId::parse("pay").unwrap(), &attempt))
+            .unwrap()
+            .submitted_sha
+            .unwrap();
 
         let End::Failed { detail, .. } = rig.merge(&attempt) else {
             panic!("the merge must fail its push")
         };
 
         assert!(detail.contains("cannot change test files"), "{detail}");
+        assert_eq!(
+            rig.fx.git(&rig.repo, &["rev-parse", "refs/heads/cpd/pay"]),
+            submitted
+        );
         assert_eq!(
             rig.remote_sha(),
             moved,
@@ -695,5 +705,72 @@ mod reconciled_publication {
             moved,
             "the reconciled commit was not pushed"
         );
+    }
+    #[test]
+    fn recovery_revalidates_the_reconciled_refactor_before_publication() {
+        for (measure, path) in [(false, "tests/remote.rs"), (true, "src/remote.rs")] {
+            let (rig, attempt) = rig(measure, path);
+            let moved = rig.remote_sha();
+            let mut store = rig.store();
+            let target = store
+                .read(|conn| {
+                    cpd_core::attempt::ledger::load(conn, &PlanId::parse("pay").unwrap(), &attempt)
+                })
+                .unwrap();
+            let sha = target.submitted_sha.as_ref().unwrap();
+            rig.fx
+                .git(&rig.repo, &["update-ref", "refs/heads/cpd/pay", sha]);
+            if measure {
+                let _ = (*rig.fx.fakes.runner).clone().once(
+                    "sh",
+                    |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                    cpd_core::host::runner::Reply::ok(r#"{"line":50,"branch":40}"#),
+                );
+            }
+            let ctx = Ctx {
+                home: &rig.home,
+                config: &rig.config,
+                catalog: &rig.catalog,
+                source: "recovery test",
+                metrics: &metrics,
+                classifier: merge::no_verdict_classifier(),
+            };
+            let recovered = rig
+                .fx
+                .scoped(|| {
+                    merge::recover_attempt(
+                        &mut store,
+                        &ctx,
+                        &PlanId::parse("pay").unwrap(),
+                        &attempt,
+                    )
+                })
+                .unwrap()
+                .unwrap();
+            assert!(matches!(recovered.end, Some(End::Merged { .. })));
+            assert_eq!(
+                rig.fx.git(&rig.repo, &["rev-parse", "refs/heads/cpd/pay"]),
+                *sha,
+                "rejected reconciliation must leave the Lead ref at its validated commit"
+            );
+            let errors: String = store.read(|conn| Ok(conn.query_row(
+                "SELECT coalesce(group_concat(json_extract(data, '$.code')), '') FROM events WHERE kind = 'error'",
+                [], |row| row.get(0),
+            )?)).unwrap();
+            let expected = if measure {
+                "coverage_below_baseline"
+            } else {
+                "test_change_forbidden"
+            };
+            assert!(
+                errors.contains(expected),
+                "the intended guard must reject publication: {errors}"
+            );
+            assert_eq!(
+                rig.remote_sha(),
+                moved,
+                "recovery must not publish an invalid reconciled refactor"
+            );
+        }
     }
 }

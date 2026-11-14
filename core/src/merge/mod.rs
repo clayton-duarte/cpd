@@ -1035,8 +1035,25 @@ fn open_pull_request(
 
 /// Step 8's and R2's push of `sha`: to the Workflow's remote branch, and skipped for an adopted Workflow that has not opened unless the Job is an `open` or
 /// `update` one, so that a work Job's commit never reaches a live pull request (§7.4).
-pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
-    publish_with(target, sha, &mut |_, _| Ok(()))
+pub(super) fn publish(
+    store: &mut Store,
+    home: &CpdHome,
+    target: &Attempt,
+    sha: &str,
+) -> Option<CpdError> {
+    publish_with(target, sha, &mut |sha, to_push| {
+        let workflow = workflow_row(store, target)?;
+        if workflow.shape != "refactor" {
+            return Ok(());
+        }
+        let policy = store
+            .read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
+        let bases = store.read(|conn| {
+            crate::pr::start::tamper_bases(conn, &target.repo, &workflow.repo, &workflow.base)
+        })?;
+        let refs: Vec<&str> = bases.iter().map(String::as_str).collect();
+        validate_reconciled(store, target, &policy, &refs, sha, to_push)
+    })
 }
 
 /// `publish` for step 8: a reconciled commit (a merge of the remote tip, which `sha` is not) is validated as a refactor's
@@ -1121,13 +1138,8 @@ pub(super) fn push(
     };
     match git::run::has_origin(lead).and_then(|origin| {
         if origin {
-            match reconcile(lead, lead_branch, branch, sha)? {
-                Reconciled::Push(to_push) => {
-                    if to_push != sha {
-                        validate(sha, &to_push)?;
-                    }
-                    git::push_commit(lead, branch, &to_push).map(Some)
-                }
+            match reconcile(lead, lead_branch, branch, sha, validate)? {
+                Reconciled::Push(to_push) => git::push_commit(lead, branch, &to_push).map(Some),
                 Reconciled::Contained(remote) => Ok(Some(git::Push::Contained { remote })),
                 Reconciled::Conflict { remote, files } => {
                     Err(remote_conflict(branch, sha, &remote, &files))
@@ -1266,6 +1278,7 @@ pub(crate) fn reconcile(
     lead_branch: &str,
     branch: &str,
     sha: &str,
+    validate: &mut dyn FnMut(&str, &str) -> Result<(), CpdError>,
 ) -> Result<Reconciled, CpdError> {
     let ours = format!("refs/cpd/publish/{branch}");
     let mut sha = sha.to_owned();
@@ -1322,6 +1335,8 @@ pub(crate) fn reconcile(
             ],
         )?;
         let made = made.trim().to_owned();
+        // Reject the proposed merge before it can contaminate the Lead ref.
+        validate(&sha, &made)?;
         let moved = run(
             dir,
             &[

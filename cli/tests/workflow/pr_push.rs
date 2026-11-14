@@ -440,7 +440,7 @@ impl Fx {
             let push = s.spawn(move || {
                 let argv = ["cpd", "pr", "push", "--plan", "pay"].map(std::ffi::OsString::from);
                 let mut stdout = Vec::new();
-                cpd::run_with(&ports, argv, &mut stdout);
+                let _ = cpd::run_with(&ports, argv, &mut stdout);
                 String::from_utf8(stdout).unwrap()
             });
             let mut release = Release(Some(gate));

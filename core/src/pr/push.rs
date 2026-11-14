@@ -90,7 +90,12 @@ fn push_held(args: Args) -> Result<Output, CpdError> {
         require_pushable(&plan, &args)?;
         super::rebase::refuse_running_conn(tx, &id, &key, "do the push")?;
 
-        let to_push = match crate::merge::reconcile(&lead, &branch, &remote_branch, &sha)? {
+        let to_push = match crate::merge::reconcile(&lead, &branch, &remote_branch, &sha, &mut |_, candidate| {
+            crate::workflow::guard_refactor_tests_allowing(
+                tx, &id, key.as_str(), std::path::Path::new(&workflow.repo),
+                &workflow.base, candidate, &[workflow.base.as_str()],
+            )
+        })? {
             crate::merge::Reconciled::Push(to_push) => to_push,
             crate::merge::Reconciled::Contained(remote) => return Ok((false, remote)),
             crate::merge::Reconciled::Conflict { remote, files } => {
@@ -98,18 +103,6 @@ fn push_held(args: Args) -> Result<Output, CpdError> {
                     .with("workflow", key.as_str()));
             }
         };
-        // The reconciled commit is validated before it is pushed, as G was.
-        if to_push != sha {
-            crate::workflow::guard_refactor_tests_allowing(
-                tx,
-                &id,
-                key.as_str(),
-                std::path::Path::new(&workflow.repo),
-                &workflow.base,
-                &to_push,
-                &[workflow.base.as_str()],
-            )?;
-        }
         match git::push_commit(&lead, &remote_branch, &to_push)? {
             Push::Pushed { new } => {
                 if new {

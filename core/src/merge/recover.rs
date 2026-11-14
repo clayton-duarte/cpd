@@ -129,7 +129,7 @@ fn recover_one(
             })?;
             lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             // R35: push as step 8 does, by rule P with `tip`; a failure does not undo the merge.
-            if let Some(e) = super::publish(attempt, &tip) {
+            if let Some(e) = super::publish(store, ctx.home, attempt, &tip) {
                 store.write(ctx.source, |tx| {
                     ledger::append_error(
                         tx,
