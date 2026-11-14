@@ -711,17 +711,40 @@ it("the action button falls back to Curate then Dismiss", () => {
   m.unmount();
 });
 
+function expectEmptyComposition(container: Element): void {
+  const empty = container.querySelector('[data-slot="empty"][data-empty]');
+  expect(empty).not.toBeNull();
+  expect(empty?.querySelectorAll('button, a, [role="button"], input, select, textarea')).toHaveLength(0);
+  expect(container.querySelector('[data-slot="item-group"]')).toBeNull();
+  expect(empty?.querySelector(':scope > [data-slot="empty-header"] > [data-slot="empty-title"]')?.textContent)
+    .toBe("up to date, drink some water");
+}
+
 it("empty inbox uses the Empty composition without actions", () => {
+  const loading = mount(<Inbox inbox={null} onAction={vi.fn()} onSelectSession={vi.fn()} />);
+  try {
+    expect(loading.container.textContent).toContain("Loading inbox…");
+    expect(loading.container.querySelector('[data-slot="empty"]')).toBeNull();
+  } finally { loading.unmount(); }
+
   const m = render([]);
   try {
-    expect(m.container.querySelector('[data-slot="empty"] > [data-slot="empty-header"] > [data-slot="empty-title"]')?.textContent).toBe("up to date, drink some water");
+    expect(countOf(btn(m.container, "all"))).toBe("0");
+    expect(TIER_NAMES.map((n) => countOf(btn(m.container, n)))).toEqual(["0", "0", "0", "0", "0", "0"]);
+    expectEmptyComposition(m.container);
   } finally { m.unmount(); }
 });
 
 it("filtered empty inbox preserves counts and uses the Empty composition", () => {
-  const m = render([row(1, "dialog", "red row", { urgency: "red" })]);
+  const m = render(mixed());
   try {
-    click(m.container.querySelector('[data-tier-filter="delivery"]'));
-    expect(m.container.querySelector('[data-slot="empty"] > [data-slot="empty-header"] > [data-slot="empty-title"]')?.textContent).toBe("up to date, drink some water");
+    expect(shown(m.container)).toEqual(["1", "2", "3", "4"]);
+    expect(m.container.querySelector('[data-slot="empty"]')).toBeNull();
+    click(btn(m.container, "notice"));
+    expect(on(m.container, "notice")).toBe(true);
+    expect(shown(m.container)).toEqual([]);
+    expect(countOf(btn(m.container, "all"))).toBe("4");
+    expect(TIER_NAMES.map((n) => countOf(btn(m.container, n)))).toEqual(["2", "1", "0", "0", "0", "1"]);
+    expectEmptyComposition(m.container);
   } finally { m.unmount(); }
 });
