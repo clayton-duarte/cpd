@@ -199,13 +199,35 @@ fn resume_keeps_state_stopped_until_the_adapter_reports() {
 #[test]
 fn resume_refuses_a_live_tagged_pi_pane_without_killing_or_restarting() {
     let w = world();
+    let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
+    let (_, placeholder) = tmux
+        .create_session("cpd", "main", &super::moves::placeholder_spawn())
+        .unwrap()
+        .unwrap();
+    tmux.set_pane_view(&placeholder, crate::host::View::Chat)
+        .unwrap();
     let first = try_cpd(&w, &["resume", "stopped1"]).unwrap();
+    let wrapper = tmux
+        .list_panes()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.cpd_session.is_some())
+        .unwrap()
+        .pane;
+    tmux.swap_pane(&wrapper, &placeholder).unwrap();
+    assert_eq!(
+        crate::host::chat_slot(&tmux.list_panes().unwrap(), "cpd").map(|p| p.pane.clone()),
+        Some(wrapper.clone())
+    );
     let starts = pane_starts(&w);
     let err = try_cpd(&w, &["resume", "stopped1"]).expect_err("live pane must be refused");
     assert_eq!(err.code(), ErrorCode::SessionRunning);
     assert_eq!(pane_starts(&w), starts);
     assert!(!tmux_calls(&w).iter().any(|c| c.contains("kill-pane")));
-    let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
+    assert_eq!(
+        crate::host::chat_slot(&tmux.list_panes().unwrap(), "cpd").map(|p| p.pane.clone()),
+        Some(wrapper)
+    );
     assert!(
         tmux.list_panes()
             .unwrap()
