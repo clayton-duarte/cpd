@@ -144,6 +144,15 @@ fn every_command_has_one_entry() {
 }
 
 #[test]
+fn associate_issue_is_public_in_root_help() {
+    let tree = help_tree();
+    let node = find(&tree, "protocol bug associate-issue");
+    assert_eq!(node["callers"], serde_json::json!(["Lead", "Manager"]));
+    assert_eq!(node["cockpit"], false);
+    assert_ne!(node["internal"], true);
+}
+
+#[test]
 fn anchors() {
     let tree = help_tree();
     assert_eq!(
