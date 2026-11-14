@@ -67,25 +67,42 @@ pub fn ready_to_merge_sql(alias: &str) -> String {
 pub fn no_open_thread_sql(alias: &str) -> String {
     format!(
         "(CASE WHEN json_valid({alias}.open_threads) THEN json_array_length({alias}.open_threads) = 0 \
-         ELSE NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid({alias}.feedback) THEN {alias}.feedback ELSE '[]' END) f \
-                          WHERE json_extract(f.value, '$.kind') = 'thread') END)"
+         WHEN json_valid({alias}.feedback) THEN NOT EXISTS (SELECT 1 FROM json_each({alias}.feedback) f \
+                          WHERE json_extract(f.value, '$.kind') = 'thread') ELSE 0 END)"
     )
 }
 
 /// The review threads unresolved on GitHub, answered or not (pro-d588).
 pub fn unresolved_threads(conn: &Connection, repo: &str, number: i64) -> Result<usize, CpdError> {
-    let n: i64 = conn
+    let n: Option<i64> = conn
         .query_row(
-            "SELECT CASE WHEN json_valid(open_threads) THEN json_array_length(open_threads) \
-                    ELSE (SELECT count(*) FROM json_each(CASE WHEN json_valid(feedback) THEN feedback ELSE '[]' END) f \
-                          WHERE json_extract(f.value, '$.kind') = 'thread') END \
-             FROM pull_requests WHERE repo = ?1 AND number = ?2",
+            "SELECT CASE WHEN json_valid(open_threads) THEN json_array_length(open_threads)
+             WHEN json_valid(feedback) THEN (SELECT count(*) FROM json_each(feedback) f
+                 WHERE json_extract(f.value, '$.kind') = 'thread') ELSE NULL END
+         FROM pull_requests WHERE repo = ?1 AND number = ?2",
             rusqlite::params![repo, number],
             |r| r.get(0),
         )
         .optional()?
-        .unwrap_or(0);
+        .flatten();
+    let n = n.ok_or_else(|| CpdError::new(crate::error::ErrorCode::ChecksNotGreen,
+        format!("{repo}#{number}: review threads have not been read; refresh the pull request before merging."))
+        .with("transient", true))?;
     Ok(usize::try_from(n).unwrap_or(0))
+}
+
+/// Metadata can change without feedback or updatedAt changing (notably a resolved, previously answered thread).
+pub(super) fn metadata_held(conn: &Connection, id: i64, read: &Read) -> Result<bool, CpdError> {
+    let held = conn.query_row(
+        "SELECT open_threads IS ?2 AND reviewers IS ?3 FROM pull_requests WHERE id = ?1",
+        rusqlite::params![
+            id,
+            serde_json::to_string(&read.open_threads).unwrap(),
+            serde_json::to_string(&read.reviewers).unwrap()
+        ],
+        |r| r.get(0),
+    )?;
+    Ok(held)
 }
 
 /// Stores what `read` found beyond the feedback: the unresolved threads and the review history. Writes nothing when both are held.

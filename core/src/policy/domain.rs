@@ -108,6 +108,8 @@ pub struct Pr {
     pub human_gated_contexts: Vec<String>,
     pub excused_labels: Vec<String>,
     pub required_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rereview_bots: Option<Vec<String>>,
     pub text: String,
 }
 
@@ -168,6 +170,7 @@ pub struct PrSet {
     pub human_gated_contexts: Option<Vec<String>>,
     pub excused_labels: Option<Vec<String>>,
     pub required_checks: Option<Vec<String>>,
+    pub rereview_bots: Option<Vec<String>>,
     pub text: Option<String>,
 }
 
@@ -580,6 +583,10 @@ impl Set for PrSet {
                 .required_checks
                 .clone()
                 .unwrap_or_else(|| base.required_checks.clone()),
+            rereview_bots: self
+                .rereview_bots
+                .clone()
+                .or_else(|| base.rereview_bots.clone()),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
@@ -613,6 +620,7 @@ impl Set for PrSet {
             human_gated_contexts: self.human_gated_contexts.clone()?,
             excused_labels: self.excused_labels.clone()?,
             required_checks: self.required_checks.clone()?,
+            rereview_bots: self.rereview_bots.clone(),
             text: self.text.clone()?,
         })
     }

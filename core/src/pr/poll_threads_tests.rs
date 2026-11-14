@@ -83,7 +83,7 @@ fn poll_once(polled_at: &'static str, threads: Vec<(&'static str, bool)>) -> (us
     store
         .write("test", |tx| {
             tx.execute(
-                "UPDATE pull_requests SET updated_at = 'U1', feedback = ?1 WHERE number = 801",
+                "UPDATE pull_requests SET updated_at = 'U1', feedback = ?1, open_threads = '[\"T1\"]' WHERE number = 801",
                 [THREAD],
             )?;
             Ok(())
