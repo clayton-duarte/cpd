@@ -41,10 +41,6 @@ const LATER: &[(&str, &str)] = &[
     ),
     ("workflow_prereqs", "DROP TABLE workflow_prereqs"),
     ("pr_rereview_asks", "DROP TABLE pr_rereview_asks"),
-    (
-        "pull_requests",
-        "ALTER TABLE pull_requests DROP COLUMN open_threads; ALTER TABLE pull_requests DROP COLUMN reviewers; ALTER TABLE pull_requests DROP COLUMN rereview_head",
-    ),
     ("workflows", "ALTER TABLE workflows DROP COLUMN repair"),
     (
         "event_kinds",
