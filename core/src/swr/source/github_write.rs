@@ -521,6 +521,17 @@ impl GithubSource {
             vars["to"].as_str().unwrap_or_default(),
             vars["body"].as_str().unwrap_or_default(),
         );
+        if vars["resolve_uncached"] == true {
+            return gh::reply_to_uncached(
+                runner,
+                cwd,
+                repo,
+                number,
+                to,
+                &format!("{body}\n\n{MARKER}"),
+            )
+            .map_or_else(|e| retry(&e), |()| ExecOutcome::Done);
+        }
         let feedback: Result<Option<String>, CpdError> = cx.store.read(|c| {
             Ok(c.query_row(
                 "SELECT feedback FROM pull_requests WHERE repo = ?1 AND number = ?2",

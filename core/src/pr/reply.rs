@@ -148,7 +148,7 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         ports.clock.utc(),
         &target_of(&pull.repo, pull.number),
         "reply",
-        json!({"to": id_text, "body": text}),
+        json!({"to": id_text, "body": text, "resolve_uncached": item.is_none()}),
         Some(json!({"feedback_without": id_text})),
     )?;
     let out = queued(

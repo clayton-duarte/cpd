@@ -1333,7 +1333,7 @@ pub fn pull_request_id(
     posted(runner, cwd, &query, &[], "/repository/pullRequest/id")
 }
 
-/// Replies in the review thread `thread` (never resolves it); the new comment's url.
+/// Resolve an uncached review target, verify its pull request, then deliver its reply.
 pub fn reply_to_uncached(
     runner: &dyn Runner,
     cwd: &Path,
@@ -1342,7 +1342,7 @@ pub fn reply_to_uncached(
     node: &str,
     body: &str,
 ) -> Result<(), CpdError> {
-    let query = "query($node: ID!) { node(id: $node) { __typename ... on PullRequestReviewComment { databaseId url pullRequest { number repository { nameWithOwner } } } ... on PullRequestReviewThread { id pullRequest { number repository { nameWithOwner } } } ... on PullRequestReview { url pullRequest { number repository { nameWithOwner } } } } }";
+    let query = "query($node: ID!) { node(id: $node) { __typename ... on PullRequestReviewComment { fullDatabaseId replyTo { fullDatabaseId } url pullRequest { number repository { nameWithOwner } } } ... on PullRequestReviewThread { id pullRequest { number repository { nameWithOwner } } } ... on PullRequestReview { url pullRequest { number repository { nameWithOwner } } } } }";
     let (args, out) = graphql_with(runner, cwd, query, &[("node", node)])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let reply = Reply {
@@ -1370,9 +1370,20 @@ pub fn reply_to_uncached(
     match target["__typename"].as_str() {
         Some("PullRequestReviewThread") => reply_to_thread(runner, cwd, node, body).map(drop),
         Some("PullRequestReviewComment") => {
-            let id = target["databaseId"]
+            // databaseId is a deprecated 32-bit Int. GitHub's BigInt may be encoded as a decimal string.
+            let comment = target
+                .get("replyTo")
+                .filter(|v| !v.is_null())
+                .unwrap_or(target);
+            let id = comment["fullDatabaseId"]
                 .as_i64()
-                .ok_or_else(|| reply.fail("Review comment has no databaseId.".into()))?;
+                .or_else(|| {
+                    comment["fullDatabaseId"]
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                })
+                .filter(|id| *id > 0)
+                .ok_or_else(|| reply.fail("Review comment has no fullDatabaseId.".into()))?;
             let endpoint = format!("repos/{repo}/pulls/{number}/comments/{id}/replies");
             let field = format!("body={body}");
             run_on(runner, cwd, &["api", "-X", "POST", &endpoint, "-f", &field]).map(drop)

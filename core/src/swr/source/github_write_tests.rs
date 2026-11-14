@@ -855,7 +855,7 @@ impl Handler for UncachedReply {
             .find_map(|a| a.strip_prefix("query="))
             .unwrap_or("");
         let data = if query.contains("node(id:") {
-            json!({"node": {"__typename": self.kind, "databaseId": 42, "url": "https://github.com/acme/pay/pull/801#review-42", "pullRequest": {"number": if self.wrong_pull { 802 } else { 801 }, "repository": {"nameWithOwner": "acme/pay"}}}})
+            json!({"node": {"__typename": self.kind, "fullDatabaseId": "4569528234", "replyTo": {"fullDatabaseId": "4569528233"}, "url": "https://github.com/acme/pay/pull/801#review-42", "pullRequest": {"number": if self.wrong_pull { 802 } else { 801 }, "repository": {"nameWithOwner": "acme/pay"}}}})
         } else {
             json!({"repository": {"pullRequest": {"id": "PR_801"}}, "addPullRequestReviewThreadReply": {"comment": {"url": "https://reply"}}, "addComment": {"commentEdge": {"node": {"url": "https://reply"}}}})
         };
@@ -874,7 +874,7 @@ fn uncached_reply_targets_are_looked_up_and_delivered_by_the_drain() {
         (
             "PullRequestReviewComment",
             "PRRC_one",
-            "comments/42/replies",
+            "comments/4569528233/replies",
         ),
         ("PullRequestReview", "PRR_one", "addComment"),
     ] {
@@ -893,10 +893,11 @@ fn uncached_reply_targets_are_looked_up_and_delivered_by_the_drain() {
             now(&rig),
             KEY,
             "reply",
-            json!({"to": to, "body": "Fixed."}),
+            json!({"to": to, "body": "Fixed.", "resolve_uncached": true}),
             None,
         )
         .unwrap();
+        rig.sql("UPDATE pull_requests SET feedback = '[]' WHERE number = 801");
         let m = outbox::get(&mut store, id).unwrap().unwrap();
         let config = Config::load(&rig.home).unwrap();
         let mut cx = Cx {
