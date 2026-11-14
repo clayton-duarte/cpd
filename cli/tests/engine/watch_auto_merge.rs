@@ -195,7 +195,7 @@ impl Gh {
             "autoMergeRequest": null,
             "commits": {"nodes": [{"commit": {"oid": head, "statusCheckRollup": {"state": "SUCCESS", "contexts": {"nodes": []}}}}]},
             "latestReviews": {"nodes": []},
-            "reviewThreads": {"nodes": []},
+            "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": false}},
             "comments": {"nodes": []},
             "viewerDidAuthor": true,
             "viewerLatestReviewRequest": null

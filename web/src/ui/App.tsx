@@ -13,7 +13,6 @@ import { createStore, useStore } from "../state/store.ts";
 import { BootstrapOverlay } from "./BootstrapOverlay.tsx";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert.tsx";
 import { Button } from "./components/button.tsx";
-import { EngineStatusBanner } from "./components/EngineStatusBanner.tsx";
 import { Empty } from "./components/empty.tsx";
 import { routeErrorTarget } from "./errorReport.ts";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
@@ -236,16 +235,7 @@ export function App(props: AppProps): ReactElement {
         </Button>
       </div>
     ) : null}
-    {cockpit.inbox === null || cockpit.inbox.engineRunning ? null : (
-      <div data-part="engine-banner-row" className="shrink-0 px-2 py-1">
-        <EngineStatusBanner
-          engineRunning={cockpit.inbox.engineRunning}
-          engineDownSince={cockpit.inbox.engineDownSince ?? null}
-          engineRestartReason={cockpit.inbox.engineRestartReason ?? null}
-          now={new Date()}
-        />
-      </div>
-    )}
+    {banner === null ? null : <div data-part="engine-banner-row" className="shrink-0 px-2 py-1"><EngineBanner banner={banner} /></div>}
     {shownError === null ? null : (
       <div
         data-part="cockpit-error-toast"
@@ -298,7 +288,6 @@ export function App(props: AppProps): ReactElement {
       panelsRef={panelsRef}
       banner={
         <>
-          <EngineBanner banner={banner} />
           <OutboxList
             entries={outboxEntries}
             onRetry={(id) => void connection.outbox.retry(id)}

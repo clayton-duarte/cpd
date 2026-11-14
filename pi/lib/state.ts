@@ -29,6 +29,10 @@ function verdictOption(input: unknown): string | undefined {
 
 type Open = { key: string; label: string; kind: Kind };
 
+/** Store state labels contain no controls and at most LABEL_MAX Unicode characters. Dialog titles stay unchanged. */
+const stateLabel = (label: string, fallback: string): string =>
+  [...label.replace(/[\s\p{Cc}]+/gu, " ").trim()].slice(0, LABEL_MAX).join("") || fallback;
+
 /**
  * The reasons: its own (keyed, so opening twice or closing when not open changes nothing) and the dialog
  * reason (depth-counted), each of a kind.
@@ -132,9 +136,9 @@ export class Facts {
   /** `blocked` with the label of the latest human reason while any is open; else `waiting` with the label of the latest agent reason while any is open; else `working` while active; else `idle` (`reply` when the run answered the User). */
   wanted(): Wanted {
     const human = this.opened.findLast((o) => o.kind === "human");
-    if (human) return { state: "blocked", label: human.label.slice(0, LABEL_MAX) || "blocked" };
+    if (human) return { state: "blocked", label: stateLabel(human.label, "blocked") };
     const agent = this.opened.findLast((o) => o.kind === "agent");
-    if (agent) return { state: "waiting", label: agent.label.slice(0, LABEL_MAX) || "waiting" };
+    if (agent) return { state: "waiting", label: stateLabel(agent.label, "waiting") };
     if (this.active) return { state: "working" };
     return this.reply ? { state: "idle", reply: true } : { state: "idle" };
   }

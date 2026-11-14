@@ -90,6 +90,9 @@ pub enum Command {
     Inbox(inbox::cmd::Command),
     /// The engine, one per machine (commands.md §12)
     Watch(watch::Args),
+    /// Prepare, inspect or activate the WebUI during an install
+    #[command(hide = true)]
+    Webui(watch::webui::WebUiArgs),
     /// The production server: engine and WebUI on 3333 in one process (commands.md §12a)
     Serve,
     /// Check the machine (commands.md §14.1)
@@ -220,6 +223,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Incident(c) => incident::run(c),
         Command::Inbox(c) => inbox::cmd::run_with(ports, c),
         Command::Watch(a) => watch::run(a),
+        Command::Webui(a) => watch::webui::command(ports, a),
         Command::Serve => {
             cpd_core::serve::run_serve(ports, &cpd_core::serve::ServeConfig::default())?;
             Ok(Output::Owned)

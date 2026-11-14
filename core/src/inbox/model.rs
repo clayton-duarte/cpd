@@ -575,7 +575,7 @@ fn bug_age(now: &str, reported_at: &str) -> Result<i64, CpdError> {
 /// Inbox items; an item closes when the bug is mitigated or its `status` turns `closed`.
 pub fn bug_conditions(conn: &Connection, now: &str) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT b.id, b.plan, b.title, p.context, p.lead_session, b.reported_at
+        "SELECT b.id, b.plan, b.title, p.context, p.lead_session, b.reported_at, b.escalated_at IS NOT NULL
            FROM bug_records b LEFT JOIN plans p ON p.id = b.plan
           WHERE b.status = 'open' AND b.mitigation IS NULL
           ORDER BY b.id",
@@ -589,12 +589,13 @@ pub fn bug_conditions(conn: &Connection, now: &str) -> Result<Vec<Condition>, Cp
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
                 r.get::<_, String>(5)?,
+                r.get::<_, bool>(6)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
-    for (id, plan, title, plan_context, lead, reported_at) in rows {
-        if bug_age(now, &reported_at)? < BUG_MITIGATION_WINDOW_SECS {
+    for (id, plan, title, plan_context, lead, reported_at, escalated) in rows {
+        if !escalated && bug_age(now, &reported_at)? < BUG_MITIGATION_WINDOW_SECS {
             continue;
         }
         let plan = plan

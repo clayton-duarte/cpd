@@ -569,3 +569,113 @@ fn t9_merged_closes_workflow() {
     assert_eq!(plan_phase, "done");
     assert_eq!(open_inbox, 0, "pr-ready item closed on merge");
 }
+
+/// The same production SWR entry E5 uses, with GitHub as the only fake boundary.
+/// Keeps the legacy CLI scenarios above as independent coverage.
+#[test]
+fn engine_swr_lifecycle_carries_feedback_head_changes_resolution_and_merge() {
+    use cpd_core::host::runner::{Call, Handler};
+    use cpd_core::swr::source::{Cx, github::GithubSource};
+    use std::sync::{Arc, Mutex};
+
+    struct Github {
+        current: Mutex<Value>,
+        fallback: Arc<super::workflow::Gh>,
+    }
+    impl Handler for Github {
+        fn handle(&self, call: &Call) -> Reply {
+            if call.args.iter().any(|arg| arg.contains("authored: search")) {
+                Reply::ok(&self.current.lock().unwrap().to_string())
+            } else {
+                self.fallback.handle(call)
+            }
+        }
+    }
+    let fx = fixture(false, false, "any");
+    let github = Arc::new(Github {
+        current: Mutex::new(Value::Null),
+        fallback: fx.gh.clone(),
+    });
+    let _ = (*fx.fakes.runner).clone().route("gh", github.clone());
+    let source = GithubSource::default();
+    let pass = |head: &str, rollup: &str, threads: Vec<Value>, state: &str| {
+        let mut pull: Value =
+            serde_json::from_str(&node("acme/pay", 812, state, None, Some(rollup))).unwrap();
+        pull["headRefOid"] = json!(head);
+        pull["updatedAt"] = json!("U");
+        pull["mergeable"] = json!("MERGEABLE");
+        pull["mergeStateStatus"] = json!("CLEAN");
+        pull["baseRefName"] = json!("main");
+        pull["repository"]["defaultBranchRef"] = json!({"name": "main"});
+        pull["reviewThreads"] = page(threads);
+        pull["comments"] = page(vec![]);
+        pull["reviews"] = page(vec![]);
+        pull["latestReviews"] = json!({"nodes": []});
+        pull["labels"] = json!({"nodes": []});
+        if state == "MERGED" {
+            pull["mergedAt"] = json!("2026-10-20T10:00:00Z");
+        }
+        let listed = if state == "OPEN" {
+            vec![pull.clone()]
+        } else {
+            vec![]
+        };
+        *github.current.lock().unwrap() = json!({"data": {
+            "viewer": {"login": "me"}, "rateLimit": {"remaining": 4900, "cost": 1, "resetAt": "2026-10-20T11:00:00Z"},
+            "authored": {"issueCount": listed.len(), "nodes": listed, "pageInfo": {"hasNextPage": false}},
+            "reviews": {"issueCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false}},
+            "p0": {"pullRequest": pull},
+            "m0": {"defaultBranchRef": {"name": "main"}, "isArchived": false, "autoMergeAllowed": false,
+                "squashMergeAllowed": true, "mergeCommitAllowed": false, "rebaseMergeAllowed": false, "deleteBranchOnMerge": false}
+        }});
+        let mut store = fx.store();
+        let config = cpd_core::config::Config::load(fx.home()).unwrap();
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &fx.fakes.ports,
+            home: fx.home(),
+            config: &config,
+        };
+        cpd_core::ports::Ports::scope(&fx.fakes.ports, || {
+            source.pass_with_effects(&mut cx, fx.fakes.clock.utc())
+        })
+        .unwrap()
+    };
+    pass("h1", "FAILURE", vec![], "OPEN");
+    let failed = fx.events("pr-feedback").len();
+    assert!(failed > 0, "engine tells Lead about CI failure");
+    pass("h2", "SUCCESS", vec![thread("T1", "codex")], "OPEN");
+    let feedback = fx.events("pr-feedback").len();
+    assert!(feedback > failed, "engine tells Lead about bot feedback");
+    pass("h3", "SUCCESS", vec![thread("T1", "codex")], "OPEN");
+    assert!(
+        fx.events("pr-feedback").len() > feedback,
+        "head-only push re-wakes outstanding feedback"
+    );
+    let after_push = fx.events("pr-feedback").len();
+    pass("h3", "SUCCESS", vec![thread("T1", "codex")], "OPEN");
+    assert_eq!(
+        fx.events("pr-feedback").len(),
+        after_push,
+        "unchanged head is quiet"
+    );
+    pass("h4", "SUCCESS", vec![], "OPEN");
+    let feedback: String = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT feedback FROM pull_requests WHERE number = 812",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        feedback, "[]",
+        "resolved feedback reaches the store through E5"
+    );
+    // Discovery first notices absence; its next bounded confirmation reads the terminal state.
+    pass("h4", "SUCCESS", vec![], "MERGED");
+    let out = pass("h4", "SUCCESS", vec![], "MERGED");
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+}

@@ -191,10 +191,43 @@ pub(crate) fn apply_pass_effects(
         repo_settings: Vec::new(),
         heads: heads_from_read(read),
     };
+    let mut reads = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for node in read
+        .aliases
+        .iter()
+        .flatten()
+        .chain(&read.authored)
+        .chain(&read.reviews)
+    {
+        let Some(detail) = &node.heavy else {
+            continue;
+        };
+        let (repo, number) = node.id();
+        if !seen.insert((repo.clone(), number)) {
+            continue;
+        }
+        let answer =
+            json!({"data": {"viewer": {"login": read.viewer}, "p0": {"pullRequest": detail}}});
+        match comments::parse(
+            &[(&repo, number)],
+            &answer.to_string(),
+            &env.config.inbox.bot_reviewers,
+        ) {
+            Ok(complete) => reads.extend(complete),
+            Err(error) => {
+                errors.push(json!({"repo": repo, "number": number, "message": error.message()}))
+            }
+        }
+    }
     let selected = None;
     loop {
-        let (out, again) = poll_pass(&mut env, &selected, search.clone(), Some(Vec::new()))?;
+        let (mut out, again) = poll_pass(&mut env, &selected, search.clone(), Some(reads.clone()))?;
         if !again {
+            if !errors.is_empty() {
+                out["feedback_errors"] = json!(errors);
+            }
             return Ok(out);
         }
     }
@@ -219,7 +252,10 @@ fn heads_from_read(read: &PollRead) -> Vec<(String, i64, String)> {
 
 /// Stores each fresh head the read reported, before any containment check reads the stored one: a force-push replaces the
 /// head, and a compare on the replaced commit is HTTP 404.
-fn refresh_heads(env: &mut Env, heads: &[(String, i64, String)]) -> Result<(), CpdError> {
+fn refresh_heads(
+    env: &mut Env,
+    heads: &[(String, i64, String)],
+) -> Result<Vec<(String, i64, String)>, CpdError> {
     let stale = env.store.read(|conn| {
         let mut stale = Vec::new();
         for (repo, number, head) in heads {
@@ -238,7 +274,7 @@ fn refresh_heads(env: &mut Env, heads: &[(String, i64, String)]) -> Result<(), C
         Ok(stale)
     })?;
     if stale.is_empty() {
-        return Ok(());
+        return Ok(stale);
     }
     env.store.write(COMMAND, |tx| {
         for (repo, number, head) in &stale {
@@ -248,7 +284,8 @@ fn refresh_heads(env: &mut Env, heads: &[(String, i64, String)]) -> Result<(), C
             )?;
         }
         Ok(())
-    })
+    })?;
+    Ok(stale)
 }
 
 /// The legacy poll's listing from the GitHub source's one read: every node the document listed or aliased, once, with
@@ -468,7 +505,7 @@ fn poll_pass(
     }
 
     // The fresh heads of the one read are stored first: the armed and containment compares below read them.
-    refresh_heads(env, &search.heads)?;
+    let moved_heads = refresh_heads(env, &search.heads)?;
 
     // The armed pull requests (`pr merge` refused a head behind the default branch, commands.md §9.10): one fresh
     // compare read each, before the write transaction, so the write enqueues the merge of a head that now contains
@@ -519,7 +556,7 @@ fn poll_pass(
     // The repo-settings cache (air-n71): the repos the search read whose `swr_repos` row is cold are written from the
     // settings the search document already carried - no extra `gh` call.
     let settings = cold_repo_settings(&mut env.store, &search.repo_settings)?;
-    let dirty = !settings.is_empty()
+    let dirty = !moved_heads.is_empty() || !settings.is_empty()
         || !follows.is_empty()
         || contained.iter().any(|c| !c.held)
         || env.store.read(|conn| {
@@ -604,8 +641,19 @@ fn poll_pass(
     let outcome = if dirty {
         env.store.write(COMMAND, |tx| {
             apply(
-                tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers, &armed, &contained,
-                &settings, now,
+                tx,
+                &seen,
+                &reads,
+                &owned,
+                &checks,
+                &follows,
+                &ahead,
+                &tiers,
+                &armed,
+                &contained,
+                &settings,
+                &moved_heads,
+                now,
             )
         })?
     } else {
@@ -760,6 +808,7 @@ fn apply(
     armed: &[Armed],
     contained: &[Contained],
     settings: &[(String, gh::RepoMeta)],
+    moved_heads: &[(String, i64, String)],
     now: time::OffsetDateTime,
 ) -> Result<Outcome, CpdError> {
     // The repo-settings cache fill (air-n71): the cold rows the read phase fetched.
@@ -793,7 +842,22 @@ fn apply(
             listed.pr.merged_at = Some(pulls::txn_time(tx)?);
         }
         let polled = &listed.pr;
-        let change_opt = pulls::upsert(tx, &listed, read_of(reads, &listed))?;
+        let change_opt = pulls::upsert(tx, &listed, read_of(reads, &listed))?.or_else(|| {
+            if moved_heads
+                .iter()
+                .any(|(repo, number, _)| repo == &polled.repo && *number == polled.number)
+            {
+                owned
+                    .iter()
+                    .find(|(_, _, row)| row.repo == polled.repo && row.number == polled.number)
+                    .map(|(_, _, row)| Change {
+                        before: Some(row.clone()),
+                        after: row.clone(),
+                    })
+            } else {
+                None
+            }
+        });
         let after = match &change_opt {
             Some(change) => change.after.clone(),
             None => {

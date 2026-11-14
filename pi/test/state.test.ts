@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Reporter } from "../lib/state.ts";
+import { Facts, Reporter } from "../lib/state.ts";
 import { ev, Fixture, ID, planShow, shown, stateCalls, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
@@ -318,4 +318,16 @@ test("the dialog closed with a Worker question still open reports waiting", asyn
   await f.pi.fire("ui_prompt_end");
   await waitFor("waiting", () => stateCalls(f).length === 3);
   assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog", `waiting:${QUESTION}`]);
+});
+
+
+test("approval state labels normalize controls without changing dialog identity", () => {
+  const facts = new Facts();
+  facts.open("dialog identity", "approve:\nreason\twith\0controls", "human");
+  assert.deepEqual(facts.wanted(), { state: "blocked", label: "approve: reason with controls" });
+  assert.equal(facts.close("dialog identity"), true);
+  facts.open("unicode", "💡".repeat(81), "human");
+  const wanted = facts.wanted();
+  assert.ok(wanted.state === "blocked");
+  assert.equal([...wanted.label].length, 80);
 });

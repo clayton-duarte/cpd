@@ -32,9 +32,9 @@ fn insert(store: &mut Store, number: i64, feedback: &str) {
             tx.execute(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks,
                                             created_at, changed_at, mergeable, merge_state, authored, review_requested,
-                                            base_ref, default_branch, archived, base_contained, head_oid, feedback)
+                                            base_ref, default_branch, archived, base_contained, head_oid, feedback, open_threads, review_threads_complete)
                  VALUES ('acme/pay', ?1, 'https://github.com/acme/pay/pull/' || ?1, 'T', 0, 'open', 'none', 'passed',
-                         'c', 'c', 'mergeable', 'clean', 1, 0, 'main', 'main', 0, 1, 'abc', ?2)",
+                         'c', 'c', 'mergeable', 'clean', 1, 0, 'main', 'main', 0, 1, 'abc', ?2, (SELECT json_group_array(json_extract(value, '$.id')) FROM json_each(?2) WHERE json_extract(value, '$.kind') = 'thread'), 1)",
                 rusqlite::params![number, feedback],
             )?;
             Ok(())
@@ -82,7 +82,7 @@ fn resolved_threads_do_not_block_merge_ready() {
     insert(&mut store, 801, "[]");
     assert!(
         ready(&mut store, 801),
-        "feedback [] (all addressed) is merge-ready"
+        "a complete read with no open threads is merge-ready"
     );
     // Guard against a vacuous pass: the same row with an open thread must differ.
     insert(&mut store, 802, THREAD);
@@ -155,7 +155,7 @@ fn unread_review_threads_never_clear_merge_readiness() {
     store
         .write("read comments", |tx| {
             tx.execute(
-                "UPDATE pull_requests SET open_threads = '[]' WHERE number = 99",
+                "UPDATE pull_requests SET review_threads_complete = 1, open_threads = '[]' WHERE number = 99",
                 [],
             )?;
             Ok(())

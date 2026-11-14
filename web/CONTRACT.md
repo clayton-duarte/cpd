@@ -2160,6 +2160,15 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 
 Normative. ADR 0015 option B (air-d46) decides the three points below; docs/contract.md §5.5 "The WebUI transport and the serve-stream watchdog" and web/ELECTRON.md "WebSocket transport" carry the same statements. Where a statement of §4, 6.3, 6.6 or 13 is marked "Amended by 15.x", section 15 wins and the older statement is void.
 
+**Owner amendment, 2026-11-14:** The LAN authentication policy in
+[WebUI access](../docs/architecture/webui-access.md) supersedes the historical
+no-token/no-TLS decision and wildcard bind defaults below. Both production and
+preview default to loopback. A non-loopback bind requires a backend-specific
+client credential; HTTP requests and all WebSocket upgrades are authenticated.
+The Origin allowlist is a separate browser check, with HTTPS permitted for the
+same local/LAN hosts on 3333, 33333, or the default HTTPS port. Historical
+amendments below describe their original decisions, not the current access policy.
+
 ### 15.1 The endpoint, the Origin check and the client transport (air-d46)
 
 - **Production static-file failures (#1133).** A failed asset or SPA fallback read is contained to its HTTP response and logged. Before headers are sent it returns 500; after headers it terminates the partial response. Client disconnection closes the file reader, including while it is opening. HEAD sends no file body. These failures must not terminate the WebUI server or unrelated WebSocket clients.

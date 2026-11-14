@@ -8,16 +8,12 @@ use crate::store::Store;
 #[test]
 fn migrations_fill_issue_for_open_bugs() {
     let (_dir, home) = crate::store::tests::tmp_home();
-    // The store as it is before the migration `*-bug-issue` and its backfill: every migration but those two.
+    // A genuine chronological snapshot before bug-issue; later breaking migrations
+    // must not already be present when the historical migration is applied.
     let before: Vec<Named> = NAMED
         .iter()
         .copied()
-        .filter(|m| {
-            !m.name.ends_with("-bug-issue")
-                && !m.name.ends_with("-bug-issue-backfill")
-                && !m.name.ends_with("-refactor-shapes")
-                && !m.name.ends_with("-coverage-baseline")
-        })
+        .filter(|m| m.name < "20261113T0800-bug-issue")
         .collect();
     let mut store = crate::store::tests::open_named(&home, &before).unwrap();
     store
@@ -67,12 +63,7 @@ fn backfill_skips_a_bug_with_another_title() {
     let before: Vec<Named> = NAMED
         .iter()
         .copied()
-        .filter(|m| {
-            !m.name.ends_with("-bug-issue")
-                && !m.name.ends_with("-bug-issue-backfill")
-                && !m.name.ends_with("-refactor-shapes")
-                && !m.name.ends_with("-coverage-baseline")
-        })
+        .filter(|m| m.name < "20261113T0800-bug-issue")
         .collect();
     let mut store = crate::store::tests::open_named(&home, &before).unwrap();
     store

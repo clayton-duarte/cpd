@@ -107,11 +107,11 @@ pub(super) fn tests_kept(
         let Some(before) = git::tamper::file_at(root, base, path)? else {
             continue;
         };
-        if git::tamper::test_cases(&before).is_empty() {
+        if git::tamper::test_cases_for_path(path, &before).is_empty() {
             continue;
         }
         let after = git::tamper::file_at(root, sha, path)?.unwrap_or_default();
-        git::tamper::check_tests_kept(&before, &after, &approved).map_err(|e| {
+        git::tamper::check_tests_kept_for_path(path, &before, &after, &approved).map_err(|e| {
             let message = format!(
                 "{} In {path}: restore them, or ask the Lead (cpd ask), who approves it with cpd job approve-test-removal.",
                 e.message()

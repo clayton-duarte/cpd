@@ -2,7 +2,7 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeScheduler } from "../testing/scheduler.ts";
 import type { PluginBoundaries } from "./plugin.ts";
 import { createProdServer, findStaticDir } from "./serve.ts";
@@ -41,7 +41,24 @@ describe("serve-browser", () => {
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       server = null;
     }
+    vi.unstubAllEnvs();
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("protects the production HTTP entry with its backend credential", async () => {
+    const token = "backend-token-".repeat(4);
+    vi.stubEnv("CPD_WEBUI_ACCESS_TOKEN", token);
+    fs.writeFileSync(path.join(tempDir, "index.html"), "private shell");
+    server = await createProdServer({ port: 0, host: "127.0.0.1", staticDir: tempDir, boundaries: fakeBoundaries(tempDir) });
+    const port = (server.address() as import("node:net").AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/`;
+    const rejected = await fetch(url);
+    expect(rejected.status).toBe(401);
+    expect(rejected.headers.get("www-authenticate")).toContain("Basic");
+    expect(await rejected.text()).not.toContain("private shell");
+    const accepted = await fetch(url, { headers: { Authorization: `Basic ${Buffer.from(`cpd:${token}`).toString("base64")}` } });
+    expect(accepted.status).toBe(200);
+    expect(await accepted.text()).toBe("private shell");
   });
 
   it("prod server serves index.html without electron bridge", async () => {

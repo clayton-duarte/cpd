@@ -138,7 +138,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `shaping_engine`, `upgrade_test`, `write_executable`, `serve_test`, `retire_app_test`, `install_b30_test` |
   | `workflow` | `pr*`, `repair_dispatch_race`, `merge*`, `git*`, `publish_reconcile`, `repo_hooks`, `workflow`, `workflow_adopt*`, `workflow_crud`, `workflow_describe`, `workflow_done_guard`, `workflow_jira*`, `workflow_lead_branch`, `workflow_live_spec`, `workflow_local_needs`, `workflow_merge_drafts`, `workflow_needs_required`, `workflow_refactor_protocol`, `workflow_start`, `workflow_template_jobs` |
-  | `flow` | `plan*`, `shaping_cmds`, `shaping_listing`, `shaping_notify`, `agent_key_names`, `agent_key_worker`, `agent_forbidden`, `grounding_guard`, `archive_blockers`, `worker_runner*`, `job*`, `attempt`, `attempt_abort*`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics*`, `context*`, `protocol_bug`, `policy*`, `resource*`, `config`, `config_concurrency`, `config_experimental`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_workflow`, `workflow_commands`, `workflow_policy`, `workflow_prereq`, `workflow_wire`, `preset`, `swr_cmd`, `swr_badge`, `swr_health` |
+  | `flow` | `plan*`, `shaping_cmds`, `shaping_listing`, `shaping_notify`, `agent_key_names`, `agent_key_worker`, `agent_forbidden`, `grounding_guard`, `archive_blockers`, `worker_runner*`, `job*`, `attempt`, `attempt_abort*`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics*`, `context*`, `protocol_bug`, `policy*`, `resource*`, `config`, `config_concurrency`, `config_experimental`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_workflow`, `workflow_commands`, `workflow_policy`, `workflow_prereq`, `webui_handoff`, `workflow_wire`, `preset`, `swr_cmd`, `swr_badge`, `swr_health` |
   | `session` | `session*`, `agent_key_guards`, `agent_key_addressing`, `agent_key_row`, `agent_key_text`, `host`, `board`, `host_pill`, `fork_blocked`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tooling` | `argv_parity`, `*_script`, `cargo_script`, `pnpm_fresh`, `install_script`, `harness`, `fx`, `guards`, `real_process_scan`, `fake_tmux`, `fx_exec`, `dead_code`, `interface`, `no_repo_lock`, `no_gh_pr_edit`, `slot`, `layout`, `version`, `gate_run*`, `pill_sites`, `retired_terms`, `run_with`, `smoke`, `testkit*`, `usage_grammar`, `config_tiers_list`, `test_bootstrap` |
@@ -1074,3 +1074,13 @@ A model's prompt cache matches an exact prefix of the request: the system prompt
 **How to check.** For a durable Session, `pi/measure/model-cost.ts --diff-prefix` compares each cache break's prompt with the previous turn's and reports `prefix_changed` (the `system+messages` scope includes the `pi.system` sections). For a pi Session the system prompt is not in the session file, so that diff cannot see it (docs `Measuring model spend`, "What it cannot measure"); a pi system prompt change shows up only as a cache break with no other cause.
 
 **Known gap (open, 2026-11-10 18:39 EST).** The code does not yet meet rules 3 and 4. `pi/lib/agent-state.ts` rebuilds the zone section each turn with `zoneLine(new Date())`, so the pi system prompt changes every minute. The durable Worker and host build it once at start from `zoneLine(deps.now())`, which still puts the start minute into the prompt. [contract.md](contract.md) §1.3 gives the zone section's exact text with a current local time ("as 2026-10-25 23:03 EDT"); that is the volatile part rule 4 bars. Fixing the code and amending that contract text are not part of this document: they are for the Lead to schedule.
+
+### Syntax-aware test preservation (review audit, 2026-11-14)
+
+The test-preservation guard uses the maintained Tree-sitter parser and upstream
+Rust and TypeScript grammars (MIT), pinned through Cargo.lock. Its previous
+hand-built scanner confused JSX, escaped titles, test attributes and parameterized
+calls. The parser keeps the existing guard interface and counts assertions in
+syntax nodes. It does not execute dynamic test factories; the runtime gate
+remains responsible for test execution. Research and the reported regressions
+are in [the audit remediation ledger](research/2026-11-14-review-audit-remediation.md).

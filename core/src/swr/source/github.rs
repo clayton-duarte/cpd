@@ -129,6 +129,22 @@ impl GithubSource {
         Ok(labels)
     }
 
+    fn poll_excused_for(&self, home: &CpdHome, repo: &str) -> Result<Vec<String>, CpdError> {
+        match self.excused_for(home, repo) {
+            Err(e)
+                if matches!(
+                    e.code(),
+                    crate::error::ErrorCode::PolicyInvalid
+                        | crate::error::ErrorCode::OwnerUnset
+                        | crate::error::ErrorCode::OwnerUnconfirmed
+                ) =>
+            {
+                Ok(Vec::new())
+            }
+            other => other,
+        }
+    }
+
     /// The rows chosen before the call (swr-github.md §4.1, §3.2).
     fn plan(&self, cx: &mut Cx<'_>, now: OffsetDateTime) -> Result<PollPlan, CpdError> {
         let memory = {
@@ -185,7 +201,7 @@ impl GithubSource {
             let mut out = Vec::with_capacity(rows.len());
             for (mut s, own) in rows {
                 s.held_failure = s.held_failure
-                    && swr_read::policy_hold(&s.labels, &self.excused_for(home, &s.repo)?);
+                    && swr_read::policy_hold(&s.labels, &self.poll_excused_for(home, &s.repo)?);
                 {
                     // Only the User's own pull requests (authored or owned) are hydrated, and a teammate's whose failed rollup
                     // may hide an excused Danger (read again only when its head moved).
@@ -344,7 +360,7 @@ impl GithubSource {
                 cx.home.root(),
                 plan,
                 &cx.config.inbox.bot_reviewers,
-                &|repo| self.excused_for(cx.home, repo),
+                &|repo| self.poll_excused_for(cx.home, repo),
             )
         };
         let mut read = poll(&plan);
@@ -653,7 +669,24 @@ impl GithubSource {
                 .ok()
                 .and_then(|j| serde_json::from_str(&j).ok()))
             })?;
-            let excused = self.excused_for(cx.home, repo)?;
+            let excused = match self.excused_for(cx.home, repo) {
+                Ok(labels) => labels,
+                Err(e)
+                    if matches!(
+                        e.code(),
+                        crate::error::ErrorCode::PolicyInvalid
+                            | crate::error::ErrorCode::OwnerUnset
+                            | crate::error::ErrorCode::OwnerUnconfirmed
+                    ) =>
+                {
+                    if !effects["policy_errors"].is_object() {
+                        effects["policy_errors"] = serde_json::json!({});
+                    }
+                    effects["policy_errors"][repo] = serde_json::json!({"message": e.message()});
+                    Vec::new()
+                }
+                Err(e) => return Err(e),
+            };
             if let Some(detail) = &stored {
                 swr_read::excuse_from_detail(node, detail, &excused);
             }
@@ -696,6 +729,33 @@ impl GithubSource {
                 }
                 Ok(())
             })?;
+            // The cache fingerprint can predate these columns. Backfill even on an unchanged read;
+            // the conditional UPDATE leaves already-current metadata untouched.
+            if !cx.store.read(|c| swr_read::review_metadata_held(c, node))? {
+                cx.store.write("swr review metadata", |tx| {
+                    swr_read::write_review_metadata(tx, node)
+                })?;
+            }
+            if node.auto_merge_requested && (!node.threads_complete || node.has_open_threads()) {
+                let owned = cx.store.read(|c| Ok(c.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM workflows w JOIN pull_requests r ON w.pull_request = r.id WHERE r.repo = ?1 AND r.number = ?2)",
+                    params![repo, number], |r| r.get::<_, bool>(0))?))?;
+                if owned {
+                    crate::swr::outbox::enqueue(
+                        cx.store,
+                        now,
+                        crate::swr::outbox::Op {
+                            system: "github".into(),
+                            target_key: crate::swr::source::github_write::target_of(repo, *number),
+                            op_kind: "disable_auto_merge".into(),
+                            vars: serde_json::json!({}),
+                            patch: None,
+                            context: None,
+                        },
+                        Coalesce::Dedupe("{}".into()),
+                    )?;
+                }
+            }
             // Open-only: a merged or closed pull request is never stale, so nothing reads it again.
             if !node.is_open()
                 && cache::get(cx.store, &key)?.is_some_and(|r| r.stale_after.is_some())

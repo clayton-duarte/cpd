@@ -63,13 +63,12 @@ pub fn ready_to_merge_sql(alias: &str) -> String {
     )
 }
 
-/// 1 when no review thread is unresolved on GitHub (pro-d588): the stored `open_threads` (answered threads included), else, for a row
-/// read before that column, the thread items of `feedback`.
+/// 1 only when a complete GitHub read established an empty thread array.
+/// Legacy, omitted, truncated and malformed metadata never establish readiness.
 pub fn no_open_thread_sql(alias: &str) -> String {
     format!(
-        "(CASE WHEN json_valid({alias}.open_threads) THEN json_array_length({alias}.open_threads) = 0 \
-         WHEN json_valid({alias}.feedback) THEN NOT EXISTS (SELECT 1 FROM json_each({alias}.feedback) f \
-                          WHERE json_extract(f.value, '$.kind') = 'thread') ELSE 0 END)"
+        "(CASE WHEN {alias}.review_threads_complete = 1 AND json_valid({alias}.open_threads)
+          THEN CASE WHEN json_type({alias}.open_threads) = 'array' THEN json_array_length({alias}.open_threads) = 0 ELSE 0 END ELSE 0 END)"
     )
 }
 
@@ -77,9 +76,7 @@ pub fn no_open_thread_sql(alias: &str) -> String {
 pub fn unresolved_threads(conn: &Connection, repo: &str, number: i64) -> Result<usize, CpdError> {
     let n: Option<i64> = conn
         .query_row(
-            "SELECT CASE WHEN json_valid(open_threads) THEN json_array_length(open_threads)
-             WHEN json_valid(feedback) THEN (SELECT count(*) FROM json_each(feedback) f
-                 WHERE json_extract(f.value, '$.kind') = 'thread') ELSE NULL END
+            "SELECT CASE WHEN review_threads_complete = 1 AND json_valid(open_threads) THEN CASE WHEN json_type(open_threads) = 'array' THEN json_array_length(open_threads) ELSE NULL END ELSE NULL END
          FROM pull_requests WHERE repo = ?1 AND number = ?2",
             rusqlite::params![repo, number],
             |r| r.get(0),
@@ -95,7 +92,7 @@ pub fn unresolved_threads(conn: &Connection, repo: &str, number: i64) -> Result<
 /// Metadata can change without feedback or updatedAt changing (notably a resolved, previously answered thread).
 pub(super) fn metadata_held(conn: &Connection, id: i64, read: &Read) -> Result<bool, CpdError> {
     let held = conn.query_row(
-        "SELECT open_threads IS ?2 AND reviewers IS ?3 FROM pull_requests WHERE id = ?1",
+        "SELECT review_threads_complete = 1 AND open_threads IS ?2 AND reviewers IS ?3 FROM pull_requests WHERE id = ?1",
         rusqlite::params![
             id,
             serde_json::to_string(&read.open_threads).unwrap(),
@@ -110,7 +107,7 @@ pub(super) fn metadata_held(conn: &Connection, id: i64, read: &Read) -> Result<b
 fn store_read(tx: &WriteTxn<'_>, id: i64, read: &Read) -> Result<(), CpdError> {
     let text = |v: &[String]| serde_json::to_string(v).expect("logins are plain data");
     tx.execute(
-        "UPDATE pull_requests SET open_threads = ?1, reviewers = ?2 WHERE id = ?3 AND (open_threads IS NOT ?1 OR reviewers IS NOT ?2)",
+        "UPDATE pull_requests SET open_threads = ?1, reviewers = ?2, review_threads_complete = 1 WHERE id = ?3 AND (review_threads_complete != 1 OR open_threads IS NOT ?1 OR reviewers IS NOT ?2)",
         rusqlite::params![text(&read.open_threads), text(&read.reviewers), id],
     )?;
     Ok(())

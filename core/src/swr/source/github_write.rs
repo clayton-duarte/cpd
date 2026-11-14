@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 use super::github::GithubSource;
 use super::{Cx, ExecOutcome};
 use crate::clock::timestamp;
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::pr::auto_merge::{self, Outcome};
 use crate::pr::comments::{Kind as ItemKind, MARKER};
@@ -250,11 +250,11 @@ fn failed(error: impl Into<String>) -> ExecOutcome {
 
 fn retry(e: &CpdError) -> ExecOutcome {
     // Transient (swr-github.md §7.1): the call's own deadline, or an HTTP 5xx as `gh` prints it.
-    let transient = e
-        .details()
-        .get("transient")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let transient = e.code() == ErrorCode::PrereqUnmet
+        || e.details()
+            .get("transient")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
         || e.details()
             .get("stderr")
             .and_then(Value::as_str)
@@ -294,6 +294,43 @@ impl GithubSource {
             && let Some(resolve) = context.get("resolve_uncached")
         {
             vars["resolve_uncached"] = resolve.clone();
+        }
+        if kind == "pr" && matches!(m.op_kind.as_str(), "merge" | "auto_merge") {
+            if let Err(e) = crate::workflow::prereq::ensure_prereqs_for_pr(
+                cx.store,
+                &*cx.ports.runner,
+                repo,
+                number,
+            ) {
+                return retry(&e);
+            }
+            if m.op_kind == "auto_merge" {
+                match cx
+                    .store
+                    .read(|c| crate::pr::pulls::unresolved_threads(c, repo, number))
+                {
+                    Ok(0) => {}
+                    Ok(_) => return ExecOutcome::Retry { after: RETRY },
+                    Err(e) => return retry(&e),
+                }
+            }
+        }
+        if kind == "pr"
+            && (vars["rereview"].as_bool() == Some(true)
+                || (m.op_kind == "comment" && vars["head_sha"].is_string()))
+        {
+            let current = cx.store.read(|c| Ok(c.query_row(
+                "SELECT state = 'open' AND head_oid = ?3 AND
+                  (json_array_length(CASE WHEN json_valid(open_threads) THEN open_threads ELSE '[]' END) > 0
+                   OR json_array_length(CASE WHEN json_valid(feedback) THEN feedback ELSE '[]' END) > 0)
+                 FROM pull_requests WHERE repo = ?1 AND number = ?2",
+                rusqlite::params![repo, number, vars["head_sha"].as_str().unwrap_or("")],
+                |r| r.get::<_, bool>(0)).optional()?.unwrap_or(false)));
+            match current {
+                Ok(false) => return ExecOutcome::Done,
+                Ok(true) => {}
+                Err(e) => return retry(&e),
+            }
         }
         let ports = cx.ports.clone();
         let runner = &*ports.runner;
@@ -454,6 +491,28 @@ impl GithubSource {
                     Outcome::Failed(e) => retry(&e),
                 }
             }
+            ("pr", "disable_auto_merge") => {
+                // A newer complete read can make the cancellation obsolete.
+                if matches!(
+                    cx.store
+                        .read(|c| crate::pr::pulls::unresolved_threads(c, repo, number)),
+                    Ok(0)
+                ) {
+                    return ExecOutcome::Done;
+                }
+                if let Err(error) = gh::disable_auto_merge(runner, cwd, repo, number) {
+                    return retry(&error);
+                }
+                match cx.store.write("suspend auto merge", |tx| {
+                    tx.execute("UPDATE pr_posts SET auto_merge = 'pending', auto_merge_at = NULL
+                        WHERE auto_merge = 'enabled' AND (plan, workflow) IN (
+                          SELECT w.plan, w.key FROM workflows w JOIN pull_requests r ON w.pull_request = r.id
+                          WHERE r.repo = ?1 AND r.number = ?2)", rusqlite::params![repo, number])?;
+                    Ok::<(), CpdError>(())
+                }) {
+                    Ok(()) => ExecOutcome::Done, Err(error) => retry(&error),
+                }
+            }
             ("pr", "approve") => {
                 let mut review = vars.clone();
                 if let Some(o) = review.as_object_mut() {
@@ -466,6 +525,26 @@ impl GithubSource {
                 }
             }
             ("deploy", "approve") => {
+                let owners = match cx
+                    .store
+                    .read(|c| crate::workflow::prereq::deployment_owners(c, repo, number))
+                {
+                    Ok(owners) => owners,
+                    Err(e) => return retry(&e),
+                };
+                for (plan, workflow) in owners {
+                    if let Err(e) = cx.store.read(|c| {
+                        crate::workflow::prereq::ensure_prereqs_met(
+                            c,
+                            runner,
+                            &plan,
+                            &workflow,
+                            "queued deployment approval",
+                        )
+                    }) {
+                        return retry(&e);
+                    }
+                }
                 let run_id = u64::try_from(number).unwrap_or_default();
                 match crate::pr::deploys::approvable(runner, cx.home, repo, run_id) {
                     Ok(envs) if envs.is_empty() => ExecOutcome::Done,

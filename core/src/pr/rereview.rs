@@ -59,7 +59,7 @@ pub fn post(
                 continue;
             }
             // `head_sha` keeps the dedupe of the outbox from merging the asks of two pushes.
-            let vars = json!({"body": comment_text(bot), "head_sha": push.head_sha});
+            let vars = json!({"body": comment_text(bot), "head_sha": push.head_sha, "rereview": true});
             let vars_text = vars.to_string();
             enqueue_tx(
                 tx,
@@ -138,15 +138,16 @@ fn pass_with(
         String,
         Option<String>,
         String,
+        bool,
     );
     let rows: Vec<Row> = store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT w.plan, w.key, r.repo, r.number, r.id, r.head_oid, r.rereview_head, r.reviewers FROM pull_requests r
+            "SELECT w.plan, w.key, r.repo, r.number, r.id, r.head_oid, r.rereview_head, r.reviewers,
+             (json_array_length(CASE WHEN json_valid(r.open_threads) THEN r.open_threads ELSE '[]' END) > 0
+                OR json_array_length(CASE WHEN json_valid(r.feedback) THEN r.feedback ELSE '[]' END) > 0) FROM pull_requests r
              JOIN workflows w ON w.pull_request = r.id AND w.status = 'open'
              JOIN plans p ON p.id = w.plan AND p.archived_at IS NULL
-             WHERE r.state = 'open' AND r.head_oid IS NOT NULL AND r.reviewers IS NOT NULL
-               AND (json_array_length(CASE WHEN json_valid(r.open_threads) THEN r.open_threads ELSE '[]' END) > 0
-                    OR json_array_length(CASE WHEN json_valid(r.feedback) THEN r.feedback ELSE '[]' END) > 0)",
+             WHERE r.state = 'open' AND r.head_oid IS NOT NULL AND r.reviewers IS NOT NULL",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -159,13 +160,14 @@ fn pass_with(
                     r.get(5)?,
                     r.get(6)?,
                     r.get(7)?,
+                    r.get(8)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     })?;
     let mut asked = Vec::new();
-    for (plan, workflow, repo, number, id, head_sha, seen, reviewers) in rows {
+    for (plan, workflow, repo, number, id, head_sha, seen, reviewers, outstanding) in rows {
         let reviewers: Vec<String> = serde_json::from_str(&reviewers).map_err(CpdError::bad_row)?;
         let configured = configured_for(store, &plan, &workflow)?;
         if !configured.iter().any(|bot| reviewers.contains(bot))
@@ -174,7 +176,7 @@ fn pass_with(
             continue;
         }
         // Asks first, then records the head: a crash in between asks again, and the claim keeps that from posting twice.
-        let fresh = if seen.is_none() {
+        let fresh = if seen.is_none() || !outstanding {
             Vec::new()
         } else {
             post(

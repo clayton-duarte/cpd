@@ -13,7 +13,7 @@ const fake = vi.hoisted(() => ({
 vi.mock("node:http", () => ({
   createServer: (handler: typeof fake.request) => {
     fake.request = handler;
-    return { once() {}, listen(_port: number, _host: string, ready: () => void) { ready(); } };
+    return { once() {}, off() {}, listen(_port: number, _host: string, ready: () => void) { ready(); } };
   },
 }));
 vi.mock("./plugin.ts", () => ({

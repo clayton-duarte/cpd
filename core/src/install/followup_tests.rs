@@ -192,6 +192,7 @@ struct WebUi {
     new_pid: Pid,
     prepare: Option<Reply>,
     ready_at: Option<Duration>,
+    activated: Mutex<bool>,
     polls: Mutex<Vec<(bool, usize)>>,
 }
 
@@ -201,13 +202,24 @@ impl WebUi {
             ["webui", "--prepare"] => Some(self.prepare.clone().unwrap_or_else(|| {
                 Reply::ok(&format!(r#"{{"ok":true,"pid":{}}}"#, self.new_pid.0))
             })),
+            ["webui", "--activate"] => {
+                *self.activated.lock().unwrap() = true;
+                Some(Reply::ok(r#"{"ok":true}"#))
+            }
             ["webui", "--ready"] => {
                 let ready = self.ready_at.is_some_and(|at| self.clock.elapsed() >= at);
                 self.polls
                     .lock()
                     .unwrap()
                     .push((ready, self.spawn.signals().len()));
-                Some(Reply::ok(&format!(r#"{{"ok":true,"ready":{ready}}}"#)))
+                Some(Reply::ok(&format!(
+                    r#"{{"ok":true,"ready":{ready},"phase":"{}"}}"#,
+                    if *self.activated.lock().unwrap() {
+                        "active"
+                    } else {
+                        "staged"
+                    }
+                )))
             }
             _ => None,
         }
@@ -396,6 +408,7 @@ impl Rig {
             new_pid: new_webui,
             prepare: script.webui_prepare.clone(),
             ready_at: script.webui_ready_at,
+            activated: Mutex::new(false),
             polls: Mutex::default(),
         });
         let new_cpd = Arc::new(NewCpd {
@@ -1206,8 +1219,12 @@ fn old_webui_stopped_only_after_readiness_handoff() {
     let polls = rig.webui.polls.lock().unwrap().clone();
     assert_eq!(
         polls.last(),
-        Some(&(true, 0)),
-        "the last poll answered ready with the old WebUI not yet signalled"
+        Some(&(true, 1)),
+        "the final poll confirms activation after retiring the old listener"
+    );
+    assert!(
+        polls.contains(&(true, 0)),
+        "the standby was ready before the old WebUI was signalled"
     );
     assert_eq!(
         rig.fakes.spawn.signals(),

@@ -84,7 +84,7 @@ fn rig(write_ok: bool) -> (Rig, PathBuf) {
         .route("gh", std::sync::Arc::new(Gh { write_ok }));
     // `Env::open_with` and `pr merge` read `$CPD_HOME`: the one variable this test sets, to its own temp dir (as `poll_threads_tests.rs`).
     unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
-    rig.sql("UPDATE pull_requests SET open_threads = '[]' WHERE number = 801");
+    rig.sql("UPDATE pull_requests SET review_threads_complete = 1, open_threads = '[]' WHERE number = 801");
     let file = rig.home.run_dir().join("pr-poll-now");
     (rig, file)
 }

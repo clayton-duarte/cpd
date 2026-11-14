@@ -104,6 +104,16 @@ function typeAndEnter(container: HTMLElement, text: string) {
 }
 
 describe("App", () => {
+  it("shows one connection-aware banner when an engine-down snapshot becomes stale", () => {
+    const { transport, container } = start();
+    act(() => transport.emitMessage({ ...snapshot, inbox: { ...snapshot.inbox, engineRunning: false, engineDownSince: "2026-11-14T00:00:00Z", engineRestartReason: null } }));
+    expect(container.querySelectorAll('[data-part="engine-banner"]')).toHaveLength(1);
+    expect(container.textContent).toContain("Engine is down");
+    act(() => transport.emitStatus("closed"));
+    expect(container.querySelectorAll('[data-part="engine-banner"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-part="engine-status-banner"]')).toHaveLength(0);
+    expect(container.textContent).not.toContain("Engine is down");
+  });
   it("shows a session attach failure and offers an explicit retry", () => {
     const { transport, container } = start();
     const button = container.querySelector<HTMLButtonElement>('button[data-select="plan"]');

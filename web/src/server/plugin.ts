@@ -1,3 +1,4 @@
+import { webAccess } from "./access.ts";
 import { execFile, spawn } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -357,12 +358,17 @@ export function realBoundaries(env: NodeJS.ProcessEnv, child: ChildBoundary = { 
   };
 }
 
-export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugin {
+export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries; host?: string }): Plugin {
   let closeAll: (() => Promise<void>) | null = null;
   return {
     name: "cpd-web",
+    enforce: "pre",
     apply: "serve",
     async configureServer(server: ViteDevServer) {
+      const configuredHost = options?.host ?? server.config.server.host ?? "127.0.0.1";
+      const access = webAccess(configuredHost === true ? "0.0.0.0" : configuredHost || "127.0.0.1");
+      server.middlewares.use((req, res, next) => { if (access.http(req, res)) next(); });
+      if (server.httpServer) access.guardUpgrades(server.httpServer as import("node:http").Server);
       // The real boot creates this boot's WebUI token; a test hands its own boundaries in (with or without one).
       let issued: IssuedToken | undefined;
       const boundaries = options?.boundaries ?? ((): PluginBoundaries => {
@@ -385,6 +391,7 @@ export function cpdWebPlugin(options?: { boundaries?: PluginBoundaries }): Plugi
       const endpoint = server.httpServer === null
         ? null
         : createWsServer({
+            authorize: access.acceptsSocket,
             newConnection: (send) => services.newConnection(send),
             server: createUpgradeFactory(server.httpServer as unknown as WebSocketUpgradeServer),
             scheduler: boundaries.scheduler,

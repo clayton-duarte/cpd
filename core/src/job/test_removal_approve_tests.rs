@@ -240,3 +240,11 @@ fn an_ended_job_is_refused() {
     let mut fx = fixture("merged");
     refused(fx.approve(&["b"], "Why."), ErrorCode::IllegalTransition);
 }
+
+#[test]
+fn significant_title_whitespace_survives_approval() {
+    let mut fx = fixture("queued");
+    fx.approve(&["suite::keeps trailing "], "Retired behavior.")
+        .unwrap();
+    assert_eq!(fx.approved(), json!(["suite::keeps trailing "]));
+}

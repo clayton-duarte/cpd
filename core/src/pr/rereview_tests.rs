@@ -144,7 +144,7 @@ fn rig(reviewers: &str, rereview_head: Option<&str>) -> (Rig, Store) {
     let mut rig = Rig::new();
     rig.workflow("api", "open");
     rig.sql(&format!(
-        "UPDATE pull_requests SET state = 'open', head_oid = 'new', feedback = '[]', open_threads = '[\"T1\"]', reviewers = '{reviewers}', rereview_head = {} WHERE number = 801;",
+        "UPDATE pull_requests SET state = 'open', head_oid = 'new', feedback = '[]', review_threads_complete = 1, open_threads = '[\"T1\"]', reviewers = '{reviewers}', rereview_head = {} WHERE number = 801;",
         rereview_head.map_or("NULL".to_owned(), |h| format!("'{h}'"))
     ));
     let store = Store::open(&rig.home, 5000).unwrap();
@@ -172,7 +172,7 @@ fn answered_thread_still_blocks_merge_ready() {
     let (rig, mut s) = rig("[]", None);
     rig.sql(&format!(
         "UPDATE pull_requests SET merge_state = 'clean', base_ref = 'main', default_branch = 'main', base_contained = 1,
-                draft = 0, feedback = '[]', open_threads = '{}' WHERE number = 801;",
+                draft = 0, feedback = '[]', review_threads_complete = 1, open_threads = '{}' WHERE number = 801;",
         serde_json::to_string(&read.open_threads).unwrap()
     ));
     let ready = |s: &mut Store| {
@@ -189,7 +189,7 @@ fn answered_thread_still_blocks_merge_ready() {
         .unwrap()
     };
     assert!(!ready(&mut s), "an answered but unresolved thread blocks");
-    rig.sql("UPDATE pull_requests SET open_threads = '[]' WHERE number = 801;");
+    rig.sql("UPDATE pull_requests SET review_threads_complete = 1, open_threads = '[]' WHERE number = 801;");
     assert!(ready(&mut s), "resolved: ready (guards a vacuous pass)");
 }
 
@@ -273,7 +273,7 @@ fn scoped_rereview_policy_can_disable_machine_defaults() {
 fn resolved_feedback_does_not_request_rereview_on_later_pushes() {
     let history = format!("[\"{CODEX}\"]");
     let (rig, mut store) = rig(&history, Some("old"));
-    rig.sql("UPDATE pull_requests SET open_threads = '[]', feedback = '[]' WHERE number = 801");
+    rig.sql("UPDATE pull_requests SET review_threads_complete = 1, open_threads = '[]', feedback = '[]' WHERE number = 801");
     assert!(pass_asks(&mut store).is_empty());
     assert!(comments(&mut store).is_empty());
 }
@@ -288,4 +288,28 @@ fn unresolved_scoped_policy_skips_rereview_without_failing_the_poll() {
             .is_empty()
     );
     assert!(comments(&mut store).is_empty());
+}
+
+#[test]
+fn quiet_polls_advance_the_baseline_before_feedback_reappears() {
+    let (rig, mut s) = rig(&format!("[\"{CODEX}\"]"), Some("old"));
+    rig.sql("UPDATE pull_requests SET open_threads = '[]', feedback = '[]', head_oid = 'quiet' WHERE number = 801");
+    assert!(pass_asks(&mut s).is_empty());
+    let seen: String = s
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT rereview_head FROM pull_requests WHERE number = 801",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(seen, "quiet");
+    rig.sql("UPDATE pull_requests SET open_threads = '[\"T1\"]' WHERE number = 801");
+    assert!(
+        pass_asks(&mut s).is_empty(),
+        "new feedback on an unchanged head does not request a stale re-review"
+    );
+    rig.sql("UPDATE pull_requests SET head_oid = 'fixed' WHERE number = 801");
+    assert_eq!(pass_asks(&mut s), names(&[CODEX]));
 }

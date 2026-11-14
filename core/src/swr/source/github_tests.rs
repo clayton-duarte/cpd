@@ -88,7 +88,9 @@ impl Pr {
             "commits": {"nodes": [{"commit": {"oid": self.oid,
                 "statusCheckRollup": {"state": if failed {"FAILURE"} else {"SUCCESS"}, "contexts": {"nodes": runs}}}}]},
             "latestReviews": {"nodes": reviews},
-            "reviewThreads": {"nodes": []}, "comments": {"nodes": []},
+            "reviewThreads": {"totalCount": 0, "pageInfo": {"hasNextPage": false, "hasPreviousPage": false}, "nodes": []},
+            "comments": {"totalCount": 0, "pageInfo": {"hasNextPage": false, "hasPreviousPage": false}, "nodes": []},
+            "reviews": {"totalCount": 0, "pageInfo": {"hasNextPage": false, "hasPreviousPage": false}, "nodes": []},
         })
     }
 }
@@ -1328,4 +1330,42 @@ fn engine_poll_persists_reviewers_even_without_a_legacy_comment_read() {
             .as_deref(),
         Some("[]")
     );
+}
+
+#[test]
+fn an_invalid_repository_policy_does_not_fail_the_shared_github_endpoint() {
+    let mut rig = Rig::new();
+    let good = pr(801);
+    let mut bad = pr(802);
+    bad.repo = "broken/api";
+    let policy = rig.home.root().join("policy/broken");
+    std::fs::create_dir_all(&policy).unwrap();
+    std::fs::write(policy.join("owner.toml"), "[not valid toml").unwrap();
+    rig.state().authored = vec![good, bad];
+    let now = rig.t0;
+    let effects = rig
+        .source
+        .pass_with_effects(
+            &mut Cx {
+                store: &mut rig.store,
+                ports: &rig.fakes.ports,
+                home: &rig.home,
+                config: &rig.config,
+            },
+            now,
+        )
+        .unwrap();
+    assert_eq!(rig.pr_state(801).as_deref(), Some("open"));
+    assert_eq!(
+        rig.pr_state(802).as_deref(),
+        Some("open"),
+        "raw facts still refresh without policy excuses"
+    );
+    assert!(
+        effects["policy_errors"]["broken/api"].is_object(),
+        "{effects}"
+    );
+    let endpoint = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert_eq!(endpoint.error_count, 0);
+    assert!(endpoint.paused_until.is_none());
 }

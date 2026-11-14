@@ -173,3 +173,19 @@ fn closing_closes_open_item() {
         "closing bug must close open item, found: {items:?}"
     );
 }
+
+#[test]
+fn an_explicit_bug_escalation_opens_only_that_bug_inside_the_window() {
+    let mut f = fixture();
+    f.report_bug("b1", T0);
+    f.report_bug("b2", T0);
+    f.sql(&format!("UPDATE bug_records SET escalated_at = '{T_INSIDE}', escalated_by = 'l-pay', escalation_reason = 'Need the owner decision' WHERE id = 'b1'"));
+    f.reconcile(T_INSIDE);
+    let items = f.bug_items();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].subject.contains("b1"));
+    assert_eq!(items[0].urgency, Urgency::Yellow);
+    f.mitigate_bug("b1", T_INSIDE);
+    f.reconcile(T_INSIDE);
+    assert!(f.bug_items().is_empty());
+}

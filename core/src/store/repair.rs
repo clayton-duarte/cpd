@@ -296,7 +296,37 @@ pub fn apply_repair_in_txn(
     result
 }
 
+/// A rebuild must never discard schema owned by an additive migration this binary does not know.
+fn reject_unknown_columns(conn: &Connection, table: &str, known: &str) -> Result<(), CpdError> {
+    let known: std::collections::HashSet<_> = known.split_whitespace().collect();
+    let mut statement = conn.prepare("SELECT name FROM pragma_table_xinfo(?1)")?;
+    let columns = statement
+        .query_map([table], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let unknown: Vec<_> = columns
+        .into_iter()
+        .filter(|c| !known.contains(c.as_str()))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::StoreFailed,
+            format!(
+                "Cannot rebuild {table}: unknown additive columns would be lost: {}",
+                unknown.join(", ")
+            ),
+        )
+        .with("table", table)
+        .with("columns", serde_json::json!(unknown)));
+    }
+    Ok(())
+}
+
 fn reconcile_jobs_table(conn: &Connection) -> Result<(), CpdError> {
+    reject_unknown_columns(
+        conn,
+        "jobs",
+        "seq plan workflow review key title tier goal context touches acceptance out_of_scope status appended fingerprint created_txn retry_tier cancel_reason cancel_requested_at failed_cause merged_sha created_at urgent kind tests test_files resources test_approved skipped_n summary touches_approved waiting_on touches_waived test_removal_approved",
+    )?;
     let has_waivers: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'touches_waived')",
@@ -437,6 +467,11 @@ BEGIN SELECT RAISE(ABORT, 'job_locked'); END;".to_owned();
 }
 
 fn reconcile_incident_table(conn: &Connection) -> Result<(), CpdError> {
+    reject_unknown_columns(
+        conn,
+        "incident",
+        "id started_at started_by reason started_txn lead until_plan until_workflow",
+    )?;
     conn.execute_batch(
         "DROP TRIGGER IF EXISTS incident_hist_ins;
          DROP TRIGGER IF EXISTS incident_hist_upd;
@@ -585,4 +620,33 @@ pub fn detect_table_drift(conn: &Connection) -> Result<Vec<String>, CpdError> {
 /// Returns true when implemented.
 pub fn is_table_reconciliation_supported() -> bool {
     true
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    #[test]
+    fn rebuild_refuses_unknown_columns_before_touching_data() {
+        for (table, rebuild) in [
+            (
+                "jobs",
+                reconcile_jobs_table as fn(&Connection) -> Result<(), CpdError>,
+            ),
+            ("incident", reconcile_incident_table),
+        ] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(&format!("CREATE TABLE {table} (id INTEGER, future_value TEXT); INSERT INTO {table} (id, future_value) VALUES (1, 'keep me');")).unwrap();
+            let error = rebuild(&conn).expect_err("unknown additive data cannot be discarded");
+            assert_eq!(error.code(), ErrorCode::StoreFailed);
+            assert!(error.message().contains("future_value"));
+            assert_eq!(
+                conn.query_row(&format!("SELECT future_value FROM {table}"), [], |r| r
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+                "keep me"
+            );
+        }
+    }
 }

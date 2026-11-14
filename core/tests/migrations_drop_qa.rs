@@ -33,7 +33,7 @@ fn raw(home: &CpdHome) -> Connection {
 const LATER: &[(&str, &str)] = &[
     (
         "pull_requests",
-        "ALTER TABLE pull_requests DROP COLUMN open_threads; ALTER TABLE pull_requests DROP COLUMN reviewers; ALTER TABLE pull_requests DROP COLUMN rereview_head",
+        "ALTER TABLE pull_requests DROP COLUMN open_threads; ALTER TABLE pull_requests DROP COLUMN reviewers; ALTER TABLE pull_requests DROP COLUMN rereview_head; ALTER TABLE pull_requests DROP COLUMN review_threads_complete",
     ),
     (
         "refactor_coverage_baselines",

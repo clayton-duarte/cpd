@@ -61,7 +61,7 @@ it("the status bar shows preview sha in the landing colour", () => {
 it("workers segment renders the TUI text from the serve status", () => {
   const pane: PaneStatus = { ...basePane, workers: { queued: 3, waiting: 2, tenants: 9, limit: 6 } };
   const c = bar(barStatus(pane, 0));
-  expect(part(c, "workers")?.textContent).toBe(`workers 3\u{f0798}2\u{f0798}9/6`);
+  expect(part(c, "workers")?.textContent).toBe("workers 3 queued · 2 waiting · 9/6 running");
 });
 
 it("incident pill renders elapsed minutes while incident is on", () => {

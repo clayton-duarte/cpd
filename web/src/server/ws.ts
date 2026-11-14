@@ -35,7 +35,7 @@ export interface WsSocket {
 
 /** The slice of the upgrade request the Origin check reads (the `ws` connection's `req`). */
 export interface WsRequest {
-  readonly headers: { readonly origin?: string | string[] | undefined };
+  readonly headers: { readonly origin?: string | string[] | undefined; readonly authorization?: string | undefined; readonly host?: string | undefined };
 }
 
 /** Where the endpoint listens (loopback in production, web/CONTRACT.md §15.1). */
@@ -62,6 +62,7 @@ export interface WsServerFactory {
 export type NewConnection = (send: (message: ServerMessage) => void) => HubConnection;
 
 export interface WsServerDeps {
+  authorize?: (request: WsRequest) => boolean;
   newConnection: NewConnection;
   server: WsServerFactory;
   scheduler: Scheduler;
@@ -153,11 +154,11 @@ export function acceptsOrigin(origin: string | string[] | undefined): boolean {
   }
 
   // Scheme must be plain http
-  if (parsed.protocol !== "http:") return false;
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
 
   // Port must be explicit and exactly 3333 or 33333
   // When no port is explicitly in the origin, parsed.port is ""
-  if (parsed.port !== "3333" && parsed.port !== "33333") return false;
+  if (parsed.port !== "3333" && parsed.port !== "33333" && !(parsed.protocol === "https:" && (parsed.port === "" || parsed.port === "443"))) return false;
 
   const host = parsed.hostname;
 
@@ -272,7 +273,7 @@ export function createWsServer(deps: WsServerDeps): Disposable {
         socket.terminate();
         return;
       }
-      if (!acceptsOrigin(request.headers.origin)) {
+      if ((deps.authorize && !deps.authorize(request)) || !acceptsOrigin(request.headers.origin)) {
         socket.terminate();
         return;
       }

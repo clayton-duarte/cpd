@@ -1,4 +1,4 @@
-//! `cpd protocol bug report | mitigate | close | list | show` (commands.md §33, contract §2.2 "Bug record";
+//! `cpd protocol bug report | mitigate | close | list | show | escalate` (commands.md §33, contract §2.2 "Bug record";
 //! air-d103, air-d104, air-d107): the bug report protocol as records, not prose.
 //!
 //! One row per bug in `bug_records`; no Event is appended and the protocol number does not change. A mitigation
@@ -20,12 +20,12 @@ use crate::store::Store;
 /// The `protocol` commands (commands.md §33).
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// The bug record: report, mitigate, close, list, show (commands.md §33)
+    /// The bug record: report, mitigate, close, list, show, escalate (commands.md §33)
     #[command(subcommand)]
     Bug(BugCommand),
 }
 
-/// The `protocol bug` commands (commands.md §33.1–§33.5).
+/// The `protocol bug` commands (commands.md §33.1–§33.6).
 #[derive(clap::Subcommand, Debug)]
 pub enum BugCommand {
     /// Record a bug and open its protocol state (commands.md §33.1)
@@ -38,6 +38,8 @@ pub enum BugCommand {
     List(ListArgs),
     /// Show one bug record (commands.md §33.5)
     Show(ShowArgs),
+    /// Ask the User for help on this unmitigated bug before the deadline
+    Escalate(EscalateArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -99,6 +101,15 @@ pub struct ListArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct EscalateArgs {
+    #[arg(value_name = "id")]
+    pub id: String,
+    /// Why this bug needs the User's input now
+    #[arg(long, value_name = "text")]
+    pub reason: Text,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ShowArgs {
     /// The bug id, `b<k>`
     #[arg(value_name = "id")]
@@ -107,7 +118,7 @@ pub struct ShowArgs {
 
 /// Every column of a `bug_records` row, in the order [`raw`] reads them.
 const COLUMNS: &str = "id, plan, title, symptom, cause, mitigation, mitigated_by, mitigated_at, root_fix, \
-                       regression_test, status, reported_by, reported_at, closed_at, closed_by, issue";
+                       regression_test, status, reported_by, reported_at, closed_at, closed_by, issue, escalated_at, escalated_by, escalation_reason";
 
 /// Runs one `protocol` command.
 pub fn run(command: Command) -> Result<Output, CpdError> {
@@ -119,6 +130,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         BugCommand::Close(args) => close(&mut env.store, args),
         BugCommand::List(args) => list(&mut env.store, args),
         BugCommand::Show(args) => show(&mut env.store, args),
+        BugCommand::Escalate(args) => escalate(&mut env.store, args),
     }
 }
 
@@ -141,6 +153,9 @@ struct Bug {
     closed_at: Option<String>,
     closed_by: Option<String>,
     issue: Option<String>,
+    escalated_at: Option<String>,
+    escalated_by: Option<String>,
+    escalation_reason: Option<String>,
 }
 
 impl Bug {
@@ -163,6 +178,9 @@ impl Bug {
             "closed_at": self.closed_at,
             "closed_by": self.closed_by,
             "issue": self.issue,
+            "escalated_at": self.escalated_at,
+            "escalated_by": self.escalated_by,
+            "escalation_reason": self.escalation_reason,
         })
     }
 }
@@ -185,6 +203,9 @@ fn raw(r: &rusqlite::Row<'_>) -> rusqlite::Result<Bug> {
         closed_at: r.get(13)?,
         closed_by: r.get(14)?,
         issue: r.get(15)?,
+        escalated_at: r.get(16)?,
+        escalated_by: r.get(17)?,
+        escalation_reason: r.get(18)?,
     })
 }
 
@@ -520,4 +541,28 @@ fn show(store: &mut Store, args: ShowArgs) -> Result<Output, CpdError> {
     let bug = store.read(|conn| fetch(conn, &args.id))?;
     let bug = bug.ok_or_else(|| bug_not_found(&args.id))?;
     Ok(Output::success(json!({"bug": bug.json()})))
+}
+
+fn escalate(store: &mut Store, args: EscalateArgs) -> Result<Output, CpdError> {
+    require_lead()?;
+    let caller = caller()?;
+    store.write("protocol bug escalate", |tx| {
+        let bug = fetch(tx, &args.id)?.ok_or_else(|| bug_not_found(&args.id))?;
+        if bug.status != "open" || bug.mitigation.is_some() {
+            return Err(CpdError::new(ErrorCode::IllegalTransition, "Only an open, unmitigated bug can be escalated."));
+        }
+        if let Some(caller) = caller.as_deref() {
+            let owner: Option<String> = if let Some(plan) = &bug.plan {
+                tx.query_row("SELECT lead_session FROM plans WHERE id = ?1", [plan], |r| r.get(0)).optional()?.flatten()
+            } else {
+                tx.query_row("SELECT id FROM sessions WHERE role = 'manager' AND context = 'cpd' AND archived_at IS NULL ORDER BY created_at, id LIMIT 1", [], |r| r.get(0)).optional()?
+            };
+            if owner.as_deref() != Some(caller) {
+                return Err(CpdError::new(ErrorCode::NotALead, "Only this bug's owner or the User can escalate it."));
+            }
+        }
+        tx.execute("UPDATE bug_records SET escalated_at = COALESCE(escalated_at, ?2), escalated_by = ?3, escalation_reason = ?4 WHERE id = ?1",
+            params![args.id, clock::now(), caller, args.reason.as_str()])?;
+        Ok(Output::success(json!({"bug": fetch(tx, &args.id)?.expect("existing bug").json()})))
+    })
 }

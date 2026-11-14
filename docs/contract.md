@@ -1565,6 +1565,13 @@ When `node` cannot start, the adapter returns the existing `spawn_failed` (§1.2
 
 ### 3.7b The serve process: runtime and port supervision
 
+**Owner access amendment (2026-11-14):** active production and preview WebUI
+servers default to loopback. LAN access is an opt-in with a per-backend client
+credential and trusted browser origins, as specified in
+[WebUI access](architecture/webui-access.md). This supersedes wildcard/no-auth
+bind statements in the historical design below; it does not assert that the
+legacy Rust serve scaffolding is a completed network server.
+
 The production server and the UI-only preview of `docs/architecture/serve.md`. The command is `cpd serve` (commands.md §12a). Status: decided by pro-d566, pro-d567, pro-d570, pro-d541 and pro-d542. As of this amendment the code does not do this: no `cpd serve` exists, and the engine runs a child Node server (`engine/src/watch/webui.rs`). The implementing change brings the code in line. Each invariant below is a rule the implementation must make true and a test must pin.
 
 **Production process**
@@ -1985,6 +1992,7 @@ CREATE TABLE pull_requests (
   open_threads    TEXT,                                           -- migration `20261113T1000-pr-open-threads` (pro-d588): JSON array of the review thread ids GitHub still shows unresolved at the last comments read, answered threads included; NULL = not read since
   reviewers       TEXT,                                           -- migration `20261113T1000-pr-open-threads`: JSON array of the logins that authored review comments, comments or reviews; NULL = not read since
   rereview_head   TEXT,                                           -- migration `20261113T1000-pr-open-threads`: the head the bot re-review pass last saw with a configured bot in `reviewers`; NULL = none yet
+  review_threads_complete INTEGER NOT NULL DEFAULT 0 CHECK (review_threads_complete IN (0, 1)), -- breaking migration after 144: older writers cannot maintain completeness
   -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
@@ -2875,7 +2883,7 @@ CREATE TABLE swr_badges (
 
 `swr_badges` is the Lead completion badge's cache, one row per Session. Its columns map from the web's `Completion`, its freshness is the `entry_id` of the last transcript item, and its gcTime is 7 days with the observer rule of `docs/architecture/swr-classifier.md` §2.3 and §2.4. Its write is `cpd swr badge put` (commands §32.8), a cache write and not an outbox row.
 
-**The bug records** (contract §2.2 "Bug record"; air-d103, air-d104, air-d107). One row per bug, written by `cpd protocol bug report`, `protocol bug mitigate` and `protocol bug close` (commands.md §33); the table adds no Event kind of its own: the engine tick's breach check (§3.7 E25) appends the `protocol-breach` kind (§5.2) of migration `20261110T1305-protocol-breach` (§4.5), which the adapter ignores; that kind raises the protocol number to 27 (§5.2: the guards' Ledger leg runs `session report` with new flags, commands.md §10.18). It is created by the migration `20261108T0800-bug-record`, a `history_tables` row with `no_delete` 1.
+**The bug records** (contract §2.2 "Bug record"; air-d103, air-d104, air-d107). One row per bug, written by `cpd protocol bug report`, `protocol bug mitigate`, `protocol bug close` and `protocol bug escalate` (commands.md §33); the table adds no Event kind of its own: the engine tick's breach check (§3.7 E25) appends the `protocol-breach` kind (§5.2) of migration `20261110T1305-protocol-breach` (§4.5), which the adapter ignores; that kind raises the protocol number to 27 (§5.2: the guards' Ledger leg runs `session report` with new flags, commands.md §10.18). It is created by the migration `20261108T0800-bug-record`, a `history_tables` row with `no_delete` 1.
 
 ```sql
 CREATE TABLE refactor_coverage_baselines (
@@ -2904,6 +2912,9 @@ CREATE TABLE bug_records (
   closed_at       TEXT,
   closed_by       TEXT,
   issue           TEXT,
+  escalated_at    TEXT,
+  escalated_by    TEXT,
+  escalation_reason TEXT,
   CHECK ((mitigation IS NULL) = (mitigated_at IS NULL)),
   CHECK (mitigated_by IS NULL OR mitigation IS NOT NULL),
   CHECK ((status = 'closed') = (closed_at IS NOT NULL)),

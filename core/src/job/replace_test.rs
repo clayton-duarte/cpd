@@ -88,42 +88,26 @@ pub(super) fn reseal(
         if stored == found {
             return Ok(());
         }
-        // The Job may have been sealed at any point along each need's redirect
-        // chain: try every combination of rewinds and accept one that
-        // reproduces the sealed value.
-        let mut sources: Vec<(String, String)> = Vec::new();
-        {
-            let mut s = tx.prepare("SELECT new_key, source FROM test_replacements WHERE plan = ?1 AND state = 'complete'")?;
-            let rows = s.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            for row in rows {
-                sources.push(row?);
+        // Reconstruct actual chronological graph states, not the Cartesian product of each need's chain.
+        // Completion history orders concurrently prepared intents by when their graph mutation committed.
+        let sources: Vec<(String, String)> = {
+            let mut statement = tx.prepare(
+                "SELECT r.new_key, r.source FROM test_replacements r
+                 WHERE r.plan = ?1 AND r.state = 'complete'
+                 ORDER BY COALESCE((SELECT max(h.id) FROM history h
+                   WHERE h.tbl = 'test_replacements' AND h.pk = json_array(r.plan, r.source)
+                     AND json_extract(h.after, '$.state') = 'complete'), r.created_txn) DESC"
+            )?;
+            statement.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let mut prior = job.clone();
+        let explained = sources.into_iter().any(|(new_key, source)| {
+            let mut changed = false;
+            for need in &mut prior.needs {
+                if *need == new_key { *need = source.clone(); changed = true; }
             }
-        }
-        let chains: Vec<Vec<String>> = job
-            .needs
-            .iter()
-            .map(|need| {
-                let mut chain = vec![need.clone()];
-                while let Some((_, source)) = sources.iter().find(|(n, _)| Some(n) == chain.last()) {
-                    if chain.contains(source) {
-                        break;
-                    }
-                    chain.push(source.clone());
-                }
-                chain
-            })
-            .collect();
-        let mut candidates: Vec<Vec<String>> = vec![Vec::new()];
-        for chain in &chains {
-            candidates = candidates
-                .iter()
-                .flat_map(|c| chain.iter().map(move |n| [c.clone(), vec![n.clone()]].concat()))
-                .collect();
-        }
-        let explained = candidates.into_iter().any(|needs| {
-            let mut before = job.clone();
-            before.needs = needs;
-            before.needs != job.needs && jobs::locked_fingerprint(&before) == stored
+            changed && jobs::locked_fingerprint(&prior) == stored
         });
         if !explained {
             return Err(CpdError::new(
