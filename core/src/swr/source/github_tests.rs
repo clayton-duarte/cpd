@@ -966,7 +966,7 @@ fn gh_poll_failed_continuation_restarts_discovery_without_advancing() {
     rig.state().fail = None;
     rig.pass(120).unwrap();
     assert!(
-        !rig.graphql()[2].contains("authoredMore:"),
+        !rig.graphql().last().unwrap().contains("authoredMore:"),
         "failure resets an invalid cursor"
     );
     rig.pass(180).unwrap();
@@ -1040,7 +1040,7 @@ fn gh_poll_invalid_discovery_page_does_not_commit_partial_rows() {
         (*rig.fakes.runner).clone().route("gh", rig.world.clone());
         rig.pass(120).unwrap();
         assert!(
-            !rig.graphql()[2].contains("authoredMore:"),
+            !rig.graphql().last().unwrap().contains("authoredMore:"),
             "restart after malformed cursor"
         );
         rig.pass(180).unwrap();
