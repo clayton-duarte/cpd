@@ -502,3 +502,42 @@ fn the_user_can_escalate_a_specific_bug_and_agents_cannot_impersonate_its_owner(
         out["bug"]["escalation_reason"]
     );
 }
+
+#[test]
+fn associate_issue_only_records_issue_without_mitigation() {
+    let (fx, repo) = workflow_fx();
+    let before = report(&fx, "issue association", "observed failure");
+    common::refused(&workflow_add_bug(&fx, &repo, "b1"), "bug_issue_required", 3);
+    let out = fx.cpd(&["protocol", "bug", "associate-issue", "b1", "--issue", ISSUE]).ok();
+    let mut expected = before;
+    expected["issue"] = ISSUE.into();
+    assert_eq!(out["bug"], expected);
+    assert_eq!(show(&fx, "b1"), expected);
+    let list = fx.cpd(&["protocol", "bug", "list", "--mitigated", "no"]).ok();
+    assert_eq!(list["bugs"][0], expected);
+    workflow_add_bug(&fx, &repo, "b1").ok();
+    assert_eq!(show(&fx, "b1"), expected);
+}
+
+#[test]
+fn associate_issue_only_is_idempotent_and_refuses_conflict() {
+    let fx = bug_fx();
+    let before = report(&fx, "issue association", "observed failure");
+    for bad in ["#1156", "https://github.com/clayton-duarte/cpd/pull/1156"] {
+        let run = fx.cpd(&["protocol", "bug", "associate-issue", "b1", "--issue", bad]);
+        common::refused(&run, "issue_invalid", 2);
+        assert_eq!(show(&fx, "b1"), before);
+    }
+    let unknown = fx.cpd(&["protocol", "bug", "associate-issue", "b99", "--issue", ISSUE]);
+    assert_eq!(unknown.error()["code"], "bug_not_found");
+    assert_eq!(show(&fx, "b1"), before);
+    let args = ["protocol", "bug", "associate-issue", "b1", "--issue", ISSUE];
+    fx.cpd(&args).ok();
+    let linked = show(&fx, "b1");
+    let repeat = fx.cpd(&args).ok();
+    assert_eq!(repeat["already"], true);
+    assert_eq!(show(&fx, "b1"), linked);
+    let conflict = fx.cpd(&["protocol", "bug", "associate-issue", "b1", "--issue", "https://github.com/clayton-duarte/cpd/issues/9"]);
+    common::refused(&conflict, "issue_conflict", 3);
+    assert_eq!(show(&fx, "b1"), linked);
+}
