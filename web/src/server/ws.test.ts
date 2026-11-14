@@ -1,3 +1,4 @@
+import { webAccess } from "./access.ts";
 import { describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import type { ServerMessage } from "../protocol/wire.ts";
@@ -141,6 +142,20 @@ const flush = async (): Promise<void> => {
 };
 
 describe("ws server", () => {
+  it("authenticates before creating a hub even with no Origin", () => {
+    const h = harness();
+    const token = "a".repeat(40);
+    const endpoint = createWsServer({ ...h.deps, authorize: webAccess("0.0.0.0", token).acceptsSocket });
+    const denied = new FakeSocket();
+    h.server.connect(denied);
+    expect(denied.terminated).toBe(true);
+    expect(h.hubs).toHaveLength(0);
+    const allowed = new FakeSocket();
+    h.server.connect(allowed, { headers: { origin: "https://backend.local", host: "backend.local", authorization: `Basic ${Buffer.from(`cpd:${token}`).toString("base64")}` } });
+    expect(allowed.terminated).toBe(false);
+    expect(h.hubs).toHaveLength(1);
+    endpoint.dispose();
+  });
   it("contains an accepted socket error and leaves other clients usable", async () => {
     const h = harness();
     const errors: unknown[] = [];
@@ -314,8 +329,6 @@ describe("ws server", () => {
       "http://192.168.1.50:5173",
       "http://localhost", // no explicit port
       "http://127.0.0.1", // no explicit port
-      "https://localhost:3333", // https rejected
-      "https://192.168.1.50:3333", // https rejected
       "http://8.8.8.8:3333", // public IPv4
       "http://evil.local.example:3333", // not a .local mDNS host
     ];

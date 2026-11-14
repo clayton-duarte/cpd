@@ -129,7 +129,10 @@ macro_rules! simple_id {
 
 simple_id!(
     /// Context id: `^[a-z][a-z0-9-]{1,39}$`.
-    ContextId, InvalidContextId, "Context id", "^[a-z][a-z0-9-]{1,39}$",
+    ContextId,
+    InvalidContextId,
+    "Context id",
+    "^[a-z][a-z0-9-]{1,39}$",
     |s| matches(s, lower, lower_digit_dash, 1, 39)
 );
 
@@ -177,26 +180,38 @@ impl ContextId {
 
 simple_id!(
     /// Plan id: `^[a-z][a-z0-9-]{1,23}$`.
-    PlanId, InvalidPlanId, "Plan id", "^[a-z][a-z0-9-]{1,23}$",
+    PlanId,
+    InvalidPlanId,
+    "Plan id",
+    "^[a-z][a-z0-9-]{1,23}$",
     |s| matches(s, lower, lower_digit_dash, 1, 23)
 );
 
 simple_id!(
     /// Job key: `^[a-z][a-z0-9-]{0,31}$`.
-    JobKey, InvalidJobId, "Job key", "^[a-z][a-z0-9-]{0,31}$",
+    JobKey,
+    InvalidJobId,
+    "Job key",
+    "^[a-z][a-z0-9-]{0,31}$",
     |s| matches(s, lower, lower_digit_dash, 0, 31)
 );
 
 simple_id!(
     /// Workflow key (R34): `^[a-z][a-z0-9-]{0,23}$`, unique in its Plan.
-    WorkflowKey, InvalidWorkflowId, "Workflow key", "^[a-z][a-z0-9-]{0,23}$",
+    WorkflowKey,
+    InvalidWorkflowId,
+    "Workflow key",
+    "^[a-z][a-z0-9-]{0,23}$",
     |s| matches(s, lower, lower_digit_dash, 0, 23)
 );
 
 simple_id!(
     /// Session id as accepted on input: `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
     /// The ids cpd chooses itself are lowercase UUID v4 ([`SessionId::new_v4`]).
-    SessionId, InvalidSessionId, "Session id", "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+    SessionId,
+    InvalidSessionId,
+    "Session id",
+    "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
     |s| matches(
         s,
         |c| c.is_ascii_alphanumeric(),
@@ -209,7 +224,10 @@ simple_id!(
 simple_id!(
     /// Machine name: `^[a-z][a-z0-9]{0,7}$`, set in `config.toml` (contract §8),
     /// so an invalid one is `config_invalid`.
-    MachineName, ConfigInvalid, "machine name", "^[a-z][a-z0-9]{0,7}$",
+    MachineName,
+    ConfigInvalid,
+    "machine name",
+    "^[a-z][a-z0-9]{0,7}$",
     |s| matches(s, lower, lower_digit, 0, 7)
 );
 

@@ -482,6 +482,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
                 "open_threads",
                 "reviewers",
                 "rereview_head",
+                "review_threads_complete",
             ];
             for column in columns
                 .iter()

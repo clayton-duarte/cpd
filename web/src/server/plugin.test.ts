@@ -32,9 +32,11 @@ const fakeServer = () => {
     httpServer: {
       on: vi.fn((event: string, cb: UpgradeListener) => { if (event === "upgrade") upgrades.push(cb); }),
       off: vi.fn(),
+      prependListener: vi.fn((_event: string, _handler: unknown) => {}),
       once: vi.fn((event: string, cb: () => void) => { httpHandlers.set(event, cb); }),
     },
-    config: { logger },
+    config: { logger, server: { host: "127.0.0.1" } },
+    middlewares: { use: vi.fn((_handler: unknown) => {}) },
   };
   return { server, upgrades, httpHandlers, logger };
 };
@@ -45,6 +47,35 @@ const configure = async (plugin: ReturnType<typeof cpdWebPlugin>, server: unknow
 };
 
 describe("cpd web plugin", () => {
+  it("refuses unauthenticated LAN preview before starting cockpit work", async () => {
+    const { b, cpdRuns } = boundaries();
+    const { server } = fakeServer();
+    server.config.server.host = "0.0.0.0";
+    await expect(configure(cpdWebPlugin({ boundaries: b }), server)).rejects.toThrow("requires CPD_WEBUI_ACCESS_TOKEN");
+    expect(cpdRuns).toEqual([]);
+  });
+
+  it("authenticates preview HTTP and HMR upgrades when LAN access is enabled", async () => {
+    const token = "preview-backend-token-".repeat(3);
+    vi.stubEnv("CPD_WEBUI_ACCESS_TOKEN", token);
+    try {
+      const { server } = fakeServer();
+      server.config.server.host = "0.0.0.0";
+      await configure(cpdWebPlugin({ boundaries: boundaries().b }), server);
+      const middleware = server.middlewares.use.mock.calls[0]![0] as (req: unknown, res: unknown, next: () => void) => void;
+      const response = { writeHead: vi.fn(), end: vi.fn() };
+      const next = vi.fn();
+      middleware({ headers: {} }, response, next);
+      expect(response.writeHead.mock.calls[0]![0]).toBe(401);
+      expect(next).not.toHaveBeenCalled();
+      middleware({ headers: { authorization: `Basic ${Buffer.from(`cpd:${token}`).toString("base64")}` } }, response, next);
+      expect(next).toHaveBeenCalledOnce();
+      const upgrade = server.httpServer.prependListener.mock.calls[0]![1] as (req: unknown, socket: unknown) => void;
+      const socket = { write: vi.fn(), destroy: vi.fn() };
+      upgrade({ headers: {} }, socket);
+      expect(socket.destroy).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("hosts the one WebSocket endpoint on the dev http server", async () => {
     const { b, cpdRuns, followStarts } = boundaries();
     const plugin = cpdWebPlugin({ boundaries: b });

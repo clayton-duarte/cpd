@@ -278,382 +278,14 @@ pub struct TestCase {
     pub assertions: usize,
 }
 
-const JS_CASES: [&str; 4] = ["it(", "test(", "it.only(", "test.only("];
-const JS_SUITES: [&str; 4] = ["describe(", "describe.only(", "describe.skip(", "suite("];
-
-/// The text of the first quoted title after an opening call such as `it(`.
-fn quoted_title(rest: &str) -> Option<String> {
-    let q = rest
-        .chars()
-        .next()
-        .filter(|c| matches!(c, '"' | '\'' | '`'))?;
-    let body = &rest[1..];
-    body.find(q).map(|end| body[..end].to_owned())
-}
-
-/// The identifier after `keyword ` at the start of `t`.
-fn ident_after(t: &str, keyword: &str) -> Option<String> {
-    let rest = t.strip_prefix(keyword)?;
-    let n: String = rest
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-    (!n.is_empty()).then_some(n)
-}
-
-enum Opener {
-    Case(String),
-    /// A scope: its label and the separator that follows it in an identity.
-    Scope(String, &'static str),
-}
-
-/// What `t` (a line without its leading attributes) opens: a Rust `mod`, a JS suite, a JS case, or (after a
-/// `#[test]`) a Rust `fn`.
-fn opener(t: &str, rust_test: bool) -> Option<Opener> {
-    for open in JS_CASES {
-        if let Some(rest) = t.strip_prefix(open) {
-            return quoted_title(rest).map(Opener::Case);
-        }
-    }
-    for open in JS_SUITES {
-        if let Some(rest) = t.strip_prefix(open) {
-            return quoted_title(rest).map(|l| Opener::Scope(l, " > "));
-        }
-    }
-    let mut t = t;
-    while let Some(rest) = t.strip_prefix("pub ").or_else(|| t.strip_prefix("async ")) {
-        t = rest;
-    }
-    if t.starts_with("mod ") && !t.trim_end().ends_with(';') {
-        return ident_after(t, "mod ").map(|l| Opener::Scope(l, "::"));
-    }
-    if rust_test {
-        return ident_after(t, "fn ").map(Opener::Case);
-    }
-    None
-}
-
-/// The assertions in `s`: each `assert…(`/`assert…!(`/`assert.…` and each `expect(` at a word start.
-fn count_assertions(s: &str) -> usize {
-    let b = s.as_bytes();
-    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    let mut n = 0;
-    let mut i = 0;
-    while i < b.len() {
-        if i > 0 && word(b[i - 1]) {
-            i += 1;
-            continue;
-        }
-        if b[i..].starts_with(b"expect(") {
-            n += 1;
-        } else if b[i..].starts_with(b"assert") {
-            let mut j = i;
-            while j < b.len() && word(b[j]) {
-                j += 1;
-            }
-            if j < b.len() && matches!(b[j], b'!' | b'(' | b'.') {
-                n += 1;
-            }
-            i = j;
-            continue;
-        }
-        i += 1;
-    }
-    n
-}
-
-/// A slash begins a regex where an expression can start; after an operand it is division.
-fn regex_start(prefix: &[u8]) -> bool {
-    let p = prefix.trim_ascii_end();
-    let word = p
-        .iter()
-        .rposition(|b| !b.is_ascii_alphabetic())
-        .map_or(p, |i| &p[i + 1..]);
-    [b"return".as_slice(), b"throw", b"case", b"yield", b"await"].contains(&word)
-        || p.last().is_none_or(|b| b"=(:,[!&|?;{}>".contains(b))
-}
-
-/// Replace comments and literals with spaces while retaining offsets and newlines. The declaration scanner uses
-/// the original text for JS titles, but only code contributes braces or assertions. Rust lifetimes stay code.
-fn code_only(src: &str) -> String {
-    let bytes = src.as_bytes();
-    let mut out = bytes.to_vec();
-    let rust = src.contains("#[test") || src.contains("#[tokio::test");
-    let mut i = 0;
-    // None is template text; Some(depth) is an executable interpolation (nested templates stack).
-    let mut templates: Vec<Option<usize>> = Vec::new();
-    while i < bytes.len() {
-        if templates.last() == Some(&None) {
-            if bytes[i..].starts_with(b"${") {
-                out[i] = b' ';
-                *templates.last_mut().unwrap() = Some(0);
-                i += 2; // Keep the interpolation braces balanced in the code view.
-            } else {
-                let end = if bytes[i] == b'\\' {
-                    (i + 2).min(bytes.len())
-                } else {
-                    i + 1
-                };
-                if bytes[i] == b'`' {
-                    templates.pop();
-                }
-                for byte in &mut out[i..end] {
-                    if !matches!(*byte, b'\n' | b'\r') {
-                        *byte = b' ';
-                    }
-                }
-                i = end;
-            }
-            continue;
-        }
-        if !rust && bytes[i] == b'`' {
-            templates.push(None);
-            out[i] = b'0';
-            i += 1;
-            continue;
-        }
-        if let Some(Some(depth)) = templates.last_mut() {
-            if bytes[i] == b'{' {
-                *depth += 1;
-            } else if bytes[i] == b'}' {
-                if *depth == 0 {
-                    *templates.last_mut().unwrap() = None;
-                } else {
-                    *depth -= 1;
-                }
-            }
-        }
-        let start = i;
-        if bytes[i..].starts_with(b"//") {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-        } else if bytes[i..].starts_with(b"/*") {
-            i += 2;
-            let mut depth = 1;
-            while i < bytes.len() && depth > 0 {
-                if bytes[i..].starts_with(b"/*") {
-                    depth += 1;
-                    i += 2;
-                } else if bytes[i..].starts_with(b"*/") {
-                    depth -= 1;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-        } else if !rust && bytes[i] == b'/' && regex_start(&out[..i]) {
-            i += 1;
-            let mut class = false;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                match bytes[i] {
-                    b'\\' => {
-                        i = (i + 2).min(bytes.len());
-                        continue;
-                    }
-                    b'[' => class = true,
-                    b']' => class = false,
-                    b'/' if !class => {
-                        i += 1;
-                        break;
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-                i += 1;
-            }
-        } else if bytes[i] == b'r' && {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j] == b'#' {
-                j += 1;
-            }
-            j < bytes.len() && bytes[j] == b'"'
-        } {
-            let mut quote = i + 1;
-            while bytes[quote] == b'#' {
-                quote += 1;
-            }
-            let hashes = quote - i - 1;
-            i = quote + 1;
-            while i < bytes.len() {
-                if bytes[i] == b'"'
-                    && bytes
-                        .get(i + 1..i + 1 + hashes)
-                        .is_some_and(|s| s.iter().all(|b| *b == b'#'))
-                {
-                    i += 1 + hashes;
-                    break;
-                }
-                i += 1;
-            }
-        } else if matches!(bytes[i], b'"' | b'\'' | b'`') {
-            let quote = bytes[i];
-            // A Rust lifetime has no closing quote after the character. A char literal does.
-            if rust && quote == b'\'' && bytes.get(i + 1) != Some(&b'\\') {
-                let next = src[i + 1..].chars().next().map_or(0, char::len_utf8);
-                if bytes.get(i + 1 + next) != Some(&b'\'') {
-                    i += 1;
-                    continue;
-                }
-            }
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\\' {
-                    i = (i + 2).min(bytes.len());
-                } else if bytes[i] == quote {
-                    i += 1;
-                    break;
-                } else {
-                    i += 1;
-                }
-            }
-        } else {
-            i += 1;
-            continue;
-        }
-        let literal = !bytes[start..].starts_with(b"//") && !bytes[start..].starts_with(b"/*");
-        for b in &mut out[start..i] {
-            if *b != b'\n' && *b != b'\r' {
-                *b = b' ';
-            }
-        }
-        if literal {
-            out[start] = b'0';
-        }
-    }
-    String::from_utf8(out).expect("masking whole literals preserves UTF-8")
-}
-
-/// Braces in code whose comments and literals have been masked.
-fn braces(s: &str) -> (i32, i32) {
-    (
-        s.bytes().filter(|b| *b == b'{').count() as i32,
-        s.bytes().filter(|b| *b == b'}').count() as i32,
-    )
-}
-
-struct Frame {
-    depth: i32,
-    call_depth: Option<i32>,
-    seen: bool,
-    label: String,
-    sep: &'static str,
-    case: Option<usize>,
-}
-
-/// The test cases in `src`, in order: Rust `#[test]` fns and `it`/`test` calls (node:test, vitest, jest), each with
-/// its scoped identity and the assertions of its body, a declaration line's included. Scopes are Rust `mod`s and JS
-/// `describe` suites; braces end Rust cases and closing call parentheses end JS cases.
+/// Parse test declarations and assertion calls using the maintained Rust and TSX grammars.
 pub fn test_cases(src: &str) -> Vec<TestCase> {
-    // Formatting may put a call's title after the opening parenthesis on the next line.
-    let mut lines: Vec<String> = Vec::new();
-    for line in src.lines() {
-        if let Some(previous) = lines.last_mut()
-            && JS_CASES
-                .iter()
-                .chain(JS_SUITES.iter())
-                .any(|prefix| previous.trim() == *prefix)
-        {
-            previous.push_str(line.trim_start());
-        } else {
-            lines.push(line.to_owned());
-        }
-    }
-    let joined = lines.join("\n");
-    let src = joined.as_str();
-    let mut cases: Vec<TestCase> = Vec::new();
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut depth = 0;
-    let mut parens = 0;
-    let mut rust_test = false;
-    let code = code_only(src);
-    for (line, masked) in src.lines().zip(code.lines()) {
-        let mut t = masked.trim_start();
-        while t.starts_with("#[") {
-            let Some(end) = t.find(']') else { break };
-            if t.starts_with("#[test") || t.starts_with("#[tokio::test") {
-                rust_test = true;
-            }
-            t = t[end + 1..].trim_start();
-        }
-        if t.is_empty() {
-            continue;
-        }
-        let depth_before = depth;
-        let mut fresh = false;
-        let original = &line[line.len() - t.len()..];
-        if let Some(found) = opener(original, rust_test) {
-            let (label, sep, case) = match found {
-                Opener::Case(name) => {
-                    rust_test = false;
-                    let scope: String = stack
-                        .iter()
-                        .filter(|f| f.case.is_none())
-                        .map(|f| format!("{}{}", f.label, f.sep))
-                        .collect();
-                    let mut id = format!("{scope}{name}");
-                    let mut n = 1;
-                    while cases.iter().any(|c| c.name == id) {
-                        n += 1;
-                        id = format!("{scope}{name}#{n}");
-                    }
-                    cases.push(TestCase {
-                        name: id,
-                        title: name.clone(),
-                        assertions: 0,
-                    });
-                    (name, "", Some(cases.len() - 1))
-                }
-                Opener::Scope(label, sep) => (label, sep, None),
-            };
-            stack.push(Frame {
-                depth: depth_before,
-                call_depth: JS_CASES
-                    .iter()
-                    .chain(JS_SUITES.iter())
-                    .any(|prefix| original.starts_with(prefix))
-                    .then_some(parens),
-                seen: false,
-                label,
-                sep,
-                case,
-            });
-            fresh = true;
-        }
-        let (open, close) = braces(t);
-        depth += open - close;
-        parens += t.bytes().filter(|b| *b == b'(').count() as i32
-            - t.bytes().filter(|b| *b == b')').count() as i32;
-        for f in &mut stack {
-            f.seen |= depth > f.depth;
-        }
-        if fresh
-            && open > 0
-            && let Some(f) = stack.last_mut()
-        {
-            f.seen = true;
-        }
-        if let Some(i) = stack.iter().rev().find_map(|f| f.case) {
-            cases[i].assertions += count_assertions(t);
-        }
-        if fresh
-            && open == 0
-            && t.trim_end().ends_with(");")
-            && let Some(f) = stack.last_mut()
-        {
-            f.seen = true;
-            f.depth = depth;
-        }
-        while stack.last().is_some_and(|f| match f.call_depth {
-            Some(start) => parens <= start,
-            None => f.seen && depth <= f.depth,
-        }) {
-            stack.pop();
-        }
-    }
-    cases
+    super::test_cases::parse(src)
+}
+
+/// Production callers choose the grammar from the actual file, never from embedded fixture text.
+pub fn test_cases_for_path(path: &str, src: &str) -> Vec<TestCase> {
+    super::test_cases::parse_path(path, src)
 }
 
 /// Whether `approved` names the case `id`: by its scoped identity, or by its bare name.
@@ -664,9 +296,29 @@ fn is_approved(approved: &[String], case: &TestCase) -> bool {
 /// `Ok` when `head` keeps every test case of `base` (matched by scoped identity) with no fewer assertions, or the
 /// case is in `approved`; otherwise `tests_removed`.
 pub fn check_tests_kept(base: &str, head: &str, approved: &[String]) -> Result<(), CpdError> {
-    let head_cases = test_cases(head);
+    cases_kept(test_cases(base), test_cases(head), approved)
+}
+
+pub fn check_tests_kept_for_path(
+    path: &str,
+    base: &str,
+    head: &str,
+    approved: &[String],
+) -> Result<(), CpdError> {
+    cases_kept(
+        test_cases_for_path(path, base),
+        test_cases_for_path(path, head),
+        approved,
+    )
+}
+
+fn cases_kept(
+    base_cases: Vec<TestCase>,
+    head_cases: Vec<TestCase>,
+    approved: &[String],
+) -> Result<(), CpdError> {
     let mut lost = Vec::new();
-    for b in test_cases(base) {
+    for b in base_cases {
         if is_approved(approved, &b) {
             continue;
         }

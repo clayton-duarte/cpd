@@ -36,3 +36,5 @@ pub fn tail(text: &str, lines: usize) -> String {
 
 /// How many lines of output results carry (contract §7.3, commands.md §1.2).
 pub const TAIL_LINES: usize = 60;
+
+mod test_cases;

@@ -15,7 +15,7 @@ use cpd_core::app::write_root;
 use cpd_core::clock::ManualClock;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::FakeRunner;
-use cpd_core::host::spawn::{FakeSpawn, Spawn};
+use cpd_core::host::spawn::{FakeSpawn, Pid, Spawn};
 use cpd_core::host::tmux::Tmux;
 use cpd_core::ports::Ports;
 use cpd_engine::watch::engine::Engine;
@@ -194,4 +194,32 @@ pub fn engine_restart_spawns_prod_and_preview_servers() {
         Some(&fx.preview_dir.join("web")),
         "preview server must be launched with cwd = preview_dir/web when web/package.json exists"
     );
+}
+
+#[test]
+fn a_staged_install_keeps_the_serving_webui_even_when_the_restart_marker_exists() {
+    let fx = SuperviseFx::new();
+    let entry = fx.home.root().join("web/src/server/serve.ts");
+    fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    fs::write(entry, "// isolated fixture").unwrap();
+    let old = fx.spawn.add_process(Pid(1), "node web/src/server/serve.ts");
+    let staged = fx.spawn.add_process(Pid(1), "node web/src/server/serve.ts");
+    fs::write(
+        fx.home.run_dir().join("webui-preparing.pid"),
+        staged.0.to_string(),
+    )
+    .unwrap();
+    fs::write(fx.home.run_dir().join("install-restart.json"), "{}").unwrap();
+    let mut engine = fx.engine();
+    engine
+        .webui
+        .services
+        .entry(ServiceKind::Prod)
+        .or_default()
+        .pid = Some(old);
+    webui::run_inner(&mut engine).unwrap();
+    assert!(fx.spawn.signals().is_empty());
+    assert!(fx.spawn.launches().is_empty());
+    assert!(fx.spawn.alive(old));
+    assert_eq!(engine.webui.services[&ServiceKind::Prod].pid, Some(old));
 }

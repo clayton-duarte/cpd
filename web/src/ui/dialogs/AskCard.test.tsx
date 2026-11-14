@@ -362,3 +362,17 @@ it("custom answers enable submit and are delivered verbatim (multi question, mul
   );
   unmount();
 });
+
+  it("leaves busy Escape to the session abort handler and preserves the dialog", () => {
+    const responses: DialogResponse[] = [];
+    let escaped = 0;
+    const view = mount(<div onKeyDown={(event) => { if (event.key === "Escape") escaped++; }}>
+      <AskCard dialog={dialog([q(0)])} readOnly={false} busy onRespond={(response) => responses.push(response)} />
+    </div>);
+    try {
+      const form = view.container.querySelector("form")!;
+      act(() => form.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+      expect(responses).toEqual([]);
+      expect(escaped).toBe(1);
+    } finally { view.unmount(); }
+  });

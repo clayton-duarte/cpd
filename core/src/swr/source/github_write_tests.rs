@@ -91,7 +91,7 @@ fn rig() -> Rig {
     let fetched = timestamp(rig.fakes.clock.utc());
     rig.sql(&format!(
         "UPDATE pull_requests SET mergeable = 'mergeable', review_decision = 'none', checks = 'passed', authored = 1,
-                feedback = '[]', merge_state = 'clean', base_ref = 'main', default_branch = 'main', head_oid = '{HEAD}'
+                feedback = '[]', review_threads_complete = 1, open_threads = '[]', merge_state = 'clean', base_ref = 'main', default_branch = 'main', head_oid = '{HEAD}'
           WHERE number = 801;
          INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed,
                                 merge_commit_allowed, rebase_merge_allowed, delete_branch_on_merge, fetched_at)
@@ -849,6 +849,9 @@ struct UncachedReply {
 }
 impl Handler for UncachedReply {
     fn handle(&self, call: &Call) -> Reply {
+        if call.args.iter().any(|arg| arg == "--slurp") {
+            return Reply::ok("[[]]");
+        }
         let query = call
             .args
             .iter()
@@ -1102,7 +1105,242 @@ fn every_queued_merge_waits_for_answered_unresolved_threads() {
         gh_calls(&rig).is_empty(),
         "blocked before any provider request"
     );
-    rig.sql("UPDATE pull_requests SET open_threads = '[]' WHERE number = 801");
+    rig.sql("UPDATE pull_requests SET review_threads_complete = 1, open_threads = '[]' WHERE number = 801");
     assert!(matches!(execute(&mut store), ExecOutcome::Done));
     assert!(gh_calls(&rig).iter().any(|c| c.contains("pr merge")));
+}
+
+#[test]
+fn queued_rereview_is_discarded_after_close_or_a_newer_push() {
+    let rig = rig();
+    let id = enqueue(
+        &rig,
+        "comment",
+        KEY,
+        None,
+        json!({"body": "@bot review", "head_sha": HEAD, "rereview": true}),
+    );
+    let mut store = store(&rig);
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    for state in ["state = 'closed'", "state = 'open', head_oid = 'newer'"] {
+        rig.sql(&format!(
+            "UPDATE pull_requests SET {state}, open_threads = '[\"T1\"]' WHERE number = 801"
+        ));
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &rig.fakes.ports,
+            home: &rig.home,
+            config: &config,
+        };
+        assert_eq!(
+            GithubSource::default().execute(&mut cx, &mutation),
+            ExecOutcome::Done
+        );
+    }
+    assert!(
+        gh_calls(&rig).is_empty(),
+        "obsolete requests never reach GitHub"
+    );
+}
+
+#[test]
+fn an_added_prerequisite_blocks_an_already_queued_merge() {
+    let rig = rig();
+    let id = enqueue_merge(&rig);
+    rig.sql("INSERT INTO workflow_prereqs (plan, workflow, id, kind, details_json) VALUES ('pay', 'api', 1, 'manual', '{\"text\":\"approval added after enqueue\"}')");
+    let mut store = store(&rig);
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert!(matches!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Retry { .. }
+    ));
+    assert!(gh_calls(&rig).is_empty());
+}
+
+#[test]
+fn auto_merge_waits_for_complete_resolved_thread_metadata() {
+    let rig = rig();
+    let id = enqueue(&rig, "auto_merge", KEY, None, json!({}));
+    let mut store = store(&rig);
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    for state in [
+        "review_threads_complete = 0, open_threads = '[]'",
+        "review_threads_complete = 1, open_threads = '[\"T1\"]'",
+    ] {
+        rig.sql(&format!(
+            "UPDATE pull_requests SET {state} WHERE number = 801"
+        ));
+        let mut cx = Cx {
+            store: &mut store,
+            ports: &rig.fakes.ports,
+            home: &rig.home,
+            config: &config,
+        };
+        assert!(matches!(
+            GithubSource::default().execute(&mut cx, &mutation),
+            ExecOutcome::Retry { .. }
+        ));
+    }
+    assert!(gh_calls(&rig).is_empty());
+}
+
+struct AcceptedCommentTimeout(std::sync::atomic::AtomicUsize);
+impl Handler for AcceptedCommentTimeout {
+    fn handle(&self, call: &Call) -> Reply {
+        if call.args.iter().any(|arg| arg.contains("/replies")) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return Reply::ok("").takes(Duration::from_secs(61));
+        }
+        if call.args.iter().any(|arg| arg == "--slurp") {
+            let pages = if self.0.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                json!([[]])
+            } else {
+                json!([[{"id": 4569528233_i64, "body": "original"}], [{"id": 4569528234_i64, "in_reply_to_id": 4569528233_i64, "body": format!("Fixed.\n\n{}", crate::pr::comments::MARKER)}]])
+            };
+            return Reply::ok(&pages.to_string());
+        }
+        UncachedReply {
+            kind: "PullRequestReviewComment",
+            wrong_pull: false,
+        }
+        .handle(call)
+    }
+}
+
+#[test]
+fn accepted_comment_reply_timeout_is_deduplicated_across_rest_pages() {
+    let rig = rig();
+    let wire = Arc::new(AcceptedCommentTimeout(std::sync::atomic::AtomicUsize::new(
+        0,
+    )));
+    let _ = (*rig.fakes.runner).clone().route("gh", wire.clone());
+    let id = enqueue(
+        &rig,
+        "reply",
+        KEY,
+        None,
+        json!({"to": "PRRC_one", "body": "Fixed.", "resolve_uncached": true}),
+    );
+    let mut store = store(&rig);
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert!(matches!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Retry { .. }
+    ));
+    assert_eq!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Done
+    );
+    assert_eq!(wire.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+struct QuotedMarker;
+impl Handler for QuotedMarker {
+    fn handle(&self, call: &Call) -> Reply {
+        if call.args.iter().any(|arg| arg.contains("node(id:")) {
+            return Reply::ok(&json!({"data": {"node": {"__typename": "PullRequestReviewThread", "id": "PRRT_one",
+                "comments": {"nodes": [{"body": format!("The marker {} is quoted here.\nThis remains unanswered.", crate::pr::comments::MARKER)}]},
+                "pullRequest": {"number": 801, "repository": {"nameWithOwner": "acme/pay"}}}}}).to_string());
+        }
+        UncachedReply {
+            kind: "PullRequestReviewThread",
+            wrong_pull: false,
+        }
+        .handle(call)
+    }
+}
+
+#[test]
+fn a_quoted_nonterminal_marker_does_not_suppress_an_uncached_reply() {
+    let rig = rig();
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(QuotedMarker));
+    let id = enqueue(
+        &rig,
+        "reply",
+        KEY,
+        None,
+        json!({"to": "PRRT_one", "body": "Fixed.", "resolve_uncached": true}),
+    );
+    let mut store = store(&rig);
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert_eq!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Done
+    );
+    assert!(
+        gh_calls(&rig)
+            .iter()
+            .any(|call| call.contains("addPullRequestReviewThreadReply"))
+    );
+}
+
+struct ArmedAutoMerge;
+impl Handler for ArmedAutoMerge {
+    fn handle(&self, call: &Call) -> Reply {
+        if call
+            .args
+            .iter()
+            .any(|arg| arg.contains("disablePullRequestAutoMerge"))
+        {
+            return Reply::ok(
+                r#"{"data":{"disablePullRequestAutoMerge":{"pullRequest":{"id":"PR_801"}}}}"#,
+            );
+        }
+        Reply::ok(
+            r#"{"data":{"repository":{"autoMergeAllowed":true,"squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":false,"pullRequest":{"id":"PR_801","autoMergeRequest":{"enabledAt":"t"}}}}}"#,
+        )
+    }
+}
+
+#[test]
+fn already_armed_auto_merge_is_disabled_when_threads_are_unknown() {
+    let rig = rig();
+    rig.sql("UPDATE pull_requests SET review_threads_complete = 0 WHERE number = 801");
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(ArmedAutoMerge));
+    let id = enqueue(&rig, "disable_auto_merge", KEY, None, json!({}));
+    let mut store = store(&rig);
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert_eq!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Done
+    );
+    assert!(
+        gh_calls(&rig)
+            .iter()
+            .any(|call| call.contains("disablePullRequestAutoMerge"))
+    );
 }

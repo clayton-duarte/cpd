@@ -502,6 +502,35 @@ pub(crate) fn coverage_check(
     baseline.check(&current, &touched, &removed, &renamed)
 }
 
+/// Validate the actual reconciliation candidate against the already refreshed baseline.
+/// Called inside the publication transaction, before the Lead ref or remote is advanced.
+fn coverage_check_reconciled(
+    conn: &rusqlite::Connection,
+    policy: &Policy,
+    plan: &PlanId,
+    workflow: &WorkflowRow,
+    sha: &str,
+) -> Result<(), CpdError> {
+    if workflow.shape != "refactor" {
+        return Ok(());
+    }
+    let Some(command) = &policy.coverage_commands.measure else {
+        return Ok(());
+    };
+    let (base, report): (String, String) = conn.query_row(
+        "SELECT base_sha, report FROM refactor_coverage_baselines WHERE plan = ?1 AND workflow = ?2",
+        [plan.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))
+    )?;
+    let baseline: crate::workflow::CoverageReport =
+        serde_json::from_str(&report).map_err(CpdError::bad_row)?;
+    let root = std::path::Path::new(&workflow.repo);
+    let current = crate::workflow::measure_coverage(root, plan, &workflow.key, sha, command)?;
+    let touched = crate::git::tamper::changed_paths(root, &base, sha)?;
+    let removed = crate::workflow::absent_paths(root, sha, &touched)?;
+    let renamed = crate::workflow::renamed_paths(root, &base, sha)?;
+    baseline.check(&current, &touched, &removed, &renamed)
+}
+
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
 fn gate(
     env: &Env,

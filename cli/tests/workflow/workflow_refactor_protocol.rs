@@ -773,4 +773,52 @@ mod reconciled_publication {
             );
         }
     }
+    #[test]
+    fn direct_pr_push_validates_reconciled_coverage_before_moving_either_ref() {
+        let (rig, _) = rig(true, "src/remote.rs");
+        let lead: String = rig
+            .store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT lead_worktree FROM workflows WHERE plan = 'pay' AND key = 'repo'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        rig.fx.commit_file(
+            std::path::Path::new(&lead),
+            "local.txt",
+            "local",
+            "local change",
+        );
+        let before = rig.fx.git(&rig.repo, &["rev-parse", "refs/heads/cpd/pay"]);
+        let remote = rig.remote_sha();
+        (*rig.fx.fakes.runner)
+            .clone()
+            .once(
+                "sh",
+                |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                cpd_core::host::runner::Reply::ok(BASELINE),
+            )
+            .once(
+                "sh",
+                |call| call.args.last().is_some_and(|arg| arg == "mock-coverage"),
+                cpd_core::host::runner::Reply::ok(r#"{"line": 60.0, "branch": 50.0}"#),
+            );
+        let out = rig
+            .fx
+            .cpd(&["pr", "push", "--workflow", "repo", "--plan", "pay"]);
+        assert_eq!(out.error()["code"], "coverage_below_baseline", "{out:?}");
+        assert_eq!(
+            rig.remote_sha(),
+            remote,
+            "the unvalidated candidate never reaches origin"
+        );
+        assert_eq!(
+            rig.fx.git(&rig.repo, &["rev-parse", "refs/heads/cpd/pay"]),
+            before,
+            "the Lead ref stays at its validated commit"
+        );
+    }
 }

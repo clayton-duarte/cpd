@@ -3,13 +3,17 @@ resolver = "3"
 members = ["core", "engine", "cli"]
 
 [workspace.package]
-version = "0.27.144"
+version = "0.27.145"
 edition = "2024"
 publish = false
 
 # Every dependency of cpd 2, declared once here. Later Jobs may not add any:
 # the list and the reasons are in docs/implementing.md.
 [workspace.dependencies]
+# Syntax-aware test preservation (audit #1279); MIT parsers replace the custom line scanner.
+tree-sitter = "0.27.2"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
 jiff = "=0.2.35"
 clap = { version = "4.6", features = ["derive", "env"] }
 libproc = "0.14"

@@ -22,9 +22,9 @@ fn tick(fx: &mut Fx) {
 fn polled(fx: &mut Fx, number: i64, review: &str, base: &str, default: &str) {
     fx.fixture(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, merge_state,
-                                   base_ref, default_branch, base_contained, head_oid, open_threads, created_at, changed_at)
+                                   base_ref, default_branch, base_contained, head_oid, open_threads, created_at, changed_at, review_threads_complete)
          VALUES ('{REPO}', {number}, 'https://github.com/{REPO}/pull/{number}', 'T{number}', 0, 'open', '{review}',
-                 'passed', 'clean', {base}, {default}, 1, 'h1', '[]', 't', 't');"
+                 'passed', 'clean', {base}, {default}, 1, 'h1', '[]', 't', 't', 1);"
     ));
 }
 

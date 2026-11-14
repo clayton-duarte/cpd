@@ -61,6 +61,8 @@ export type FakeClient = {
 };
 
 export type RigOptions = {
+  /** Hold an entries read to exercise aborts during asynchronous turn preparation. */
+  beforeEntries?: () => Promise<void>;
   stored?: readonly unknown[];
   config?: Config;
   /** Answers by `<a>-<b>` of `cpd <a> <b>`; when given, an unlisted call answers `{ ok: true }`. */
@@ -208,7 +210,7 @@ export function rig(over: RigOptions = {}) {
           order.push("configure");
           notify();
         },
-        entries: async () => over.stored ?? [],
+        entries: async () => { await over.beforeEntries?.(); return over.stored ?? []; },
         compact: async () => 1,
         agent: async () => ({ thinkingLevel: "high" }),
         pageEntries: async () => ({ entries: over.stored ?? [] }),

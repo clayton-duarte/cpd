@@ -1,8 +1,10 @@
 /**
- * Production WebUI server serving built renderer static files and /cpd-ws on 0.0.0.0:3333.
+ * Production WebUI server serving built renderer static files and /cpd-ws on loopback:3333.
  * With port-in-use fail-loud holder detection (pro-d541, pro-d542, web/CONTRACT.md §15.1).
  */
 
+import { homedir } from "node:os";
+import { publishRuntime } from "./runtime.ts";
 import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -12,13 +14,14 @@ import { formatPortInUseMessage } from './port-holder.ts';
 import { createServices, realBoundaries, cpdWebPlugin, type PluginBoundaries } from './plugin.ts';
 import { createWsServer, createUpgradeFactory, WS_PATH, type WebSocketUpgradeServer } from './ws.ts';
 import { writeWebuiToken } from './webui-token.ts';
+import { webAccess } from "./access.ts";
 import { staticHeaders } from './static-headers.ts';
 
 export const PROD_PORT = 3333;
-export const PROD_HOST = '0.0.0.0';
+export const PROD_HOST = '127.0.0.1';
 
 export const PREVIEW_PORT = 33333;
-export const PREVIEW_HOST = '0.0.0.0';
+export const PREVIEW_HOST = '127.0.0.1';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -44,6 +47,7 @@ export interface ServeOptions {
   host?: string;
   staticDir?: string;
   boundaries?: PluginBoundaries;
+  waitForCockpit?: boolean;
 }
 
 export function findStaticDir(): string {
@@ -91,7 +95,8 @@ function sendStaticFile(req: http.IncomingMessage, res: http.ServerResponse, fil
 
 export async function createProdServer(options?: ServeOptions): Promise<http.Server> {
   const port = options?.port ?? PROD_PORT;
-  const host = options?.host ?? PROD_HOST;
+  const host = options?.host ?? process.env["CPD_WEBUI_HOST"] ?? PROD_HOST;
+  const access = webAccess(host);
   const staticDir = path.resolve(options?.staticDir ?? findStaticDir());
 
   const boundaries = options?.boundaries ?? ((): PluginBoundaries => {
@@ -107,6 +112,7 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
   });
 
   const server = http.createServer((req, res) => {
+    if (!access.http(req, res)) return;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { 'Content-Type': 'text/plain' });
       res.end('Method Not Allowed');
@@ -158,7 +164,9 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
     });
   });
 
+  access.guardUpgrades(server);
   createWsServer({
+    authorize: access.acceptsSocket,
     newConnection: (send) => services.newConnection(send),
     server: createUpgradeFactory(server as unknown as WebSocketUpgradeServer),
     scheduler: boundaries.scheduler,
@@ -167,8 +175,9 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
     path: WS_PATH,
   });
 
+  if (options?.waitForCockpit) await started;
   return new Promise((resolve, reject) => {
-    server.once('error', async (err: NodeJS.ErrnoException) => {
+    const initialError = async (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
         const msg = await formatPortInUseMessage(port);
         console.error(msg);
@@ -176,9 +185,11 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
       } else {
         reject(err);
       }
-    });
+    };
+    server.once('error', initialError);
 
     server.listen(port, host, () => {
+      server.off("error", initialError);
       resolve(server);
     });
   });
@@ -192,12 +203,12 @@ export interface PreviewServeOptions {
 
 export async function createPreviewServer(options?: PreviewServeOptions): Promise<ViteDevServer> {
   const port = options?.port ?? PREVIEW_PORT;
-  const host = options?.host ?? PREVIEW_HOST;
+  const host = options?.host ?? process.env["CPD_WEBUI_HOST"] ?? PREVIEW_HOST;
   const boundaries = options?.boundaries;
 
   const server = await createViteServer({
     configFile: false,
-    plugins: [cpdWebPlugin(boundaries ? { boundaries } : undefined)],
+    plugins: [cpdWebPlugin({ ...(boundaries ? { boundaries } : {}), host })],
     server: {
       host,
       port,
@@ -210,7 +221,13 @@ export async function createPreviewServer(options?: PreviewServeOptions): Promis
 
 // If run directly as a script
 if (import.meta.url.startsWith('file:') && process.argv[1] === fileURLToPath(import.meta.url)) {
-  createProdServer().catch((err) => {
+  const standby = process.env["CPD_WEBUI_PREPARE"] === "1";
+  const host = process.env["CPD_WEBUI_HOST"] ?? PROD_HOST;
+  // Validate the eventual LAN binding before any standby work starts.
+  webAccess(host);
+  createProdServer({ ...(standby ? { port: 0, host: "127.0.0.1", waitForCockpit: true } : {}) })
+    .then((server) => publishRuntime(server, process.env["CPD_HOME"] ?? path.join(homedir(), ".cpd"), host, PROD_PORT, standby))
+    .catch((err) => {
     console.error('Failed to start production WebUI server:', err);
     process.exit(1);
   });

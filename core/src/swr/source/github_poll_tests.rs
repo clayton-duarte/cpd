@@ -59,6 +59,15 @@ fn run(gh: Gh) -> (bool, ExecOutcome) {
            VALUES ('acme/pay', 801, 'https://github.com/acme/pay/pull/801', 'Add retries', 0, 'open', 'none', 'none', '{fetched}', '{fetched}', 0, 0);"
     ));
     let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .write("complete read", |tx| {
+            tx.execute(
+                "UPDATE pull_requests SET review_threads_complete = 1, open_threads = '[]'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     outbox::enqueue(
         &mut store,
         now,

@@ -94,7 +94,9 @@ fn push_held(args: Args) -> Result<Output, CpdError> {
             crate::workflow::guard_refactor_tests_allowing(
                 tx, &id, key.as_str(), std::path::Path::new(&workflow.repo),
                 &workflow.base, candidate, &[workflow.base.as_str()],
-            )
+            )?;
+            if candidate != sha { super::coverage_check_reconciled(tx, &policy, &id, workflow, candidate)?; }
+            Ok(())
         })? {
             crate::merge::Reconciled::Push(to_push) => to_push,
             crate::merge::Reconciled::Contained(remote) => return Ok((false, remote)),

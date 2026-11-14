@@ -37,7 +37,7 @@ fn rig() -> Rig {
     let mut rig = Rig::new();
     rig.workflow("api", "open");
     rig.sql(&format!(
-        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main', head_oid = '{HEAD}', open_threads = '[]',
+        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main', head_oid = '{HEAD}', review_threads_complete = 1, open_threads = '[]',
                 mergeable = 'mergeable', merge_state = 'clean', checks = 'passed' WHERE number = 801;
          INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed,
                                 merge_commit_allowed, rebase_merge_allowed, delete_branch_on_merge, fetched_at)

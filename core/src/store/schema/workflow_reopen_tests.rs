@@ -68,6 +68,7 @@ fn dump(store: &mut Store) -> String {
                             "open_threads",
                             "reviewers",
                             "rereview_head",
+                            "review_threads_complete",
                             "repair",
                             "bug_id",
                         ]

@@ -185,7 +185,7 @@ pub(super) fn approve_test_removal_in(
         }
         lines.push(crate::git::tamper::approve_test_removal(
             &mut names,
-            name.trim(),
+            &name,
             args.reason.as_str(),
         )?);
     }

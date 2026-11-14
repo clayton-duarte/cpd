@@ -1,6 +1,6 @@
 #!/bin/sh
 # Previews a worktree's web UI: the Vite dev server of the worktree runs in the
-# `web` window of the work session (0.0.0.0:33333, strictPort). Nothing is
+# `web` window of the work session (loopback:33333 by default, strictPort). Nothing is
 # installed. Electron is never started or killed here; only the preview watchdog
 # (scripts/preview-watchdog.mjs, a frozen copy outside the worktree) is started and stopped.
 #
@@ -67,10 +67,10 @@ serve() {
       return 0
     fi
     tmux_cmd respawn-pane -k -t "=$work:web" -c "$checkout" -- "$@" \
-      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host 0.0.0.0
+      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host "${CPD_WEBUI_HOST:-127.0.0.1}"
   else
     tmux_cmd new-window -d -n web -c "$checkout" -t "=$work:" -- "$@" \
-      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host 0.0.0.0
+      env -u CPD_SESSION -u PI_SESSION_ID -u CPD_SESSION_ID -u CPD_ATTEMPT_ID pnpm --dir "$checkout" --filter cpd-web-client run dev --host "${CPD_WEBUI_HOST:-127.0.0.1}"
   fi
 }
 

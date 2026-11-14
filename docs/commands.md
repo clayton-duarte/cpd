@@ -307,6 +307,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd protocol bug mitigate` (§33.2) | Lead, Manager | no | no |
 | `cpd protocol bug close` (§33.3) | Lead, Manager | no | no |
 | `cpd protocol bug list` (§33.4) | Manager, Lead, Worker | no | no |
+| `cpd protocol bug escalate` (§33.6) | Lead, Manager, User | no | no |
 | `cpd protocol bug show` (§33.5) | Manager, Lead, Worker | no | no |
 | `cpd workflow prereq add` (§9.5b) | Lead | no | no |
 | `cpd workflow prereq confirm` (§9.5b) | none | yes | no |
@@ -2904,7 +2905,9 @@ cpd workflow prereq confirm --workflow <key> --id <id> [--plan <id>]
 
 An **external prerequisite** is something outside the Workflow's repo that must exist before its change reaches production: a LaunchDarkly flag the change reads, or a manual setup task. An unmet prerequisite refuses `pr merge-green`, `pr merge`, `pr post` and deploy approvals (`cpd inbox approve`) with `prereq_unmet`, until it is met (their rows in §9.8b, §9.10, §9.10a and §21.13; the refusal is in [refusals.md](refusals.md)).
 
-**Callers.** The Lead declares every prerequisite when it creates the Workflow (its skill, `cpd-lead` Scoping). `confirm` is the User's: a manual prerequisite is confirmed at a shell or from the PR's Inbox item, never by an agent.
+**Read-only snapshots.** `plan show` reads local prerequisite state only. External checks are reported with `cause: "not_checked"`; they do not contact LaunchDarkly or read secrets on the cockpit request loop. Execution gates run live checks and fail closed. Queued merge and deployment mutations repeat those checks immediately before their external write, for every owning Workflow, including merged deployment owners. A deployment is linked only through PRs in its stored run; unrelated open Workflows are not owners.
+
+**Callers.** The Lead declares every prerequisite when it creates the Workflow (its skill, `cpd-lead` Scoping). `confirm` rejects nonempty `CPD_SESSION` or `CPD_ATTEMPT` before opening the store (`host_approval_required`). It is the User's: a manual prerequisite is confirmed at a shell or from the PR's Inbox item, never by an agent.
 
 **Kinds.** `--kind` is required. Each kind takes only its own flags; a flag of the other kind is `usage`.
 
@@ -8509,3 +8512,31 @@ One bug record, every field (contract §2.2 "Bug record"), so **mitigation appli
 **Output:** the `bug` object of §33.1.
 
 **Idempotent:** a read.
+
+
+### 12a `webui` (install plumbing)
+
+`cpd webui --prepare | --ready | --activate` is an internal install boundary.
+`--prepare` starts a detached production WebUI on an ephemeral loopback port,
+waits for cockpit readiness in that process, and publishes its PID and staged
+readiness under `run/`. It returns no PID when no checkout exists. Repeated
+preparation reuses a living staged process. `--ready` reports `ready`, `phase`
+(`staged` or `active`) and `pid`; dead or mismatched records are not ready.
+After observing staged readiness, install retires the old listener and calls
+`--activate`, then verifies active readiness. Activation requests go through an
+owner-writable runtime file; the server retries acquiring 3333 for ten seconds
+without killing another port holder. An unactivated standby expires after three
+minutes. This is a bounded handoff, with a brief listener gap during promotion.
+Production servers publish `run/webui.pid` only after listening. Legacy instances
+are discovered from their existing per-PID WebUI token records and checked
+against the living production server command before signaling.
+
+### 33.6 `protocol bug escalate`
+
+`cpd protocol bug escalate <id> --reason <text>` records a bug-specific request
+for User input (`escalated_at`, `escalated_by`, `escalation_reason`). Only the
+bug's owning Lead, the live CPD Manager for a cross-Plan bug, or the User can
+request it. Workers are refused. Closed or mitigated bugs cannot be escalated.
+The bug opens its Yellow Inbox item immediately, including within the 900-second
+mitigation window. Other bugs keep their own deadline. Mitigation or closure
+closes the item as before. `list` and `show` expose the escalation fields.

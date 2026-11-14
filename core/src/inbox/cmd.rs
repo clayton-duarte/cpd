@@ -529,25 +529,10 @@ pub(super) fn approve_in(env: &mut Env, id: i64) -> Result<Output, CpdError> {
     environments.sort();
 
     // Prerequisites gate (§9.5b): unmet external prerequisites refuse before enqueue
-    let owning_workflow: Option<(String, String)> = env.store.read(|conn| {
-        use rusqlite::OptionalExtension;
-        Ok(conn
-            .query_row(
-                "SELECT w.plan, w.key FROM workflows w
-                 JOIN pull_requests pr ON (w.pull_request = pr.id OR (w.pr_number = pr.number AND pr.repo = ?1))
-                 WHERE w.status = 'open' AND pr.repo = ?1
-                 ORDER BY (EXISTS (
-                   SELECT 1 FROM swr_deploys d
-                   WHERE d.repo = ?1 AND d.run_id = ?2
-                     AND json_extract(d.run_json, '$.pull_requests[0].number') = w.pr_number
-                 )) DESC
-                 LIMIT 1",
-                rusqlite::params![repo, run_id as i64],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?)
-    })?;
-    if let Some((plan, key)) = owning_workflow {
+    let owning_workflows = env
+        .store
+        .read(|conn| crate::workflow::prereq::deployment_owners(conn, repo, run_id as i64))?;
+    for (plan, key) in owning_workflows {
         env.store.read(|conn| {
             crate::workflow::prereq::ensure_prereqs_met(
                 conn,

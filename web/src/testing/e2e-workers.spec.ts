@@ -22,7 +22,7 @@ const WORKERS = { queued: 3, waiting: 2, running: 4, limit: 6 };
  * separator U+F0798 (what the engine writes and the bar re-renders). `waiting` shows as the ready
  * count and `running` as the tenant count.
  */
-const WORKERS_TEXT = `workers ${WORKERS.queued}\u{f0798}${WORKERS.waiting}\u{f0798}${WORKERS.running}/${WORKERS.limit}`;
+const WORKERS_TEXT = `workers ${WORKERS.queued} queued · ${WORKERS.waiting} waiting · ${WORKERS.running}/${WORKERS.limit} running`;
 
 let staging = "";
 /** The file the fake's serve stream waits for before its first snapshot (CPD_FAKE_GATE). */

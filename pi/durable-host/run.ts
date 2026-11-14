@@ -131,6 +131,10 @@ const timers = {
 const contextText = (files: readonly { path: string; content: string }[]): string | undefined =>
   files.length === 0 ? undefined : files.map((f) => `## ${f.path}\n${f.content}`).join("\n\n");
 
+class TurnPreparationAborted extends CpdError {
+  constructor() { super("aborted", "Submission was aborted while preparing the turn"); }
+}
+
 /** Runs one Lead's or Manager's Session (contract §6.13). Resolves only on terminate (143), a closed conversation (1) or a failure (1); a `usage` error is thrown before any effect. */
 export async function runHost(config: Config, deps: Deps): Promise<number> {
   // The one-owner check is the first thing the host does, before it reads the Session, resolves the model, opens the store or reports any state (contract §6.13).
@@ -435,6 +439,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
           prepared = prepared.then(() => prepareTurn(port, turn)).finally(() => preparing--);
         }
         if (preparing > 0) await prepared;
+        if (epoch !== abortEpoch) throw new TurnPreparationAborted();
         const submission = await conversation.submit(input);
         void submission.wait().then(
           () => {
@@ -452,7 +457,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         );
         return submission;
       } catch (e) {
-        if (--pending === 0) {
+        if (epoch === abortEpoch && --pending === 0) {
           reply = false;
           changed("idle");
         }
@@ -695,6 +700,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         if (seen.has(`event:${event.id}`)) return true;
         seen.add(`event:${event.id}`);
         const fail = (e: unknown) => {
+          if (e instanceof TurnPreparationAborted) return;
           failed("an event", e);
           end(1);
         };

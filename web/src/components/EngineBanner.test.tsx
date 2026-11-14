@@ -20,3 +20,9 @@ it("omits since when unknown", () => {
   const v = (view = mount(<EngineBanner banner={{ kind: "reconnecting", since: null }} />));
   expect(v.container.textContent).toBe("Reconnecting to the server");
 });
+
+it("renders the install restart notice in the same banner", () => {
+  const v = (view = mount(<EngineBanner banner={{ kind: "engine-restarting", since: "2026-01-15T12:00:00Z" }} />));
+  expect(v.container.querySelectorAll('[data-part="engine-banner"]')).toHaveLength(1);
+  expect(v.container.textContent).toBe("Engine is restarting for an install since 2026-01-15T12:00:00Z");
+});

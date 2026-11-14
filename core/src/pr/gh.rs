@@ -815,7 +815,7 @@ macro_rules! pr_fields {
     ($repo:expr) => {
         concat!($repo, " number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } \
          mergeable mergeStateStatus headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
-         reviewThreads(first: 100) { nodes { id isResolved } }")
+         reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { id isResolved } }")
     };
 }
 
@@ -1374,7 +1374,7 @@ pub fn reply_to_uncached(
                 .as_array()
                 .and_then(|nodes| nodes.last())
                 .and_then(|comment| comment["body"].as_str())
-                .is_some_and(|body| body.contains(comments::MARKER))
+                .is_some_and(comments::marked)
             {
                 return Ok(());
             }
@@ -1395,6 +1395,26 @@ pub fn reply_to_uncached(
                 })
                 .filter(|id| *id > 0)
                 .ok_or_else(|| reply.fail("Review comment has no fullDatabaseId.".into()))?;
+            // A POST can be accepted before its response is lost. Inspect the actual thread
+            // on retry, including every REST page, before posting again.
+            let listing = format!("repos/{repo}/pulls/{number}/comments?per_page=100");
+            let text = run_on(runner, cwd, &["api", "--paginate", "--slurp", &listing])?;
+            let pages: Vec<Vec<Value>> = serde_json::from_str(&text)
+                .map_err(|e| reply.fail(format!("Cannot read replies for {node}: {e}")))?;
+            let last = pages
+                .iter()
+                .flatten()
+                .filter(|comment| {
+                    comment["id"].as_i64() == Some(id)
+                        || comment["in_reply_to_id"].as_i64() == Some(id)
+                })
+                .max_by_key(|comment| comment["id"].as_i64().unwrap_or_default());
+            if last
+                .and_then(|comment| comment["body"].as_str())
+                .is_some_and(comments::marked)
+            {
+                return Ok(());
+            }
             let endpoint = format!("repos/{repo}/pulls/{number}/comments/{id}/replies");
             let field = format!("body={body}");
             run_on(runner, cwd, &["api", "-X", "POST", &endpoint, "-f", &field]).map(drop)
@@ -2385,7 +2405,7 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
-             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { nodes { id isResolved } } } } } \
+             baseRefName reviewDecision latestOpinionatedReviews(first: 20) { nodes { state author { __typename login } } } mergeable mergeStateStatus headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { id isResolved } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner defaultBranchRef { name } isArchived autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed deleteBranchOnMerge } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus headRefOid } } } \
@@ -2974,13 +2994,13 @@ pub struct PollPlan {
     pub meta: Vec<String>,
 }
 
-const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergeable mergeStateStatus reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } autoMergeRequest { enabledAt } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved } } }";
+const LIGHT: &str = "fragment Light on PullRequest { number state isDraft mergeable mergeStateStatus reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } autoMergeRequest { enabledAt } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { id isResolved } } }";
 
 /// `Light` without `mergeable`, `mergeStateStatus`, `autoMergeRequest` and `reviewThreads`: the review-requested search reads
 /// a teammate's pull requests, whose merge state GitHub computes per node (the search cost ~9.0 s with it, ~3.5 s without).
 const PEER_LIGHT: &str = "fragment PeerLight on PullRequest { number state isDraft reviewDecision baseRefName headRefName headRefOid updatedAt title url createdAt mergedAt author { login } repository { nameWithOwner defaultBranchRef { name } } labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } }";
 
-const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { nodes { id isResolved isOutdated path comments(first: 20) { nodes { id author { __typename login } body url createdAt } } } } comments(first: 50) { nodes { id author { __typename login } body url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion startedAt detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl createdAt } } } } } } } }";
+const HEAVY: &str = "fragment Heavy on PullRequest { latestReviews(first: 20) { nodes { state author { __typename login } commit { oid } } } reviewThreads(first: 100) { totalCount pageInfo { hasPreviousPage hasNextPage } nodes { id isResolved isOutdated path comments(first: 100) { totalCount pageInfo { hasPreviousPage hasNextPage } nodes { id author { __typename login } body url createdAt } } } } comments(last: 100) { totalCount pageInfo { hasPreviousPage hasNextPage } nodes { id author { __typename login } body url createdAt } } reviews(last: 100) { totalCount pageInfo { hasPreviousPage hasNextPage } nodes { id state body author { __typename login } url createdAt } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion startedAt detailsUrl checkSuite { workflowRun { databaseId workflow { name } } } } ... on StatusContext { context state targetUrl createdAt } } } } } } } }";
 
 /// The one read document of a pass (swr-github.md §3.1): the viewer, the rate limit, the two searches (light), one alias per
 /// heavy then absent pull request, one per repository metadata. A repo that is not `owner/name` is skipped.
@@ -3062,6 +3082,8 @@ pub fn build_poll_query(plan: &PollPlan) -> String {
 pub struct PollNode {
     pub(in crate::pr) listed: Listed,
     pub head_oid: String,
+    pub threads_complete: bool,
+    pub auto_merge_requested: bool,
     /// The Light read's extras that no `PolledPr` field holds (pro-d453): the author's login, the `latestReviews` nodes with
     /// their commit oid, and the label names.
     pub author_login: Option<String>,
@@ -3100,6 +3122,10 @@ pub struct PollRead {
 }
 
 impl PollNode {
+    pub fn has_open_threads(&self) -> bool {
+        !self.listed.pr.open_threads.is_empty()
+    }
+
     /// Whether GitHub says the pull request is open.
     pub fn is_open(&self) -> bool {
         self.listed.pr.state == PrState::Open
@@ -3127,8 +3153,14 @@ impl PollNode {
     /// Everything the header write stores, as text: equal text, equal header.
     pub fn fingerprint(&self) -> String {
         format!(
-            "{:?}|{}|{:?}|{}|{}",
-            self.listed, self.head_oid, self.author_login, self.reviews, self.labels
+            "{:?}|{}|{:?}|{}|{}|{}|{}",
+            self.listed,
+            self.head_oid,
+            self.author_login,
+            self.reviews,
+            self.labels,
+            self.threads_complete,
+            self.auto_merge_requested
         )
     }
 
@@ -3215,15 +3247,19 @@ fn poll_node(
         json!({
             "latestReviews": v["latestReviews"], "reviewThreads": v["reviewThreads"],
             "comments": v["comments"], "commits": v["commits"], "labels": v["labels"],
+            "reviews": v["reviews"], "updatedAt": v["updatedAt"],
         })
     });
     let reviews = v
         .get("latestReviews")
         .filter(|r| !r.is_null())
         .cloned()
-        .unwrap_or_else(|| json!({"nodes": []}));
+        .unwrap_or(Value::Null);
     Ok(PollNode {
         listed: Listed { pr, membership },
+        auto_merge_requested: v.get("autoMergeRequest").is_some_and(|a| !a.is_null()),
+        threads_complete: v["reviewThreads"]["nodes"].is_array()
+            && v["reviewThreads"]["pageInfo"]["hasNextPage"].as_bool() == Some(false),
         head_oid,
         author_login: v["author"]["login"].as_str().map(str::to_owned),
         reviews,
@@ -3386,4 +3422,26 @@ pub fn poll_once(
         )
     };
     call().map_err(|e| polled_call("poll", e))
+}
+
+/// Revoke an already-armed GitHub request when the local merge gate no longer holds.
+pub fn disable_auto_merge(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<(), CpdError> {
+    let read = auto_merge_read(runner, cwd, repo, number)?;
+    if !read.requested {
+        return Ok(());
+    }
+    let query = "mutation($pull: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $pull}) { pullRequest { id } } }";
+    posted(
+        runner,
+        cwd,
+        query,
+        &[("pull", &read.id)],
+        "/disablePullRequestAutoMerge/pullRequest/id",
+    )
+    .map(drop)
 }

@@ -626,3 +626,39 @@ fn reseal_refuses_a_non_lead_requester() {
         );
     }
 }
+
+#[test]
+fn reseal_handles_many_replaced_dependencies_without_a_cartesian_search() {
+    let mut f = Fixture::repetition();
+    f.env.store.write("independent needs", |tx| {
+        // Build the historical locked fixture; restore the exact trigger before exercising reseal.
+        let guard: String = tx.query_row("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'dependencies_locked'", [], |r| r.get(0))?;
+        tx.execute_batch("DROP TRIGGER dependencies_locked")?;
+        for i in 0..24 {
+            for key in [format!("before-{i}"), format!("after-{i}")] {
+                tx.execute("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, tests, test_files, resources, created_txn, created_at)
+                  SELECT plan, workflow, ?1, title, tier, goal, context, touches, acceptance, out_of_scope, kind, 'queued', appended, fingerprint, tests, test_files, resources, cpd_txn(), created_at FROM jobs WHERE key = 'old-tests'", [key])?;
+            }
+            tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'impl', ?1)", [format!("before-{i}")])?;
+        }
+        tx.execute_batch(&guard)?;
+        Ok(())
+    }).unwrap();
+    f.seal();
+    f.env.store.write("completed redirects", |tx| {
+        for i in 0..24 {
+            tx.execute("INSERT INTO test_replacements (plan, source, new_key, request, state, created_txn) VALUES ('pay', ?1, ?2, '{}', 'complete', cpd_txn())", [format!("before-{i}"), format!("after-{i}")])?;
+            tx.execute("UPDATE dependencies SET needs = ?1 WHERE job = 'impl' AND needs = ?2", [format!("after-{i}"), format!("before-{i}")])?;
+        }
+        Ok(())
+    }).unwrap();
+    replace_test::reseal(
+        &mut f.env,
+        &PlanId::parse("pay").unwrap(),
+        "impl",
+        "lead-pay",
+    )
+    .unwrap();
+    let (stored, found) = f.fingerprint_of("impl");
+    assert_eq!(stored.as_deref(), Some(found.as_str()));
+}

@@ -74,6 +74,7 @@ function extractAnswer(
 export function AskCard(props: {
   dialog: AskDialog;
   readOnly: boolean;
+  busy?: boolean;
   onRespond(response: DialogResponse): void;
   asker?: string;
   recommended?: readonly {
@@ -156,7 +157,7 @@ export function AskCard(props: {
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             // No preventDefault: the Escape also bubbles to ChatPane, which aborts the running turn.
-            cancel();
+            if (!props.busy) cancel();
           }
         }}
         onSubmit={(event) => {

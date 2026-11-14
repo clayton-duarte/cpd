@@ -15,15 +15,24 @@ describe('preview dev server', () => {
 
     // 1. Port 33333 binding constants / dev server exports
     expect(serve.PREVIEW_PORT, 'PREVIEW_PORT must be exported as 33333').toBe(33333);
-    expect(serve.PREVIEW_HOST, 'PREVIEW_HOST must be exported as 0.0.0.0').toBe('0.0.0.0');
+    expect(serve.PREVIEW_HOST, 'PREVIEW_HOST must be loopback by default').toBe('127.0.0.1');
 
     // 2. createPreviewServer factory export
     expect(typeof serve.createPreviewServer, 'createPreviewServer must be an exported function').toBe('function');
 
     // 3. Dev server configuration / instance validation
     const createPreviewServer = serve.createPreviewServer as (options?: unknown) => Promise<unknown>;
-    const server = await createPreviewServer({ port: 33333, host: '0.0.0.0' });
+    const home = mkdtempSync(join(tmpdir(), 'cpd-preview-test-'));
+    vi.stubEnv('CPD_HOME', home);
+    let server: unknown;
+    try {
+      server = await createPreviewServer({ port: 33333, host: '127.0.0.1' });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(home, { recursive: true, force: true });
+    }
     expect(server).toBeDefined();
+    await (server as { close(): Promise<void> }).close();
   });
 });
 
@@ -34,7 +43,7 @@ describe('static headers', () => {
     vi.doMock('node:http', () => ({
       createServer: (handler: typeof fake.request) => {
         fake.request = handler;
-        return { once() {}, listen(_p: number, _h: string, ready: () => void) { ready(); } };
+        return { once() {}, off() {}, listen(_p: number, _h: string, ready: () => void) { ready(); } };
       },
     }));
     vi.doMock('./plugin.ts', () => ({

@@ -42,6 +42,8 @@ fn fixture() -> Fx {
          INSERT INTO inbox_items (id, kind, urgency, label, subject, opened_at, closed_at)
            VALUES (1, 'deploy', 'yellow', 'api deploy production', 'deploy:acme/api#101', '2000-01-01T00:00:00.000Z', NULL);"
     ));
+    fx.env
+        .sql("UPDATE pull_requests SET open_threads = '[]', review_threads_complete = 1");
     fx
 }
 
@@ -107,4 +109,56 @@ fn plan_show_and_inbox_list_unmet_prereqs() {
     let fx = fixture();
     let show = fx.cpd(&["plan", "show", "--plan", "p1"]).ok();
     assert!(show["workflows"][0]["unmet_prereqs"].is_array());
+}
+
+#[test]
+fn agent_sessions_and_workers_cannot_confirm_manual_prerequisites() {
+    let fx = fixture();
+    for (key, value) in [("CPD_SESSION", "lead1"), ("CPD_ATTEMPT", "work-a1")] {
+        let out = fx.cpd_with(
+            fx.env.root(),
+            &[
+                "workflow",
+                "prereq",
+                "confirm",
+                "--workflow",
+                "api",
+                "--id",
+                "1",
+                "--plan",
+                "p1",
+            ],
+            &[(key, value)],
+        );
+        refused(&out, "host_approval_required", 3);
+    }
+}
+
+#[test]
+fn a_merged_workflow_still_gates_its_deployment() {
+    let fx = fixture();
+    fx.env.sql(
+        "UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'p1' AND key = 'api'",
+    );
+    let out = fx.cpd(&["inbox", "approve", "1"]);
+    refused(&out, "prereq_unmet", 3);
+}
+
+#[test]
+fn an_unrelated_open_workflow_does_not_own_a_deployment() {
+    let fx = fixture();
+    fx.env.sql("UPDATE swr_deploys SET run_json = '{\"pull_requests\":[{\"number\":8}]}' WHERE run_id = 101");
+    let out = fx.cpd(&["inbox", "approve", "1"]).ok();
+    assert!(
+        out["mutation_id"].is_number() || out["queued"].is_boolean(),
+        "{out}"
+    );
+}
+
+#[test]
+fn deleting_a_plan_removes_its_prerequisites_before_workflows() {
+    let fx = fixture();
+    // Deletion is a User action and valid after the Plan is cancelled.
+    fx.env.sql("UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'p1'; UPDATE plans SET archived_at = 't' WHERE id = 'p1'; UPDATE sessions SET archived_at = 't', asleep_at = 't' WHERE plan = 'p1'");
+    fx.cpd(&["plan", "delete", "p1", "--yes"]).ok();
 }

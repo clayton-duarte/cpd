@@ -176,6 +176,7 @@ pub const TABLE: &[Entry] = &[
     ("protocol bug close", &[Lead, Manager], false),
     ("protocol bug list", &[Manager, Lead, Worker], false),
     ("protocol bug show", &[Manager, Lead, Worker], false),
+    ("protocol bug escalate", &[Lead, Manager], false),
 ];
 
 /// The tree of `cpd --help`: clap's commands depth-first in clap's order,

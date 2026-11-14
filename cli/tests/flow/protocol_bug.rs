@@ -474,3 +474,31 @@ fn describe_keeps_the_fixes_line_in_the_queued_body() {
         .query("SELECT json_extract(vars_json, '$.body') FROM swr_mutations");
     assert!(body.ends_with("Fixes clayton-duarte/cpd#1156"), "{body}");
 }
+
+#[test]
+fn the_user_can_escalate_a_specific_bug_and_agents_cannot_impersonate_its_owner() {
+    let fx = bug_fx();
+    report(&fx, "Needs a decision", "Observed failure");
+    let args = [
+        "protocol",
+        "bug",
+        "escalate",
+        "b1",
+        "--reason",
+        "Choose the recovery behavior",
+    ];
+    let worker = fx.cpd_with(fx.env.root(), &args, &[("CPD_ATTEMPT", "task-a1")]);
+    common::refused(&worker, "not_a_lead", 3);
+    let other = fx.cpd_with(fx.env.root(), &args, &[("CPD_SESSION", "other-lead")]);
+    common::refused(&other, "not_a_lead", 3);
+    let out = fx.cpd(&args).ok();
+    assert_eq!(
+        out["bug"]["escalation_reason"],
+        "Choose the recovery behavior"
+    );
+    assert!(out["bug"]["escalated_at"].is_string());
+    assert_eq!(
+        show(&fx, "b1")["escalation_reason"],
+        out["bug"]["escalation_reason"]
+    );
+}

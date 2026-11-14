@@ -190,9 +190,33 @@ impl FollowUps<'_> {
 
     /// The pid the old WebUI recorded in `run/webui.pid`, if any.
     fn old_webui_pid(&self) -> Option<Pid> {
-        let text =
-            std::fs::read_to_string(self.install.cpd_home.run_dir().join("webui.pid")).ok()?;
-        text.trim().parse().ok().map(Pid)
+        let run = self.install.cpd_home.run_dir();
+        let recorded = std::fs::read_to_string(run.join("webui.pid"))
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok());
+        let tokens = std::fs::read_dir(run.join("webui-tokens"))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                entry
+                    .file_name()
+                    .to_str()?
+                    .strip_suffix(".token")?
+                    .parse::<u32>()
+                    .ok()
+            });
+        recorded
+            .into_iter()
+            .chain(tokens)
+            .filter(|pid| *pid > 0)
+            .find(|pid| {
+                self.ports.spawn.alive(Pid(*pid))
+                    && self.ports.spawn.cmdline(Pid(*pid)).is_some_and(|cmd| {
+                        cmd.contains("src/server/serve.ts") || cmd.contains("serve-prod.mjs")
+                    })
+            })
+            .map(Pid)
     }
 
     /// `cpd webui --prepare`: starts the new WebUI beside the old one; its pid. A failure is reported and the old
@@ -257,6 +281,32 @@ impl FollowUps<'_> {
             && let Err(e) = self.ports.spawn.signal(old, Signal::Term)
         {
             self.fail(format!("cannot stop the old WebUI (pid {}): {e}", old.0));
+            return;
+        }
+        let activated = self.cpd(&["webui", "--activate"]);
+        if !activated.ok() {
+            self.fail(format!(
+                "cannot activate the prepared WebUI: {}",
+                activated.text()
+            ));
+            return;
+        }
+        let mut waited = Duration::ZERO;
+        loop {
+            let ready = self.cpd(&["webui", "--ready"]);
+            if ready.ok()
+                && serde_json::from_str::<serde_json::Value>(&ready.stdout)
+                    .ok()
+                    .is_some_and(|v| v["ready"] == true && v["phase"] == "active")
+            {
+                break;
+            }
+            if waited >= Duration::from_secs(15) {
+                self.fail("prepared WebUI did not acquire the production listener; see run/webui-prepared.log");
+                return;
+            }
+            self.ports.clock.sleep(LOCK_STEP);
+            waited += LOCK_STEP;
         }
     }
 
@@ -268,6 +318,19 @@ impl FollowUps<'_> {
         );
         // Prepare the new WebUI beside the old one, which keeps serving until the hand-off (pro-d592).
         let old_webui = self.old_webui_pid();
+        // Upgrade the legacy per-process token record to an adoption record before the engine changes.
+        // If staging fails or expires, the new engine can keep supervising the old listener.
+        if let Some(old) = old_webui
+            && let Err(error) = crate::atomic::write_atomic(
+                &self.install.cpd_home.run_dir().join("webui.pid"),
+                old.0.to_string(),
+            )
+        {
+            self.fail(format!(
+                "cannot record the serving WebUI for adoption: {error}"
+            ));
+            return;
+        }
         let prepared = match self.prepare_webui() {
             Ok(prepared) => prepared,
             Err(()) => return,

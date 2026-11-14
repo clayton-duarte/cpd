@@ -51,7 +51,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
       onKeyDown={(e) => {
         // The Composer handles (and prevents) its own Escape; this covers a dialog or focus outside the textarea.
         if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing) return;
-        if (isBusy && view.capabilities?.abort?.supported) connection.abort();
+        if (isBusy) connection.abort();
       }}
       onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
       onDrop={(e) => {
@@ -114,7 +114,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
           onCancelQueued={(id) => connection.abortSubmission(id)}
         />
       ) : dialog.method === "ask_user_question" ? (
-        <AskCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
+        <AskCard dialog={dialog} busy={isBusy} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       ) : (
         <PlanReviewCard dialog={dialog} readOnly={!dialog.interactive} onRespond={(r) => connection.respond(dialog.id, r)} />
       )}

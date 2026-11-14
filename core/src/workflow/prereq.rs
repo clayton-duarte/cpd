@@ -234,6 +234,15 @@ pub fn add(args: AddPrereqArgs) -> Result<Output, CpdError> {
 }
 
 pub fn confirm(args: ConfirmPrereqArgs) -> Result<Output, CpdError> {
+    if ["CPD_SESSION", "CPD_ATTEMPT"]
+        .iter()
+        .any(|key| std::env::var(key).is_ok_and(|v| !v.is_empty()))
+    {
+        return Err(CpdError::new(
+            ErrorCode::HostApprovalRequired,
+            "Only the User confirms a manual prerequisite; agent callers cannot confirm it.",
+        ));
+    }
     let mut env = Env::open()?;
     let plan = args.plan.require()?.clone();
     let key = args.workflow;
@@ -372,7 +381,10 @@ fn check_ld_flag(
     key: &str,
 ) -> Result<bool, String> {
     let url = format!("https://app.launchdarkly.com/api/v2/flags/{project}/{key}");
-    let auth_header = format!("Authorization: {token}");
+    if token.contains(['\r', '\n']) {
+        return Err("invalid token".to_owned());
+    }
+    let headers = format!("Authorization: {token}\nLD-API-Version: 20240415\n");
     let call = Call {
         tool: "curl".to_string(),
         program: "curl".to_string(),
@@ -383,15 +395,13 @@ fn check_ld_flag(
             "-w".to_string(),
             "%{http_code}".to_string(),
             "-H".to_string(),
-            auth_header,
-            "-H".to_string(),
-            "LD-API-Version: 20240415".to_string(),
+            "@-".to_string(),
             url,
         ],
         envs: Vec::new(),
         cwd: None,
         deadline: std::time::Duration::from_secs(15),
-        stdin: None,
+        stdin: Some(headers.into_bytes()),
         stderr_to: None,
     };
 
@@ -412,6 +422,32 @@ fn check_ld_flag(
     } else {
         Err("unreachable".to_string())
     }
+}
+
+/// A snapshot reads declared/manual state only. External checks are explicitly unknown until a live gate.
+/// No secret helper, network request or approval prompt may run on the cockpit snapshot loop.
+pub fn snapshot_unmet(
+    conn: &Connection,
+    plan: &str,
+    workflow: &str,
+) -> Result<Vec<UnmetPrereq>, CpdError> {
+    let mut result = Vec::new();
+    for row in load_prereqs(conn, plan, workflow)? {
+        if row.kind == "manual" && row.met_at.is_some() {
+            continue;
+        }
+        let details: Value = serde_json::from_str(&row.details_json).map_err(CpdError::bad_row)?;
+        result.push(UnmetPrereq {
+            id: row.id,
+            kind: row.kind.clone(),
+            project: details["project"].as_str().map(str::to_owned),
+            key: details["key"].as_str().map(str::to_owned),
+            env: details.get("env").filter(|v| !v.is_null()).cloned(),
+            text: details["text"].as_str().map(str::to_owned),
+            cause: (row.kind == "ld-flag").then(|| "not_checked".to_owned()),
+        });
+    }
+    Ok(result)
 }
 
 /// Evaluate all prerequisites of a workflow and return the unmet list.
@@ -560,4 +596,86 @@ pub fn ensure_prereqs_met(
         .with("workflow", workflow)
         .with("command", command)
         .with("unmet", unmet_json))
+}
+
+/// Revalidate every owning Workflow at the outbox execution boundary.
+pub fn ensure_prereqs_for_pr(
+    store: &mut crate::store::Store,
+    runner: &dyn Runner,
+    repo: &str,
+    number: i64,
+) -> Result<(), CpdError> {
+    let owners = store.read(|c| {
+        let mut query = c.prepare(
+            "SELECT DISTINCT w.plan, w.key FROM workflows w JOIN pull_requests r
+          ON w.pull_request = r.id OR (w.pr_number = r.number AND w.pr_url = r.url)
+          WHERE r.repo = ?1 AND r.number = ?2",
+        )?;
+        Ok(query
+            .query_map(rusqlite::params![repo, number], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    })?;
+    for (plan, workflow) in owners {
+        store.read(|c| ensure_prereqs_met(c, runner, &plan, &workflow, "queued merge"))?;
+    }
+    Ok(())
+}
+
+/// Every Workflow whose actual PR belongs to this deployment, including merged ones.
+pub fn deployment_owners(
+    conn: &Connection,
+    repo: &str,
+    run_id: i64,
+) -> Result<Vec<(String, String)>, CpdError> {
+    let mut statement = conn.prepare("SELECT DISTINCT w.plan, w.key FROM swr_deploys d
+        JOIN json_each(d.run_json, '$.pull_requests') run_pr
+        JOIN pull_requests pr ON pr.repo = d.repo AND pr.number = json_extract(run_pr.value, '$.number')
+        JOIN workflows w ON w.pull_request = pr.id OR (w.pr_number = pr.number AND w.pr_url = pr.url)
+        WHERE d.repo = ?1 AND d.run_id = ?2 ORDER BY w.plan, w.key")?;
+    Ok(statement
+        .query_map(rusqlite::params![repo, run_id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<Result<_, _>>()?)
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    use crate::clock::ManualClock;
+    use crate::host::runner::{FakeRunner, Reply};
+
+    #[test]
+    fn private_headers_use_stdin_and_reject_injected_lines() {
+        let runner = FakeRunner::new(ManualClock::new()).on("curl", |_| true, Reply::ok("200"));
+        assert_eq!(
+            check_ld_flag(&runner, "fixture-private-token", "p", "k"),
+            Ok(true)
+        );
+        let calls = runner.calls();
+        assert!(
+            !calls[0]
+                .args
+                .iter()
+                .any(|s| s.contains("fixture-private-token"))
+        );
+        assert!(
+            String::from_utf8(calls[0].stdin.clone().unwrap())
+                .unwrap()
+                .contains("Authorization: fixture-private-token")
+        );
+        assert!(check_ld_flag(&runner, "bad\nInjected: header", "p", "k").is_err());
+        assert_eq!(runner.calls().len(), 1);
+    }
+
+    #[test]
+    fn snapshot_marks_external_checks_unknown_without_running_processes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE workflow_prereqs (plan TEXT, workflow TEXT, id INTEGER, kind TEXT, details_json TEXT, met_at TEXT, met_by TEXT); INSERT INTO workflow_prereqs (plan, workflow, id, kind, details_json, met_at, met_by) VALUES ('p','w',1,'ld-flag','{\"project\":\"p\",\"key\":\"k\"}',NULL,NULL);").unwrap();
+        let pending = snapshot_unmet(&conn, "p", "w").unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].cause.as_deref(), Some("not_checked"));
+    }
 }

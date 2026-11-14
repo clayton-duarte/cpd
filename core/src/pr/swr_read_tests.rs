@@ -33,6 +33,8 @@ fn light_node(checks: ChecksSummary) -> PollNode {
             membership: Membership::default(),
         },
         head_oid: "a1".into(),
+        threads_complete: true,
+        auto_merge_requested: false,
         author_login: None,
         reviews: json!([]),
         labels: json!([]),
@@ -93,4 +95,102 @@ fn passed_checks_keep_behind() {
     let d = detail(&[("gate", "SUCCESS"), ("e2e", "CANCELLED")]);
     excuse_from_detail(&mut node, &d, &[]);
     assert_eq!(node.listed.pr.merge_state, MergeState::Behind);
+}
+
+#[test]
+fn incomplete_metadata_never_clears_the_merge_gate_and_unchanged_reads_backfill() {
+    use super::swr_read::{review_metadata_held, write_header, write_review_metadata};
+    use crate::home::CpdHome;
+    use crate::store::Store;
+    let dir = tempfile::tempdir().unwrap();
+    let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+    let mut store = Store::open(&home, 5000).unwrap();
+    let mut node = light_node(ChecksSummary::Passed);
+    node.threads_complete = false;
+    node.reviews = json!({"nodes": [{"author": {"login": "bot"}}]});
+    store.write("test", |tx| write_header(tx, &node)).unwrap();
+    assert!(
+        store
+            .read(|c| super::pulls::unresolved_threads(c, "acme/pay", 801))
+            .is_err()
+    );
+    node.threads_complete = true;
+    node.listed.pr.open_threads = vec!["T1".into()];
+    store
+        .write("test", |tx| write_review_metadata(tx, &node))
+        .unwrap();
+    assert_eq!(
+        store
+            .read(|c| super::pulls::unresolved_threads(c, "acme/pay", 801))
+            .unwrap(),
+        1
+    );
+    node.threads_complete = false;
+    node.listed.pr.open_threads.clear();
+    store
+        .write("test", |tx| write_review_metadata(tx, &node))
+        .unwrap();
+    assert!(
+        store
+            .read(|c| super::pulls::unresolved_threads(c, "acme/pay", 801))
+            .is_err()
+    );
+    let threads: String = store
+        .read(|c| Ok(c.query_row("SELECT open_threads FROM pull_requests", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(threads, "[\"T1\"]");
+    node.threads_complete = true;
+    store
+        .write("old cache", |tx| {
+            tx.execute(
+                "UPDATE pull_requests SET reviewers = NULL, rereview_head = NULL",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(!store.read(|c| review_metadata_held(c, &node)).unwrap());
+    store
+        .write("backfill", |tx| write_review_metadata(tx, &node))
+        .unwrap();
+    assert!(store.read(|c| review_metadata_held(c, &node)).unwrap());
+    assert_eq!(
+        store
+            .read(|c| super::pulls::unresolved_threads(c, "acme/pay", 801))
+            .unwrap(),
+        0
+    );
+    let head: String = store
+        .read(|c| Ok(c.query_row("SELECT rereview_head FROM pull_requests", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(head, "a1");
+    for invalid in ["not json", "{}", "null"] {
+        store
+            .write("invalid metadata", |tx| {
+                tx.execute(
+                    "UPDATE pull_requests SET open_threads = ?1, review_threads_complete = 1",
+                    [invalid],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            store
+                .read(|c| super::pulls::unresolved_threads(c, "acme/pay", 801))
+                .is_err()
+        );
+        let ready = store
+            .read(|c| {
+                Ok(c.query_row(
+                    &format!(
+                        "SELECT {} FROM pull_requests r",
+                        super::pulls::no_open_thread_sql("r")
+                    ),
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )?)
+            })
+            .unwrap();
+        assert!(!ready, "invalid thread metadata cannot clear readiness");
+    }
 }

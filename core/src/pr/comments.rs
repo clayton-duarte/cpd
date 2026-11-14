@@ -182,7 +182,7 @@ fn login(author: &Option<Login>) -> &str {
 }
 
 /// Whether the body ends with the marker line.
-fn marked(body: &str) -> bool {
+pub(crate) fn marked(body: &str) -> bool {
     body.trim_end()
         .lines()
         .next_back()

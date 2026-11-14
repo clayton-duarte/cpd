@@ -139,6 +139,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd inbox claim` | Hand a review-requested item to the review Context's Manager (§21.7) | | |
 | `cpd inbox approve` | Approve the pending deployments of a deploy item (§21.13) | | |
 | `cpd watch` | The engine, one per machine (commands.md §12) | Lead | |
+| `cpd webui` | Prepare, inspect or activate the WebUI during an install | internal | |
 | `cpd serve` | The production server: engine and WebUI on 3333 in one process (commands.md §12a) | | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
@@ -203,9 +204,10 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |
 | `cpd protocol` | The bug record: the bug report protocol as commands (commands.md §33) | | |
-| `cpd protocol bug` | The bug record: report, mitigate, close, list, show (commands.md §33) | | |
+| `cpd protocol bug` | The bug record: report, mitigate, close, list, show, escalate (commands.md §33) | | |
 | `cpd protocol bug report` | Record a bug and open its protocol state (commands.md §33.1) | Lead, Manager | |
 | `cpd protocol bug mitigate` | Record the mitigation applied to an open bug (commands.md §33.2) | Lead, Manager | |
 | `cpd protocol bug close` | Close a bug whose root fix and regression test are in (commands.md §33.3) | Lead, Manager | |
 | `cpd protocol bug list` | List bug records, id ascending (commands.md §33.4) | Manager, Lead, Worker | |
 | `cpd protocol bug show` | Show one bug record (commands.md §33.5) | Manager, Lead, Worker | |
+| `cpd protocol bug escalate` | Ask the User for help on this unmitigated bug before the deadline | Lead, Manager | |

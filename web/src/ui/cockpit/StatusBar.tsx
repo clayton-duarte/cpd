@@ -87,7 +87,7 @@ function Pills({ status, onSettings, onSelectSession }: { status: StatusModel; o
           role="button"
           className={cn(PILL, "text-fg-dim")}
           onClick={onSettings}
-        >{`workers ${w.queued}\u{f0798}${w.ready}\u{f0798}${w.tenants}/${w.concurrency}`}</span>
+        >{`workers ${w.queued} queued · ${w.ready} waiting · ${w.tenants}/${w.concurrency} running`}</span>
       )}
       {status.drift === null || status.drift.count === 0 ? null : (
         <Badge

@@ -230,6 +230,46 @@ pub fn run_inner(engine: &mut Engine) -> Result<(), CpdError> {
     }
 
     for kind in services_to_supervise {
+        if kind == ServiceKind::Prod {
+            let preparing = std::fs::read_to_string(home.run_dir().join("webui-preparing.pid"))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+                .filter(|pid| *pid > 0)
+                .filter(|pid| engine.ports.spawn.alive(Pid(*pid)))
+                .filter(|pid| {
+                    engine
+                        .ports
+                        .spawn
+                        .cmdline(Pid(*pid))
+                        .or_else(|| read_process_command(&*engine.ports.runner, *pid))
+                        .is_some_and(|cmd| is_same_service(ServiceKind::Prod, &cmd))
+                });
+            let record: serde_json::Value =
+                std::fs::read_to_string(home.run_dir().join("webui-prepared.json"))
+                    .ok()
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .unwrap_or_default();
+            if preparing.is_some()
+                && (record["pid"].as_u64() != preparing.map(u64::from)
+                    || record["phase"] != "active")
+            {
+                // Install owns this handoff. Neither engine generation may retire the serving listener early.
+                continue;
+            }
+            if preparing.is_some()
+                && engine
+                    .webui
+                    .services
+                    .get(&kind)
+                    .and_then(|s| s.pid)
+                    .map(|p| p.0)
+                    != preparing
+            {
+                // Adopt the promoted listener through the normal port/command checks, without counting an install as a crash.
+                start_service(engine, kind)?;
+                continue;
+            }
+        }
         let state = engine.webui.services.entry(kind).or_default();
         if state.latched_stopped {
             continue;
@@ -549,4 +589,105 @@ fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError>
             Err(err)
         }
     }
+}
+
+/// The install's explicit preparation/readiness/activation boundary.
+#[derive(clap::Args, Debug)]
+#[group(required = true, multiple = false)]
+pub struct WebUiArgs {
+    #[arg(long)]
+    pub prepare: bool,
+    #[arg(long)]
+    pub ready: bool,
+    #[arg(long)]
+    pub activate: bool,
+}
+
+pub fn command(
+    ports: &cpd_core::ports::Ports,
+    args: WebUiArgs,
+) -> Result<cpd_core::output::Output, CpdError> {
+    use cpd_core::output::Output;
+    let home = CpdHome::from_env()?;
+    let run = home.run_dir();
+    std::fs::create_dir_all(&run)
+        .map_err(|e| CpdError::new(ErrorCode::SetupFailed, e.to_string()))?;
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(run.join("webui-prepare.lock"))
+        .map_err(|e| CpdError::new(ErrorCode::SetupFailed, e.to_string()))?;
+    if !cpd_core::lock::try_lock(&lock_file)
+        .map_err(|e| CpdError::new(ErrorCode::SetupFailed, e.to_string()))?
+    {
+        return Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            "Another WebUI preparation command is running.",
+        ));
+    }
+    let staging = run.join("webui-preparing.pid");
+    let preparing = std::fs::read_to_string(&staging)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|pid| *pid > 0 && ports.spawn.alive(Pid(*pid)))
+        .filter(|pid| {
+            ports
+                .spawn
+                .cmdline(Pid(*pid))
+                .is_some_and(|cmd| is_same_service(ServiceKind::Prod, &cmd))
+        });
+    let record: serde_json::Value = std::fs::read_to_string(run.join("webui-prepared.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    if args.prepare {
+        if let Some(pid) = preparing
+            && !(record["pid"].as_u64() == Some(u64::from(pid)) && record["phase"] == "active")
+        {
+            return Ok(Output::success(json!({"pid": pid})));
+        }
+        let Some(checkout) = resolve_checkout_path(&home) else {
+            return Ok(Output::success(json!({})));
+        };
+        let launch = Launch {
+            program: "node".into(),
+            args: vec!["web/src/server/serve.ts".into()],
+            cwd: Some(checkout),
+            setsid: true,
+            env_set: vec![
+                ("CPD_HOME".into(), home.root().display().to_string()),
+                ("CPD_WEBUI_PREPARE".into(), "1".into()),
+            ],
+            stdout_to: Some(run.join("webui-prepared.log")),
+            ..Launch::default()
+        };
+        let pid = ports
+            .spawn
+            .spawn(&launch)
+            .map_err(|e| CpdError::new(ErrorCode::SpawnFailed, e.to_string()))?;
+        cpd_core::atomic::write_atomic(&staging, pid.0.to_string().as_bytes())
+            .map_err(|e| CpdError::new(ErrorCode::SetupFailed, e.to_string()))?;
+        return Ok(Output::success(json!({"pid": pid.0})));
+    }
+    let ready = preparing.is_some()
+        && record["pid"].as_u64() == preparing.map(u64::from)
+        && record["ready"] == true;
+    if args.activate {
+        if !ready {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                "The prepared WebUI is not ready; the current listener is untouched.",
+            ));
+        }
+        cpd_core::atomic::write_atomic(
+            &run.join("webui-activate.pid"),
+            preparing.unwrap().to_string().as_bytes(),
+        )
+        .map_err(|e| CpdError::new(ErrorCode::SetupFailed, e.to_string()))?;
+    }
+    Ok(Output::success(
+        json!({"ready": ready, "phase": record["phase"], "pid": preparing}),
+    ))
 }

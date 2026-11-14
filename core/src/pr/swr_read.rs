@@ -2,8 +2,8 @@
 
 pub use super::gh::{
     Check, PollNode, PollPlan, PollRead, RepoMeta, build_poll_query, checks_of_detail, describe_pr,
-    head_ref_oid_on, merge_pr, poll_once, post_review, pull_request_id, reply_to_comment,
-    reply_to_thread, reply_to_uncached, rerun_failed, retitle_pr,
+    disable_auto_merge, head_ref_oid_on, merge_pr, poll_once, post_review, pull_request_id,
+    reply_to_comment, reply_to_thread, reply_to_uncached, rerun_failed, retitle_pr,
 };
 use super::pulls;
 use crate::error::CpdError;
@@ -36,14 +36,61 @@ pub fn write_header(tx: &WriteTxn<'_>, node: &PollNode) -> Result<(), CpdError> 
             node.labels.to_string()
         ],
     )?;
-    let reviewers: Vec<String> = node.reviews["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| r["author"]["login"].as_str().map(str::to_owned))
-        .collect();
-    tx.execute("UPDATE pull_requests SET open_threads = ?3, reviewers = ?4 WHERE repo = ?1 AND number = ?2 AND (open_threads IS NOT ?3 OR reviewers IS NOT ?4)",
-        rusqlite::params![node.listed.pr.repo, node.listed.pr.number, serde_json::to_string(&node.listed.pr.open_threads).unwrap(), serde_json::to_string(&reviewers).unwrap()])?;
+    write_review_metadata(tx, node)
+}
+
+pub fn review_metadata_held(
+    conn: &rusqlite::Connection,
+    node: &PollNode,
+) -> Result<bool, CpdError> {
+    use rusqlite::OptionalExtension;
+    let reviewers = node.reviews["nodes"].as_array().map(|nodes| {
+        serde_json::to_string(
+            &nodes
+                .iter()
+                .filter_map(|r| r["author"]["login"].as_str())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    });
+    let threads = node
+        .threads_complete
+        .then(|| serde_json::to_string(&node.listed.pr.open_threads).unwrap());
+    Ok(conn.query_row("SELECT review_threads_complete = ?3
+        AND (?4 IS NULL OR open_threads IS ?4) AND (?5 IS NULL OR reviewers IS ?5)
+        AND (?5 IS NULL OR rereview_head IS NOT NULL) FROM pull_requests WHERE repo = ?1 AND number = ?2",
+        rusqlite::params![node.listed.pr.repo, node.listed.pr.number, node.threads_complete, threads, reviewers],
+        |r| r.get(0)).optional()?.unwrap_or(false))
+}
+
+/// A missing/truncated connection is unknown, never evidence that no thread is open.
+pub fn write_review_metadata(tx: &WriteTxn<'_>, node: &PollNode) -> Result<(), CpdError> {
+    let reviewers = node.reviews["nodes"].as_array().map(|nodes| {
+        nodes
+            .iter()
+            .filter_map(|r| r["author"]["login"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+    });
+    let reviewers = reviewers.map(|r| serde_json::to_string(&r).unwrap());
+    let threads = node
+        .threads_complete
+        .then(|| serde_json::to_string(&node.listed.pr.open_threads).unwrap());
+    tx.execute(
+        "UPDATE pull_requests SET review_threads_complete = ?3,
+        open_threads = COALESCE(?4, open_threads), reviewers = COALESCE(?5, reviewers),
+        rereview_head = COALESCE(rereview_head, ?6)
+        WHERE repo = ?1 AND number = ?2 AND (review_threads_complete IS NOT ?3
+          OR (?4 IS NOT NULL AND open_threads IS NOT ?4) OR (?5 IS NOT NULL AND reviewers IS NOT ?5)
+          OR (rereview_head IS NULL AND ?6 IS NOT NULL))",
+        rusqlite::params![
+            node.listed.pr.repo,
+            node.listed.pr.number,
+            node.threads_complete,
+            threads,
+            reviewers,
+            reviewers.as_ref().map(|_| &node.head_oid)
+        ],
+    )?;
     Ok(())
 }
 
