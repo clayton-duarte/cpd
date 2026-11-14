@@ -48,11 +48,12 @@ impl Fixture {
         std::fs::write(home.root().join("policy/acme/owner.toml"), "").unwrap();
         std::fs::write(
             home.config(),
-            format!("version = 1\nmachine = \"m1\"\nmanager_runner = \"{manager_runner}\"\n"),
+            format!("version = 1\nmachine = \"m1\"\nmanager_runner = \"{manager_runner}\"\nlead_runner = \"durable\"\n"),
         )
         .unwrap();
         let saved = [
             "CPD_HOME",
+            "HOME",
             "CPD_SESSION",
             "PI_SESSION_ID",
             "CPD_PLAN",
@@ -65,6 +66,7 @@ impl Fixture {
         // spawned threads only read it, and are joined before the fixture is dropped.
         unsafe {
             std::env::set_var("CPD_HOME", home.root());
+            std::env::set_var("HOME", dir.path());
             for key in ["CPD_SESSION", "PI_SESSION_ID", "CPD_PLAN", "CPD_ATTEMPT"] {
                 std::env::remove_var(key);
             }
@@ -165,15 +167,24 @@ fn assert_success(result: Result<Output, CpdError>) {
 
 #[test]
 fn paired_future_context_creation() {
-    // A Manager insert failure rolls back the Context and both events.
+    // An actual database transaction failure rolls back the Context, Manager and events.
     {
         let f = Fixture::new("durable");
         // Exhaust the history AUTOINCREMENT key: Context insertion cannot complete.
         f.sql("UPDATE sqlite_sequence SET seq=9223372036854775807 WHERE name='history'");
-        assert!(f.context(CONTEXT_ARGS).is_err(), "Manager insert must be in Context creation's transaction");
+        assert!(
+            f.context(CONTEXT_ARGS).is_err(),
+            "the injected database failure must be reported"
+        );
         assert_eq!(f.count("SELECT count(*) FROM contexts WHERE id='ctx'"), 0);
-        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE context='ctx'"), 0);
-        assert_eq!(f.count("SELECT count(*) FROM events WHERE context='ctx'"), 0);
+        assert_eq!(
+            f.count("SELECT count(*) FROM sessions WHERE context='ctx'"),
+            0
+        );
+        assert_eq!(
+            f.count("SELECT count(*) FROM events WHERE context='ctx'"),
+            0
+        );
         f.sql("UPDATE sqlite_sequence SET seq=(SELECT max(id) FROM history) WHERE name='history'");
         assert_success(f.context(CONTEXT_ARGS));
         f.manager();
@@ -186,21 +197,55 @@ fn paired_future_context_creation() {
         let events = f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id");
         assert_success(f.context(CONTEXT_ARGS));
         assert_eq!(f.manager(), manager);
-        assert_eq!(f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id"), events);
-        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"), 1);
-        assert!(f.context(&["new", "ctx", "--title", "Different", "--owner", "acme"]).is_err());
+        assert_eq!(
+            f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id"),
+            events
+        );
+        assert_eq!(
+            f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"),
+            1
+        );
+        assert!(
+            f.context(&["new", "ctx", "--title", "Different", "--owner", "acme"])
+                .is_err()
+        );
         assert_eq!(f.manager(), manager);
-        assert_eq!(f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id"), events);
+        assert_eq!(
+            f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id"),
+            events
+        );
     }
     // External provisioning is outside the transaction: failure retains a retryable pair.
     {
         let f = Fixture::new("pi");
-        (*f.fakes.runner).clone().on("tmux", |_| true, Reply::exit(1, "", "injected tmux failure"));
-        assert!(f.context(CONTEXT_ARGS).is_err(), "fake tmux failure must be reported");
+        (*f.fakes.runner)
+            .clone()
+            .on(
+                "tmux",
+                |call| call.args.iter().any(|arg| arg == "has-session"),
+                Reply::ok(""),
+            )
+            .on(
+                "tmux",
+                |call| call.args.iter().any(|arg| arg == "list-panes"),
+                Reply::ok(""),
+            )
+            .on(
+                "tmux",
+                |call| call.args.iter().any(|arg| arg == "new-window"),
+                Reply::exit(1, "", "injected tmux failure"),
+            );
+        assert!(
+            f.context(CONTEXT_ARGS).is_err(),
+            "fake tmux failure must be reported"
+        );
         let manager = f.manager();
         assert!(f.context(CONTEXT_ARGS).is_err());
         assert_eq!(f.manager(), manager);
-        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"), 1);
+        assert_eq!(
+            f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"),
+            1
+        );
     }
     // Concurrent matching creation uses one pair, with no duplicate registration history.
     {
@@ -211,21 +256,45 @@ fn paired_future_context_creation() {
             for _ in 0..2 {
                 let barrier = barrier.clone();
                 let ports = f.fakes.ports.clone();
-                threads.push(scope.spawn(move || { barrier.wait(); context(&ports, CONTEXT_ARGS) }));
+                threads.push(scope.spawn(move || {
+                    barrier.wait();
+                    context(&ports, CONTEXT_ARGS)
+                }));
             }
             barrier.wait();
-            for thread in threads { assert_success(thread.join().unwrap()); }
+            for thread in threads {
+                assert_success(thread.join().unwrap());
+            }
         });
         f.manager();
         assert_eq!(f.count("SELECT count(*) FROM contexts WHERE id='ctx'"), 1);
-        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"), 1);
-        assert_eq!(f.count("SELECT count(*) FROM events WHERE context='ctx' AND kind='context-created'"), 1);
-        assert_eq!(f.count("SELECT count(*) FROM events WHERE context='ctx' AND kind='session-registered'"), 1);
+        assert_eq!(
+            f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"),
+            1
+        );
+        assert_eq!(
+            f.count("SELECT count(*) FROM events WHERE context='ctx' AND kind='context-created'"),
+            1
+        );
+        assert_eq!(
+            f.count(
+                "SELECT count(*) FROM events WHERE context='ctx' AND kind='session-registered'"
+            ),
+            1
+        );
     }
     // Web's tree creation requests by-user: no first-message or started turn before a prompt.
     {
         let f = Fixture::new("durable");
-        let args = ["new", "ctx", "--title", "Context", "--owner", "acme", "--by-user"];
+        let args = [
+            "new",
+            "ctx",
+            "--title",
+            "Context",
+            "--owner",
+            "acme",
+            "--by-user",
+        ];
         assert_success(f.context(&args));
         let manager = f.manager();
         assert_eq!(f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager' AND by_user=1 AND state='stopped' AND file IS NULL"), 1);
@@ -233,8 +302,14 @@ fn paired_future_context_creation() {
         let events = f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id");
         assert_success(f.context(&args));
         assert_eq!(f.manager(), manager);
-        assert_eq!(f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id"), events);
-        assert!(f.context(CONTEXT_ARGS).is_err(), "a retry cannot silently change by-user mode");
+        assert_eq!(
+            f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id"),
+            events
+        );
+        assert!(
+            f.context(CONTEXT_ARGS).is_err(),
+            "a retry cannot silently change by-user mode"
+        );
     }
 }
 
@@ -247,16 +322,38 @@ fn paired_future_shaping_creation() {
         let before = f.rows("SELECT * FROM plans WHERE id='legacy'");
         let jobs = f.rows("SELECT * FROM jobs WHERE plan='legacy' ORDER BY key");
         let events = f.rows("SELECT * FROM events WHERE plan='legacy' ORDER BY id");
-        let checkpoints = f.rows("SELECT * FROM context_records WHERE by_plan='legacy' ORDER BY seq");
+        let checkpoints =
+            f.rows("SELECT * FROM context_records WHERE by_plan='legacy' ORDER BY seq");
         let history = f.rows("SELECT * FROM history ORDER BY id");
-        let args = ["new", "legacy", "--context", "ctx", "--title", "Existing plan", "--runner", "durable"];
+        let args = [
+            "new",
+            "legacy",
+            "--context",
+            "ctx",
+            "--title",
+            "Existing plan",
+            "--runner",
+            "durable",
+        ];
         let _ = f.plan(&args);
         assert_eq!(f.rows("SELECT * FROM plans WHERE id='legacy'"), before);
-        assert_eq!(f.rows("SELECT * FROM jobs WHERE plan='legacy' ORDER BY key"), jobs);
-        assert_eq!(f.rows("SELECT * FROM events WHERE plan='legacy' ORDER BY id"), events);
-        assert_eq!(f.rows("SELECT * FROM context_records WHERE by_plan='legacy' ORDER BY seq"), checkpoints);
+        assert_eq!(
+            f.rows("SELECT * FROM jobs WHERE plan='legacy' ORDER BY key"),
+            jobs
+        );
+        assert_eq!(
+            f.rows("SELECT * FROM events WHERE plan='legacy' ORDER BY id"),
+            events
+        );
+        assert_eq!(
+            f.rows("SELECT * FROM context_records WHERE by_plan='legacy' ORDER BY seq"),
+            checkpoints
+        );
         assert_eq!(f.rows("SELECT * FROM history ORDER BY id"), history);
-        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE plan='legacy' AND role='lead'"), 0);
+        assert_eq!(
+            f.count("SELECT count(*) FROM sessions WHERE plan='legacy' AND role='lead'"),
+            0
+        );
         assert_success(f.plan(&["show", "--plan", "legacy"]));
     }
     // Only the same Context's live Manager creates a shaping Plan and real Lead, atomically.
@@ -265,13 +362,27 @@ fn paired_future_shaping_creation() {
         f.context_fixture();
         let manager = "00000000-0000-4000-8000-000000000001";
         f.sql(&format!("INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at) VALUES ('{manager}','manager','ctx',NULL,'ctx','/','O3','stopped','t','t');"));
-        let args = ["new", "fresh", "--context", "ctx", "--title", "Fresh", "--shaping", "--runner", "durable"];
-        assert!(f.plan(&args).is_err(), "a User is not the Context's Manager");
+        let args = [
+            "new",
+            "fresh",
+            "--context",
+            "ctx",
+            "--title",
+            "Fresh",
+            "--shaping",
+        ];
+        assert!(
+            f.plan(&args).is_err(),
+            "a User is not the Context's Manager"
+        );
         unsafe { std::env::set_var("CPD_SESSION", manager) };
         f.sql("UPDATE sqlite_sequence SET seq=9223372036854775807 WHERE name='history'");
         assert!(f.plan(&args).is_err());
         assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh'"), 0);
-        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE plan='fresh'"), 0);
+        assert_eq!(
+            f.count("SELECT count(*) FROM sessions WHERE plan='fresh'"),
+            0
+        );
         assert_eq!(f.count("SELECT count(*) FROM events WHERE plan='fresh'"), 0);
         f.sql("UPDATE sqlite_sequence SET seq=(SELECT max(id) FROM history) WHERE name='history'");
         assert_success(f.plan(&args));
@@ -280,23 +391,44 @@ fn paired_future_shaping_creation() {
         let events = f.rows("SELECT * FROM events WHERE plan='fresh' ORDER BY id");
         assert_success(f.plan(&args));
         assert_eq!(f.rows("SELECT p.id,p.lead_session,s.by_user FROM plans p JOIN sessions s ON s.id=p.lead_session WHERE p.id='fresh'"), pair);
-        assert_eq!(f.rows("SELECT * FROM events WHERE plan='fresh' ORDER BY id"), events);
-        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE role='lead' AND plan='fresh'"), 1);
+        assert_eq!(
+            f.rows("SELECT * FROM events WHERE plan='fresh' ORDER BY id"),
+            events
+        );
+        assert_eq!(
+            f.count("SELECT count(*) FROM sessions WHERE role='lead' AND plan='fresh'"),
+            1
+        );
         // Rename is shaping work: allowed to the same Context's Manager only in shaping.
         // tmux list-panes is mocked, never a real server.
-        (*f.fakes.runner).clone().on("tmux", |_| true, Reply::ok(""));
+        (*f.fakes.runner)
+            .clone()
+            .on("tmux", |_| true, Reply::ok(""));
         assert_success(f.plan(&["rename", "--plan", "fresh", "--title", "Shaped"]));
         let err = f.job(&["list", "--plan", "fresh"]).unwrap_err();
         assert_eq!(err.code(), cpd_core::error::ErrorCode::PlanHasLead);
         let other = "00000000-0000-4000-8000-000000000002";
         f.sql(&format!("INSERT INTO contexts (id,title,owner,created_at,created_on) VALUES ('other','Other','acme','t','m1'); INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at) VALUES ('{other}','manager','other',NULL,'other','/','O3','stopped','t','t');"));
         unsafe { std::env::set_var("CPD_SESSION", other) };
-        let err = f.plan(&["rename", "--plan", "fresh", "--title", "Cross context"]).unwrap_err();
+        let err = f
+            .plan(&["rename", "--plan", "fresh", "--title", "Cross context"])
+            .unwrap_err();
         assert_eq!(err.code(), cpd_core::error::ErrorCode::PlanOtherContext);
-        assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND title='Shaped'"), 1);
+        assert_eq!(
+            f.count("SELECT count(*) FROM plans WHERE id='fresh' AND title='Shaped'"),
+            1
+        );
         unsafe { std::env::set_var("CPD_SESSION", manager) };
-        f.sql("UPDATE plans SET phase='grounding' WHERE id='fresh'");
-        assert!(f.plan(&["rename", "--plan", "fresh", "--title", "Too late"]).is_err(), "Manager shaping must stop after shaping phase");
-        assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND title='Shaped'"), 1);
+        // Move out of shaping through the supported lifecycle transition.
+        f.sql("UPDATE plans SET phase='done', done_at='t', locked_at='t' WHERE id='fresh'");
+        assert!(
+            f.plan(&["rename", "--plan", "fresh", "--title", "Too late"])
+                .is_err(),
+            "Manager shaping must stop after shaping phase"
+        );
+        assert_eq!(
+            f.count("SELECT count(*) FROM plans WHERE id='fresh' AND title='Shaped'"),
+            1
+        );
     }
 }
