@@ -947,3 +947,46 @@ fn repair_preserves_rows_and_allows_install_copy_migration() {
         .expect("cpd install copy migration open must succeed on reconciled store");
     assert_eq!(scratch_store.schema_mismatch(), None);
 }
+
+#[test]
+fn repair_leaves_pending_waiver_migration_to_add_its_column() {
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_drifted_store(&env);
+    let conn = Connection::open(h.db()).unwrap();
+    conn.execute_batch("ALTER TABLE jobs DROP COLUMN touches_waived;
+        DROP TRIGGER schema_migrations_no_delete;
+        DELETE FROM schema_migrations WHERE name = '20261113T0802-job-touches-waived';
+        CREATE TRIGGER schema_migrations_no_delete BEFORE DELETE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;").unwrap();
+    drop(conn);
+    let result = repair(
+        &h,
+        &RepairOptions {
+            dry_run: false,
+            confirmed: true,
+            reason: "pending waiver migration".into(),
+        },
+    )
+    .unwrap();
+    assert!(result.repaired);
+    let conn = Connection::open(h.db()).unwrap();
+    let before: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'touches_waived'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(before, 0, "repair must not apply the pending column early");
+    drop(conn);
+    let _store = Store::open(&h, 5000).expect("pending migration must apply exactly once");
+    let conn = Connection::open(h.db()).unwrap();
+    let after: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'touches_waived'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, 1);
+}
