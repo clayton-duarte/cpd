@@ -190,6 +190,7 @@ struct WebUi {
     spawn: Arc<FakeSpawn>,
     clock: Arc<ManualClock>,
     new_pid: Pid,
+    prepare: Option<Reply>,
     ready_at: Option<Duration>,
     polls: Mutex<Vec<(bool, usize)>>,
 }
@@ -197,10 +198,9 @@ struct WebUi {
 impl WebUi {
     fn handle(&self, args: &[&str]) -> Option<Reply> {
         match args {
-            ["webui", "--prepare"] => Some(Reply::ok(&format!(
-                r#"{{"ok":true,"pid":{}}}"#,
-                self.new_pid.0
-            ))),
+            ["webui", "--prepare"] => Some(self.prepare.clone().unwrap_or_else(|| {
+                Reply::ok(&format!(r#"{{"ok":true,"pid":{}}}"#, self.new_pid.0))
+            })),
             ["webui", "--ready"] => {
                 let ready = self.ready_at.is_some_and(|at| self.clock.elapsed() >= at);
                 self.polls
@@ -301,6 +301,7 @@ struct Script {
     lock_wait: Duration,
     /// Virtual time from which the new WebUI reports ready; `None` never.
     webui_ready_at: Option<Duration>,
+    webui_prepare: Option<Reply>,
 }
 
 impl Default for Script {
@@ -316,6 +317,7 @@ impl Default for Script {
             refuse_first: false,
             lock_wait: DEFAULT_LOCK_WAIT,
             webui_ready_at: Some(Duration::ZERO),
+            webui_prepare: None,
         }
     }
 }
@@ -392,6 +394,7 @@ impl Rig {
             spawn: fakes.spawn.clone(),
             clock: fakes.clock.clone(),
             new_pid: new_webui,
+            prepare: script.webui_prepare.clone(),
             ready_at: script.webui_ready_at,
             polls: Mutex::default(),
         });
@@ -1243,5 +1246,28 @@ fn new_webui_not_ready_leaves_old_serving_and_fails_install() {
     assert!(
         rig.fakes.spawn.alive(rig.old_webui),
         "the old WebUI keeps serving"
+    );
+}
+
+#[test]
+fn failed_webui_prepare_leaves_the_running_engine_untouched() {
+    let rig = Rig::with(Script {
+        webui_prepare: Some(Reply::exit(1, "", "cannot bind listener")),
+        ..Script::default()
+    });
+    rig.running_old_engine();
+    let out = rig.run();
+    assert_ne!(out.exit, 0, "{}", out.stderr);
+    assert!(rig.fakes.spawn.signals().is_empty());
+    let calls = rig.fakes.runner.calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "kill-window"))
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "--mark-restart"))
     );
 }
