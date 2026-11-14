@@ -3027,6 +3027,11 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
         ] {
             assert_eq!(rows_after.remove(table), Some(Vec::new()), "{table}");
         }
+        // `coverage-baseline` creates an empty table for new refactor workflows.
+        assert_eq!(
+            rows_after.remove("refactor_coverage_baselines"),
+            Some(Vec::new())
+        );
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));

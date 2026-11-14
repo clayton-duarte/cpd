@@ -65,7 +65,7 @@ pub(super) fn check(
     workflows: &[WorkflowRow],
     jobs: &[Job],
 ) -> Result<(), CpdError> {
-    if let Some(e) = test_job_required(plan, jobs) {
+    if let Some(e) = test_job_required(plan, workflows, jobs) {
         return Err(e);
     }
     if let Some(e) = impl_job_required(plan, jobs) {
@@ -78,12 +78,19 @@ pub(super) fn check(
 }
 
 /// `test_job_required`: a draft `impl` Job needs no `test` Job of its Workflow.
-pub(crate) fn test_job_required(plan: &PlanId, jobs: &[Job]) -> Option<CpdError> {
+pub(crate) fn test_job_required(
+    plan: &PlanId,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+) -> Option<CpdError> {
     let mut lacking: Vec<&Job> = jobs
         .iter()
         .filter(|j| {
             j.is_draft()
                 && j.kind == "impl"
+                && !workflows
+                    .iter()
+                    .any(|w| Some(w.key.as_str()) == j.workflow.as_deref() && w.shape == "refactor")
                 && !j.needs.iter().any(|n| {
                     jobs.iter().any(|t| {
                         t.key == *n

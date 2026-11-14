@@ -269,7 +269,7 @@ fn workflow_unregistered_rule(i: &Input) -> Vec<Finding> {
 fn test_job_required_rule(i: &Input) -> Vec<Finding> {
     one(
         Rule::TestJobRequired,
-        shape::test_job_required(i.plan, i.jobs),
+        shape::test_job_required(i.plan, i.workflows, i.jobs),
     )
 }
 

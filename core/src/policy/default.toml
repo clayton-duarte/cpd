@@ -62,6 +62,8 @@ G = "github-copilot/gemini-3.8-flash"
 
 [test-commands]
 
+[coverage-commands]
+
 [protected]
 paths = []
 

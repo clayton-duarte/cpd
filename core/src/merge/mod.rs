@@ -363,6 +363,27 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
         } else {
             (&old, &old, &target.branch)
         };
+        if let Some(workflow) = &job.workflow
+            && let Err(error) = store.read(|conn| {
+                crate::workflow::guard_refactor_tests_allowing(
+                    conn,
+                    &target.plan,
+                    workflow,
+                    repo,
+                    diff_base,
+                    diff_head,
+                    &base_refs,
+                )
+            })
+        {
+            if error.code() != crate::error::ErrorCode::TestChangeForbidden {
+                return Err(error);
+            }
+            return Ok(Stepped::ends(End::Failed {
+                cause: Failure::Tampered,
+                detail: error.to_string(),
+            }));
+        }
         let touched = git::tamper::touched_protected_over(
             repo,
             lead_compare,
@@ -537,6 +558,22 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
                 Err(e) => return crash_end(e, None),
             }
         }
+        // A refactor's coverage baseline holds before any commit is published (§7.6), whatever the Job's kind.
+        {
+            let workflow = workflow_row(store, target)?;
+            let head = git::run::rev_parse(&target.worktree, "HEAD")?;
+            if let Err(error) =
+                crate::pr::coverage_check(store, &policy, &target.plan, &workflow, &head)
+            {
+                if error.code() != ErrorCode::CoverageBelowBaseline {
+                    return Err(error);
+                }
+                return Ok(Stepped::ends(End::Failed {
+                    cause: Failure::GateError,
+                    detail: error.to_string(),
+                }));
+            }
+        }
         // 7. Cancel check again: the last safe point.
         if store
             .read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?
@@ -548,7 +585,7 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
         // update-ref; rule P's push and rule S still run, and step 10 records `submitted_sha` as `merged_sha` (hs-d680).
         if linear {
             let new = git::run::rev_parse(&target.worktree, "HEAD")?;
-            let push = publish(target, &new);
+            let push = publish_checked(store, target, &policy, &base_refs, &new);
             let stale = git::sync_lead(lead, &target.lead_branch).err();
             return finish_merge(
                 store,
@@ -566,7 +603,7 @@ fn steps(store: &mut Store, ctx: &Ctx<'_>, target: &Attempt) -> Result<Stepped, 
         let out = run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])?;
         if out.code == 0 {
             // Push (R35) by rule P: the merge stands whatever happens here.
-            let push = publish(target, &new);
+            let push = publish_checked(store, target, &policy, &base_refs, &new);
             // 9. Rule S on the Lead worktree; the merge stands whatever happens here.
             let stale = git::sync_lead(lead, &target.lead_branch).err();
             return finish_merge(store, config, target, new, cpd_kind, push, stale);
@@ -998,7 +1035,46 @@ fn open_pull_request(
 
 /// Step 8's and R2's push of `sha`: to the Workflow's remote branch, and skipped for an adopted Workflow that has not opened unless the Job is an `open` or
 /// `update` one, so that a work Job's commit never reaches a live pull request (§7.4).
-pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
+pub(super) fn publish(
+    store: &mut Store,
+    home: &CpdHome,
+    target: &Attempt,
+    sha: &str,
+) -> Option<CpdError> {
+    publish_with(target, sha, &mut |sha, to_push| {
+        let workflow = workflow_row(store, target)?;
+        if workflow.shape != "refactor" {
+            return Ok(());
+        }
+        let policy = store
+            .read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
+        let bases = store.read(|conn| {
+            crate::pr::start::tamper_bases(conn, &target.repo, &workflow.repo, &workflow.base)
+        })?;
+        let refs: Vec<&str> = bases.iter().map(String::as_str).collect();
+        validate_reconciled(store, target, &policy, &refs, sha, to_push)
+    })
+}
+
+/// `publish` for step 8: a reconciled commit (a merge of the remote tip, which `sha` is not) is validated as a refactor's
+/// merged commit is, for test immutability and coverage, before it is pushed.
+fn publish_checked(
+    store: &mut Store,
+    target: &Attempt,
+    policy: &crate::policy::Policy,
+    base_refs: &[&str],
+    sha: &str,
+) -> Option<CpdError> {
+    publish_with(target, sha, &mut |sha, to_push| {
+        validate_reconciled(store, target, policy, base_refs, sha, to_push)
+    })
+}
+
+fn publish_with(
+    target: &Attempt,
+    sha: &str,
+    validate: &mut dyn FnMut(&str, &str) -> Result<(), CpdError>,
+) -> Option<CpdError> {
     if target.adopted && !is_cpd_kind(target) {
         return None;
     }
@@ -1007,7 +1083,33 @@ pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
         &target.lead_branch,
         &target.remote_branch,
         sha,
+        validate,
     )
+}
+
+/// What the remote tip brought into `to_push` (`sha...to_push`) may not change a refactor's tests (§7.3) nor lower its
+/// coverage (§7.6); a non-refactor Workflow passes both checks.
+fn validate_reconciled(
+    store: &mut Store,
+    target: &Attempt,
+    policy: &crate::policy::Policy,
+    base_refs: &[&str],
+    sha: &str,
+    to_push: &str,
+) -> Result<(), CpdError> {
+    store.read(|conn| {
+        crate::workflow::guard_refactor_tests_allowing(
+            conn,
+            &target.plan,
+            target.workflow_str(),
+            &target.repo,
+            sha,
+            to_push,
+            base_refs,
+        )
+    })?;
+    let workflow = workflow_row(store, target)?;
+    crate::pr::coverage_check(store, policy, &target.plan, &workflow, to_push)
 }
 
 /// Rule P (§7.4) for `sha` on the Lead Branch `branch`, from the Lead worktree
@@ -1019,6 +1121,7 @@ pub(super) fn push(
     lead_branch: &str,
     branch: &str,
     sha: &str,
+    validate: &mut dyn FnMut(&str, &str) -> Result<(), CpdError>,
 ) -> Option<CpdError> {
     let failed = |stderr: &str, exit: Option<i64>, why: String| {
         let e = CpdError::new(
@@ -1035,7 +1138,7 @@ pub(super) fn push(
     };
     match git::run::has_origin(lead).and_then(|origin| {
         if origin {
-            match reconcile(lead, lead_branch, branch, sha)? {
+            match reconcile(lead, lead_branch, branch, sha, validate)? {
                 Reconciled::Push(to_push) => git::push_commit(lead, branch, &to_push).map(Some),
                 Reconciled::Contained(remote) => Ok(Some(git::Push::Contained { remote })),
                 Reconciled::Conflict { remote, files } => {
@@ -1053,6 +1156,14 @@ pub(super) fn push(
             "was rejected: not a fast-forward.".to_owned(),
         )),
         Err(e) if e.details().contains_key("remote_conflict") => Some(e),
+        Err(e)
+            if matches!(
+                e.code(),
+                ErrorCode::TestChangeForbidden | ErrorCode::CoverageBelowBaseline
+            ) =>
+        {
+            Some(e)
+        }
         Err(e) => {
             let detail = |key: &str| e.details().get(key).cloned();
             let stderr = detail("stderr")
@@ -1167,6 +1278,7 @@ pub(crate) fn reconcile(
     lead_branch: &str,
     branch: &str,
     sha: &str,
+    validate: &mut dyn FnMut(&str, &str) -> Result<(), CpdError>,
 ) -> Result<Reconciled, CpdError> {
     let ours = format!("refs/cpd/publish/{branch}");
     let mut sha = sha.to_owned();
@@ -1223,6 +1335,8 @@ pub(crate) fn reconcile(
             ],
         )?;
         let made = made.trim().to_owned();
+        // Reject the proposed merge before it can contaminate the Lead ref.
+        validate(&sha, &made)?;
         let moved = run(
             dir,
             &[
