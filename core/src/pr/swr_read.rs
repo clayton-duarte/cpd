@@ -3,7 +3,7 @@
 pub use super::gh::{
     Check, PollNode, PollPlan, PollRead, RepoMeta, build_poll_query, checks_of_detail, describe_pr,
     head_ref_oid_on, merge_pr, poll_once, post_review, pull_request_id, reply_to_comment,
-    reply_to_thread, rerun_failed, retitle_pr,
+    reply_to_thread, reply_to_uncached, rerun_failed, retitle_pr,
 };
 use super::pulls;
 use crate::error::CpdError;
