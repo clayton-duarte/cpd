@@ -301,3 +301,6 @@ button:disabled, textarea:disabled, select:disabled { opacity: 0.5; cursor: not-
   animation: prompt-border-pulse 1.8s ease-in-out infinite;
 }
 
+
+/* The outage banner takes its own row; pane headers remain clickable below it. */
+[data-part="app-layout"] > [data-shell] { flex: 1; height: auto; min-height: 0; }

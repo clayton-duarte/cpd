@@ -179,6 +179,12 @@ pub struct Args {
     /// With `--ensure`, as the supervising tmux hooks call it (contract §6.6): wait for a dying engine's lock, one start at a time, backing off after a failed start
     #[arg(long, hide = true, requires = "ensure")]
     wait: bool,
+    /// Start the engine once `locks/watch.lock` is free (internal: `cpd install` hands off to it when the old engine still holds the lock); detaches a waiter and returns at once
+    #[arg(long, hide = true, conflicts_with_all = ["check", "ensure", "restart_tmux", "mark_restart"])]
+    ensure_when_free: bool,
+    /// With `--ensure-when-free`: this process is the detached waiter (internal)
+    #[arg(long, hide = true, requires = "ensure_when_free")]
+    waiting: bool,
     /// Restart the tmux server onto the installed tmux (internal: the engine starts it, contract §6.1)
     #[arg(long, hide = true, conflicts_with = "ensure")]
     restart_tmux: bool,
@@ -197,6 +203,43 @@ fn migrate_scratch() -> Result<Output, CpdError> {
     Ok(Output::success(serde_json::json!({})))
 }
 
+/// `watch --ensure-when-free`: without `waiting`, starts this binary again detached (its own session, output in
+/// `run/restart-waiter.log`) as the waiter and returns at once; with `waiting` (that child), waits for
+/// `locks/watch.lock` to be free, runs `cpd watch --ensure` once and marks the install `ok`.
+fn ensure_when_free(
+    ports: &cpd_core::ports::Ports,
+    home: &CpdHome,
+    waiting: bool,
+) -> Result<Output, CpdError> {
+    let exe = ports.spawn.self_exe()?;
+    if waiting {
+        cpd_core::install::restart_waiter(ports, home, &exe)?;
+        return Ok(Output::success(serde_json::json!({"waited": true})));
+    }
+    let failed = |why: String| {
+        CpdError::new(
+            cpd_core::error::ErrorCode::SpawnFailed,
+            format!("Cannot start the restart waiter: {why}."),
+        )
+    };
+    let run_dir = home.run_dir();
+    fs::create_dir_all(&run_dir)
+        .map_err(|e| failed(format!("cannot create {}: {e}", run_dir.display())))?;
+    let launch = detached_launch(
+        &exe,
+        &["watch", "--ensure-when-free", "--waiting"],
+        home,
+        run_dir.join("restart-waiter.log"),
+    );
+    let pid = ports
+        .spawn
+        .spawn(&launch)
+        .map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    Ok(Output::success(
+        serde_json::json!({"started": true, "pid": pid.0}),
+    ))
+}
+
 /// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
     if args.check && args.migrate_scratch {
@@ -205,6 +248,12 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
         ensure::check()
     } else if args.ensure {
         ensure::ensure(args.wait)
+    } else if args.ensure_when_free {
+        ensure_when_free(
+            &cpd_core::ports::Ports::current(),
+            &CpdHome::from_env()?,
+            args.waiting,
+        )
     } else if args.restart_tmux {
         restart::detached()
     } else if args.mark_restart {
@@ -313,3 +362,87 @@ mod tests {
 mod wake_tests;
 #[cfg(test)]
 mod ws_tests;
+
+#[cfg(test)]
+mod ensure_when_free_tests {
+    use super::*;
+    use clap::Parser;
+    use cpd_core::ports::Fakes;
+    use std::path::Path;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        args: Args,
+    }
+
+    fn home() -> (tempfile::TempDir, CpdHome) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        (dir, home)
+    }
+
+    #[test]
+    fn the_cli_accepts_ensure_when_free() {
+        let cli = Cli::try_parse_from(["watch", "--ensure-when-free"]).unwrap();
+        assert!(cli.args.ensure_when_free);
+        assert!(Cli::try_parse_from(["watch", "--ensure-when-free", "--ensure"]).is_err());
+        assert!(Cli::try_parse_from(["watch", "--ensure-when-free", "--check"]).is_err());
+    }
+
+    #[test]
+    fn it_detaches_a_waiter_and_returns_at_once() {
+        let (_dir, home) = home();
+        let fakes = Fakes::new();
+        fakes.spawn.set_self_exe("/x/bin/cpd");
+        ensure_when_free(&fakes.ports, &home, false).unwrap();
+        let launches = fakes.spawn.launches();
+        assert_eq!(launches.len(), 1, "{launches:?}");
+        assert_eq!(launches[0].program, "/x/bin/cpd");
+        assert_eq!(
+            launches[0].args,
+            ["watch", "--ensure-when-free", "--waiting"]
+        );
+        assert!(launches[0].setsid, "the waiter is its own session");
+        assert!(
+            fakes.runner.calls().is_empty(),
+            "it waits for nothing itself"
+        );
+    }
+
+    #[test]
+    fn the_detached_waiter_runs_ensure_once_the_lock_is_free() {
+        let (_dir, home) = home();
+        let fakes = Fakes::new();
+        fakes.spawn.set_self_exe("/x/bin/cpd");
+        let _ = (*fakes.runner).clone().once(
+            "/x/bin/cpd",
+            |_| true,
+            cpd_core::host::runner::Reply::ok(r#"{"ok":true,"started":true}"#),
+        );
+        ensure_when_free(&fakes.ports, &home, true).unwrap();
+        let calls: Vec<_> = fakes
+            .runner
+            .calls()
+            .into_iter()
+            .filter(|c| Path::new(&c.program) == Path::new("/x/bin/cpd"))
+            .map(|c| c.args)
+            .collect();
+        assert_eq!(calls, [["watch", "--ensure"]]);
+        assert!(fakes.spawn.launches().is_empty());
+    }
+    #[test]
+    fn a_failed_detached_ensure_is_reported_to_the_caller() {
+        let (_dir, home) = home();
+        let fakes = Fakes::new();
+        fakes.spawn.set_self_exe("/x/bin/cpd");
+        let _ = (*fakes.runner).clone().once(
+            "/x/bin/cpd",
+            |_| true,
+            cpd_core::host::runner::Reply::exit(1, "", "tmux cannot start"),
+        );
+        let error = ensure_when_free(&fakes.ports, &home, true).unwrap_err();
+        assert!(error.message().contains("tmux cannot start"), "{error}");
+        assert!(fakes.spawn.launches().is_empty());
+    }
+}

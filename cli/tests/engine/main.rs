@@ -42,7 +42,7 @@ mod main {
     #[test]
     fn cli_retains_only_engine_and_infra_commands() {
         let mut stdout = Vec::new();
-        cpd::main_with(["cpd".into(), "--help".into()], &mut stdout);
+        let _ = cpd::main_with(["cpd".into(), "--help".into()], &mut stdout);
         let json: Value = serde_json::from_slice(&stdout).expect("valid JSON from --help");
         let help = json["help"].as_str().expect("help string");
 

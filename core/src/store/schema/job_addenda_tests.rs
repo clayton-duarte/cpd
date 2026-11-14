@@ -134,7 +134,7 @@ fn a_database_before_job_addenda_migrates_to_an_empty_table_and_accepts_the_new_
     for row in &mut jobs {
         assert!(row.ends_with(']'));
         row.truncate(row.len() - 1);
-        row.push_str(",null,null]");
+        row.push_str(",null,null,null]"); // waiting_on, test_removal_approved, touches_waived
     }
     // The later migration `agent-key-backfill` rewrites the names of the Lead and the Worker to their keys.
     let sessions: Vec<String> = sessions

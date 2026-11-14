@@ -267,17 +267,22 @@ it("typing a custom answer survives dialog re-renders between keystrokes and is 
 
 it("a custom answer typed in the card reaches the backend respond through the real client frame and hub", async () => {
   const sent: unknown[] = [];
+  const listeners: Array<(m: unknown) => void> = [];
+  const statuses: Array<(s: "open" | "closed") => void> = [];
   const transport = {
     connect(): void {},
     send: (raw: unknown): void => { sent.push(JSON.parse(JSON.stringify(raw))); },
     close(): void {},
-    onMessage: () => ({ dispose(): void {} }),
-    onStatus: (h: (s: "open" | "closed") => void) => { h("open"); return { dispose(): void {} }; },
+    onMessage: (h: (m: unknown) => void) => { listeners.push(h); return { dispose(): void {} }; },
+    onStatus: (h: (s: "open" | "closed") => void) => { statuses.push(h); return { dispose(): void {} }; },
   };
   const store = createStore();
   const real = createConnection({ transport, scheduler: new FakeScheduler(), store, newId: () => "id1" });
   real.start();
+  act(() => { for (const h of statuses) h("open"); });
   real.selectSession("pi-1");
+  // The client holds a session's outbox entries until the hub confirms the attach.
+  act(() => { for (const h of listeners) h({ type: "session.attached", sessionId: "pi-1", capabilities: {}, meta: {} }); });
   const questions = [
     { header: "H1", question: "Question 1?", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] },
     { header: "H2", question: "Question 2?", multiSelect: true, options: [{ label: "C", description: "c" }, { label: "D", description: "d" }] },

@@ -56,6 +56,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
 | `cpd job approve-touches` | The Lead approves a Job to change a path outside its touches (§5.9a) | Lead | |
 | `cpd job approve-test-removal` | The Lead approves a Job to remove or weaken existing tests (§5.9b) | Lead | |
+| `cpd job approve-untouched` | The Lead waives a declared touch that has no diff (§5.9b) | Lead | |
 | `cpd job addendum` | Add information to a Job without changing its Spec (§5.10) | Lead | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
 | `cpd job list` | List the Jobs (§5.6) | Lead, Manager | |

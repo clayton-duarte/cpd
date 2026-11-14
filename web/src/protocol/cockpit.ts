@@ -109,6 +109,8 @@ export interface InboxRow {
 export interface InboxModel {
   readonly openCount: number; // items.length (the list holds open, visible items only)
   readonly engineRunning: boolean;
+  readonly engineDownSince?: string | null; // RFC 3339 time the engine went down; null/absent while running or unknown
+  readonly engineRestartReason?: string | null; // e.g. "install" while `cpd install` is restarting the engine; else null
   readonly hidden: { readonly claimed: number; readonly dismissed: number; readonly snoozed: number };
   readonly rows: readonly InboxRow[]; // source order (rank order of cpd)
   readonly cursor: number;
@@ -229,4 +231,17 @@ export interface SettingsChanges {
   readonly experimental?: Partial<Record<SettingsSwitch, boolean>>;
   /** The machine-wide Worker count, when the User changed it (air-d70). */
   readonly concurrency?: number;
+}
+
+/** Parses the engine fields of an inbox model; an absent down-since or reason is null. */
+export function parseInboxEngine(raw: unknown): { engineRunning: boolean; engineDownSince: string | null; engineRestartReason: string | null } {
+  const o = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+  const opt = (name: string): string | null => {
+    const v = o[name];
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "string") throw new WebError("invalid_message", `inbox engine: bad field ${name}`, { field: name });
+    return v;
+  };
+  if (typeof o["engineRunning"] !== "boolean") throw new WebError("invalid_message", "inbox engine: bad field engineRunning", { field: "engineRunning" });
+  return { engineRunning: o["engineRunning"], engineDownSince: opt("engineDownSince"), engineRestartReason: opt("engineRestartReason") };
 }

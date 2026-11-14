@@ -316,6 +316,9 @@ fn run_checks(
     // an approval reaches a running Attempt).
     let touches = crate::job::guard::touches(job);
     let approved = crate::job::guard::approved_touches(job);
+    let waived = env
+        .store
+        .read(|conn| crate::job::approve::waived_untouched(conn, plan, key))?;
     let check = git::tamper::Touches {
         kind: &job.kind,
         touches: &touches,
@@ -344,6 +347,32 @@ fn run_checks(
     let written = git::tamper::written_paths(root, base, sha, &compare_with)?;
     // The test files the Attempt wrote keep their test cases and assertions (b70), unless the Lead approved the removal.
     kind::tests_kept(env, plan, key, root, base, sha, &written)?;
+    // Every declared touch needs a diff (b69), unless the Lead waived it; `open`, `update` and explore Jobs are exempt.
+    if !check.skipped() {
+        let changed = &written;
+        let mut unchanged: Vec<String> = Vec::new();
+        for entry in &touches {
+            if !waived.contains(entry)
+                && !unchanged.contains(entry)
+                && !changed
+                    .iter()
+                    .any(|p| git::tamper::touches_matches(entry, p))
+            {
+                unchanged.push(entry.clone());
+            }
+        }
+        if !unchanged.is_empty() {
+            return Err(CpdError::new(
+                ErrorCode::TouchesUnchanged,
+                format!(
+                    "The diff leaves declared touches unchanged: {}. Change them, or ask the Lead, who waives a path with `cpd job approve-untouched`.",
+                    unchanged.join(", ")
+                ),
+            )
+            .with("paths", json!(unchanged))
+            .with("touches", json!(touches)));
+        }
+    }
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff

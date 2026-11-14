@@ -567,6 +567,7 @@ pub(crate) fn setup_mac_pro_drifted_store(env: &impl HasCpdHome) {
            touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),
            waiting_on          TEXT CHECK (waiting_on IS NULL OR waiting_on IN ('lead', 'user') OR waiting_on LIKE 'explore:%'),
            test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),
+           touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),
            UNIQUE (plan, key),
            FOREIGN KEY (plan, workflow) REFERENCES \"workflows\"(plan, key),
            CHECK (status <> 'draft' OR fingerprint IS NULL),
@@ -946,6 +947,49 @@ fn repair_preserves_rows_and_allows_install_copy_migration() {
     let scratch_store = Store::open(&scratch_home, 5000)
         .expect("cpd install copy migration open must succeed on reconciled store");
     assert_eq!(scratch_store.schema_mismatch(), None);
+}
+
+#[test]
+fn repair_leaves_pending_waiver_migration_to_add_its_column() {
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_drifted_store(&env);
+    let conn = Connection::open(h.db()).unwrap();
+    conn.execute_batch("ALTER TABLE jobs DROP COLUMN touches_waived;
+        DROP TRIGGER schema_migrations_no_delete;
+        DELETE FROM schema_migrations WHERE name = '20261113T0804-job-touches-waived';
+        CREATE TRIGGER schema_migrations_no_delete BEFORE DELETE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;").unwrap();
+    drop(conn);
+    let result = repair(
+        &h,
+        &RepairOptions {
+            dry_run: false,
+            confirmed: true,
+            reason: "pending waiver migration".into(),
+        },
+    )
+    .unwrap();
+    assert!(result.repaired);
+    let conn = Connection::open(h.db()).unwrap();
+    let before: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'touches_waived'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(before, 0, "repair must not apply the pending column early");
+    drop(conn);
+    let _store = Store::open(&h, 5000).expect("pending migration must apply exactly once");
+    let conn = Connection::open(h.db()).unwrap();
+    let after: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('jobs') WHERE name = 'touches_waived'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, 1);
 }
 
 #[test]

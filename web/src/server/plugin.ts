@@ -23,6 +23,7 @@ import { connectHost, type SocketFactory } from "./durable/client.ts";
 import { createDurableBackend } from "./durable/backend.ts";
 import { createCompletionClassifier, type CompletionClassifier } from "./completion-classify.ts";
 import { createCompletionService } from "./completion-service.ts";
+import { createDedupStore, fileDedupStorage, type DedupStorage } from "./hub/dedup.ts";
 import { createHubConnection, type HubConnection, type SessionBackend } from "./hub/connection.ts";
 import { createUpgradeFactory, createWsServer, WS_PATH, type WebSocketUpgradeServer } from "./ws.ts";
 import { writeWebuiToken, type IssuedToken } from "./webui-token.ts";
@@ -71,6 +72,7 @@ export interface PluginBoundaries {
   git: GitBoundary;
   scheduler: Scheduler;
   cpdHome: string;
+  dedupStorage?: DedupStorage;
   /** This boot's WebUI token (contract §6.16 "The WebUI token"); absent, no token is sent. */
   webuiToken?: string;
   /** Classifies a Lead session's completion; absent, no badge is computed. */
@@ -98,6 +100,7 @@ const updateExec: UpdateExec = (cmd, args, opts) =>
 /** Pure wiring of the modules; nothing is started. */
 export function createServices(b: PluginBoundaries): Services {
   const cpd = createCpd(b.cpdExec);
+  const dedup = createDedupStore({ storage: b.dedupStorage ?? fileDedupStorage(join(b.cpdHome, "run", "webui-dedup.json")), cap: 1000 });
   const cpdText = async (argv: readonly string[]): Promise<string> => {
     const r = await b.cpdExec.run(argv);
     if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `cpd exited ${r.exitCode}`);
@@ -161,7 +164,7 @@ WHERE d.kind = '"pi.usage"' AND d.retired_at IS NULL AND r.kind = 'base'`;
       return buildPlanView(parsePlanShow(await cpd.json(toArgv({ kind: "plan.show", planId }))));
     },
   });
-  return { cockpit, registry, backends, newConnection: (send) => createHubConnection({ cockpit, registry, backends, send, ...(completion === undefined ? {} : { completion }) }) };
+  return { cockpit, registry, backends, newConnection: (send) => createHubConnection({ cockpit, registry, backends, send, dedup, ...(completion === undefined ? {} : { completion }) }) };
 }
 
 // ---- real boundaries: untested glue, the only place that touches the outside world ----

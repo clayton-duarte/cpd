@@ -5,6 +5,7 @@ import type { ClientMessage, ServerMessage, SessionServerMessage } from "../../p
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { CockpitSnapshot, CockpitUpdate } from "../cockpit/events.ts";
 import type { CompletionTracker } from "../completion-service.ts";
+import { createDedupStore, type DedupStore } from "./dedup.ts";
 import type { Registry, ResolvedSession } from "./registry.ts";
 
 export interface CockpitService {
@@ -38,6 +39,8 @@ export interface HubDeps {
   registry: Registry;
   backends: Readonly<Record<Runner, SessionBackend>>;
   send: (message: ServerMessage) => void;
+  /** Persisted dedup of actionId, clientSubmissionId and dialogId; absent, a connection-local in-memory store. */
+  dedup?: DedupStore;
   completion?: { track(ref: SessionRef, send: (m: SessionServerMessage) => void): CompletionTracker };
 }
 export interface HubConnection { handle(raw: unknown): Promise<void>; close(): Promise<void> }
@@ -50,6 +53,10 @@ const unsupported = <A extends unknown[], R>(f: ((...a: A) => Promise<R>) | unde
 // ---- the connection ----
 export function createHubConnection(deps: HubDeps): HubConnection {
   let closed = false;
+  const dedup = deps.dedup ?? createDedupStore({ storage: { read: () => undefined, write: () => undefined }, cap: 1000 });
+  const waitingAcks = new Set<string>();
+  const acknowledgements = new Map<string, SessionServerMessage>();
+  const ackKey = (m: SessionServerMessage): string | null => m.type === "session.submitAck" ? `submit:${m.sessionId}:${m.clientSubmissionId}` : m.type === "session.dialogResolved" ? `dialog:${m.sessionId}:${m.dialogId}` : null;
   let subscription: Disposable | null = null;
   let generation = 0;
   let attached: { sessionId: string; handle: SessionHandle; tracker: CompletionTracker | null } | null = null;
@@ -101,6 +108,8 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       }) ?? null;
       const tracked = tracker;
       const handle = await deps.backends[resolved.ref.runner].attach(resolved, (m) => {
+        const key = ackKey(m);
+        if (key !== null && waitingAcks.has(key)) acknowledgements.set(key, m);
         if (generation !== mine) return;
         tracked?.observe(m);
         send(m);
@@ -126,6 +135,28 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       await run(attached.handle);
     } catch (e) {
       sessionError(sessionId, e, clientSubmissionId);
+    }
+  };
+
+  // a failed delivery is reported and forgotten, so the client's retry runs again
+  const once = async (key: string, exec: () => Promise<void>): Promise<void> => {
+    try {
+      let executed = false;
+      const ack = await dedup.run(key, async () => {
+        executed = true;
+        waitingAcks.add(key);
+        try {
+          await exec();
+          return acknowledgements.get(key) ?? null;
+        } finally {
+          waitingAcks.delete(key);
+          acknowledgements.delete(key);
+        }
+      });
+      if (!executed && ack !== null) send(ack);
+    } catch (e) {
+      dedup.forget(key);
+      throw e;
     }
   };
 
@@ -158,8 +189,9 @@ export function createHubConnection(deps: HubDeps): HubConnection {
         return;
       case "cockpit.action":
         try {
-          send({ type: "action.result", actionId: m.actionId, ok: true, output: await deps.cockpit.runAction(m.action) });
+          send({ type: "action.result", actionId: m.actionId, ok: true, output: await dedup.run(`action:${m.actionId}`, () => deps.cockpit.runAction(m.action)) });
         } catch (e) {
+          dedup.forget(`action:${m.actionId}`);
           send({ type: "action.result", actionId: m.actionId, ok: false, error: toWireError(e) });
         }
         return;
@@ -189,13 +221,18 @@ export function createHubConnection(deps: HubDeps): HubConnection {
       case "session.detach": return detach();
       case "session.loadEarlier": return onSession(m.sessionId, undefined, (h) => h.loadEarlier(m.before));
       case "session.submit":
-        return onSession(m.sessionId, m.clientSubmissionId, (h) => isQuit(m.text) ? quit(m.sessionId) : h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, ...(m.files === undefined ? {} : { files: m.files }), whenBusy: m.whenBusy }));
+        return onSession(m.sessionId, m.clientSubmissionId, async (h) => {
+          if (!isQuit(m.text)) return once(`submit:${m.sessionId}:${m.clientSubmissionId}`, () => h.submit({ clientSubmissionId: m.clientSubmissionId, text: m.text, images: m.images, ...(m.files === undefined ? {} : { files: m.files }), whenBusy: m.whenBusy }));
+          // nothing reaches the backend for /q, so the hub acknowledges it itself, a dedup replay included
+          await once(`submit:${m.sessionId}:${m.clientSubmissionId}`, () => quit(m.sessionId));
+          send({ type: "session.submitAck", sessionId: m.sessionId, clientSubmissionId: m.clientSubmissionId, queued: false });
+        });
       case "session.abort": return onSession(m.sessionId, undefined, (h) => h.abort());
       case "session.abortSubmission": return onSession(m.sessionId, undefined, (h) => h.abortSubmission(m.clientSubmissionId));
       case "session.compact": return onSession(m.sessionId, undefined, (h) => h.compact(m.instructions));
       case "session.configure": return onSession(m.sessionId, undefined, (h) => h.configure(m.change));
       case "session.listModels": return onSession(m.sessionId, undefined, (h) => h.listModels());
-      case "dialog.respond": return onSession(m.sessionId, undefined, (h) => h.respond(m.dialogId, m.response));
+      case "dialog.respond": return onSession(m.sessionId, m.dialogId, (h) => once(`dialog:${m.sessionId}:${m.dialogId}`, () => h.respond(m.dialogId, m.response)));
     }
   };
 
