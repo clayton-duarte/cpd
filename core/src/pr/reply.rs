@@ -148,7 +148,7 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         ports.clock.utc(),
         &target_of(&pull.repo, pull.number),
         "reply",
-        json!({"to": id_text, "body": text, "resolve_uncached": item.is_none()}),
+        payload(&id_text, &text, item.is_none()),
         Some(json!({"feedback_without": id_text})),
     )?;
     let out = queued(
@@ -160,4 +160,13 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
     )?;
     approval.consume()?;
     Ok(out)
+}
+
+/// The outbox payload of a reply; `resolve_uncached` is present only when true.
+pub(super) fn payload(to: &str, body: &str, resolve_uncached: bool) -> serde_json::Value {
+    let mut value = json!({"to": to, "body": body});
+    if resolve_uncached {
+        value["resolve_uncached"] = json!(true);
+    }
+    value
 }

@@ -54,3 +54,16 @@ fn reply_refuses_malformed_id_when_feedback_null() {
     assert_eq!(err.code(), ErrorCode::Usage);
     assert!(queued(&rig).is_empty());
 }
+
+#[test]
+fn reply_payload_omits_resolve_uncached_when_false() {
+    use serde_json::json;
+    assert_eq!(
+        super::reply::payload("T1", "Done", false),
+        json!({"to": "T1", "body": "Done"})
+    );
+    assert_eq!(
+        super::reply::payload("T1", "Done", true),
+        json!({"to": "T1", "body": "Done", "resolve_uncached": true})
+    );
+}
