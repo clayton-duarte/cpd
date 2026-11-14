@@ -710,3 +710,18 @@ it("the action button falls back to Curate then Dismiss", () => {
   expect(m.onAction).toHaveBeenCalledExactlyOnceWith({ kind: "inbox.dismiss", itemId: 2 });
   m.unmount();
 });
+
+it("empty inbox uses the Empty composition without actions", () => {
+  const m = render([]);
+  try {
+    expect(m.container.querySelector('[data-slot="empty"] > [data-slot="empty-header"] > [data-slot="empty-title"]')?.textContent).toBe("up to date, drink some water");
+  } finally { m.unmount(); }
+});
+
+it("filtered empty inbox preserves counts and uses the Empty composition", () => {
+  const m = render([row(1, "dialog", "red row", { urgency: "red" })]);
+  try {
+    click(m.container.querySelector('[data-tier-filter="delivery"]'));
+    expect(m.container.querySelector('[data-slot="empty"] > [data-slot="empty-header"] > [data-slot="empty-title"]')?.textContent).toBe("up to date, drink some water");
+  } finally { m.unmount(); }
+});
