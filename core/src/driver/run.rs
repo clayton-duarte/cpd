@@ -1467,7 +1467,16 @@ impl Driver {
             // A9 (hs-d680): a merged linear Attempt keeps the Lead worktree and the Lead Branch. A failed or
             // cancelled one resets the Lead Branch to its `base_sha` and leaves the tree clean (untracked files removed,
             // ignored files kept), then keeps the worktree.
-            if !merged {
+            // A Job stopped for `cpd job replace-test` keeps the Worker's commit on the Lead Branch (b63).
+            let replaced = !merged
+                && match self.stopped_for_replacement(target) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        result = result.and(Err(e));
+                        true
+                    }
+                };
+            if !merged && !replaced {
                 match self.linear_base_sha() {
                     Ok(Some(base_sha)) => {
                         if let Err(e) = reset_linear_lead_branch(
@@ -1494,6 +1503,12 @@ impl Driver {
                 append_error(tx, target, &e, self.config.watch.error_repeat())
             });
         }
+    }
+
+    fn stopped_for_replacement(&mut self, target: &Target) -> Result<bool, CpdError> {
+        let (plan, job) = (&self.plan, target.job.to_string());
+        self.store
+            .read(|c| crate::job::replace_test::stopped_for_replacement(c, plan, &job))
     }
 
     /// The `base_sha` the Attempt recorded at A2, for the A9 reset of a failed or cancelled linear Attempt.

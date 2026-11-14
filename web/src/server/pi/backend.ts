@@ -51,8 +51,16 @@ const REASON = {
   dialogs: "a question of a pi session cannot be answered from outside; it is shown read-only, rebuilt from the transcript",
 } as const;
 const IMAGE_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" } as const;
-function sanitizeFileName(name: string): string {
-  return name.replace(/[^A-Za-z0-9._-]/g, "_");
+function attachmentFileName(prefix: string, name: string): string {
+  // Supported Linux/macOS filesystems permit 255-byte components. The suffix is ASCII.
+  const room = 255 - Buffer.byteLength(prefix);
+  if (room < 1) throw new WebError("invalid_submission", "attachment storage prefix is too long");
+  const safe = name.replace(/[^A-Za-z0-9._-]/g, "_");
+  if (safe.length <= room) return prefix + safe;
+  const dot = safe.lastIndexOf(".");
+  const extension = dot > 0 ? safe.slice(dot) : "";
+  const suffix = extension.length < room ? safe.slice(0, room - extension.length) + extension : safe.slice(0, room);
+  return prefix + suffix;
 }
 const no = (reason: string): { supported: false; reason: string } => ({ supported: false, reason });
 const unsupported = (reason: string): WebError => new WebError("unsupported_capability", reason);
@@ -315,7 +323,7 @@ export function createPiBackend(deps: {
         if (input.text.trim() === "" && input.images.length === 0 && files.length === 0) throw new WebError("invalid_submission", "the message is empty");
         const stamp = `${deps.now()}-${randomUUID()}`;
         const imagePaths = input.images.map((im, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}.${IMAGE_EXT[im.mimeType]}`);
-        const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${sessionId}-${stamp}-${i}-${sanitizeFileName(f.name)}`);
+        const filePaths = files.map((f, i) => `${deps.attachmentsDir}/${attachmentFileName(`${sessionId}-${stamp}-${i}-`, f.name)}`);
         const markers: string[] = [];
         for (const p of imagePaths) markers.push(`[Attached image: ${p}]`);
         for (const p of filePaths) markers.push(`[Attached file: ${p}]`);

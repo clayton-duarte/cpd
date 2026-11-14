@@ -46,3 +46,67 @@ automatic resets, distributed orchestration and token-cost estimation.
 These mechanisms are reviewed software, not proof that an arbitrary agent will
 follow every prose rule. Tests establish accounting/portability behavior; User
 review and evidence-backed issues establish the judgment-dependent parts.
+
+
+Weekly allowance mode (2026-11-13): the official
+[Codex app-server](https://github.com/openai/codex/tree/main/codex-rs/app-server)
+and [protocol](https://github.com/openai/codex/tree/main/codex-rs/app-server-protocol)
+expose account login and rate-limit reads. Installed CLI 0.167.0-alpha.4 generated
+schemas and an authorized device-login experiment confirmed the 10,080-minute
+window may be primary or secondary, with usedPercent/reset and account/spend
+availability. Use those semantics rather than guessing cost from GitHub counts.
+An optional stdlib Python telemetry helper uses the official CLI with ephemeral
+credentials, leaving the Node/GitHub core unchanged for other agents/providers.
+No suitable generic account meter is assumed; unsupported CLI/provider data fails
+closed. Null cardinal caps require an explicit weekly policy, with a maximum
+60-second age, strict under-threshold stop, and a fresh check before writes.
+These are User policy choices and conservative implementation decisions, not
+claims of universal community consensus. Polling is not a cost reservation or a
+scheduler and cannot guarantee an exact final percentage.
+
+
+Reusable authentication correction (2026-11-13): official
+[Codex authentication](https://developers.openai.com/codex/auth) and
+[configuration reference](https://developers.openai.com/codex/config-reference)
+document `file`, `keyring`, `auto` and `ephemeral` stores. Cached ChatGPT tokens
+refresh automatically during use; `ephemeral` deliberately loses login when its
+process ends. The original memory-only experiment therefore cannot satisfy an
+unattended workflow across restarts. Add opt-in private reusable CLI state and
+one-shot reads, keeping the managed cloud login separate and refusing credentials
+inside Git. Prefer the OS credential store where the environment provides it;
+this headless cloud environment exposes no user secret-service bus. File storage
+is the official headless option, with private directory/file permissions. Tests
+restart the fake app-server in separate reader processes and verify no second
+device flow. They establish lifecycle behavior, not live token-refresh success.
+The cloud subscription's native model connection supplies no exposed account-meter
+tool; do not claim that being an OpenAI-hosted agent grants the workspace billing
+credentials. This correction follows the User's explicit demand to avoid repeated
+sign-ins; it supersedes treating ephemeral auth as the only supported reader mode.
+
+
+## Proactive pull-request upkeep
+
+A User correction exposed that CI/review checks alone can miss merge conflicts
+introduced by a changed base. Adopt read-only enumeration of all open attributed
+PRs at iteration start and after observed head/base changes, followed by conflict
+resolution and scoped validation on their existing branches. GitHub's
+[get pull request API](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)
+documents nullable `mergeable` and inspected head/base refs; pending computation
+requires another read. The [list API](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests)
+supports paginated open PRs. Consulted2026-11-13. This is an explicit operating
+requirement and API behavior, not a universal consensus claim. The command uses
+existing Node/gh infrastructure, makes no writes and adds no dependency,
+scheduler or automatic merge. Metadata is a snapshot, so CI/reviews and changed
+revisions must still be checked by the agent.
+
+
+Cross-process weekly authorization (2026-11-13): official app-server telemetry
+provides reset and duration; the existing immutable run supplies its start. Bind
+that start to `[reset - duration, reset)` using ordinary timestamp arithmetic.
+This enforces the existing no-automatic-rollover policy across fresh one-shot
+reader/guard processes without another credential store or local quota ledger.
+Require a run descriptor for weekly creation; preserve descriptor-free read-only
+inspection and count-only multiweek runs. Rejecting an old descriptor cannot
+prove a replacement descriptor was authorized: that remains a trusted operator
+and recorded User-decision boundary. This is a policy enforcement choice, not
+an industry-consensus claim. Existing in-process reset/freshness checks remain.

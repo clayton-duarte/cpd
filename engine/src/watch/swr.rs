@@ -342,6 +342,7 @@ fn jira_drain(
     machine: &mut Vec<Failure>,
 ) -> Result<(), CpdError> {
     jira::reopen_refused(cx.store, cx.home, now)?;
+    jira::discard_ended_ticketless(cx.store, now)?;
     while let Some(m) = outbox::claim_next(cx.store, now, "jira")? {
         let ExecOutcome::Failed { error } = source.execute(cx, &m) else {
             continue;

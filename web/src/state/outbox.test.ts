@@ -104,3 +104,25 @@ it("an entry sending when the socket dropped is resent with the same id", async 
   await outbox.onConnection("open");
   expect(sent).toEqual(["s"]);
 });
+
+it.each(["reject", "throw"])("keeps delivery working when storage load fails (%s)", async (failure) => {
+  const sent: string[] = [];
+  const outbox = createOutbox({ storage: {
+    load: () => { if (failure === "throw") throw new Error("denied"); return Promise.reject(new Error("denied")); },
+    put: async () => { throw new Error("denied"); }, remove: async () => { throw new Error("denied"); },
+  }, send: async (entry) => { sent.push(entry.id); return { ok: true }; }, now: () => "t" });
+  await outbox.enqueue(e("offline", "t"));
+  await outbox.onConnection("open");
+  await outbox.enqueue(e("online", "u"));
+  expect(sent).toEqual(["offline", "online"]);
+  expect(outbox.list()).toEqual([]);
+});
+
+it("continues in memory after a persistent write fails", async () => {
+  const outbox = createOutbox({ storage: { load: () => [], put: async () => { throw new Error("quota"); }, remove: async () => { throw new Error("quota"); } },
+    send: async () => ({ ok: false, error: "retry me" }), now: () => "t" });
+  await outbox.onConnection("open"); await outbox.enqueue(e("a", "t"));
+  expect(outbox.list()).toMatchObject([{ id: "a", state: "failed" }]);
+  await outbox.retry("a"); await outbox.discard("a");
+  expect(outbox.list()).toEqual([]);
+});

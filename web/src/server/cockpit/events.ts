@@ -57,7 +57,7 @@ export interface Extras {
 export interface CockpitService {
   start(): Promise<void>;
   stop(): void;
-  /** Resolves once the first `loadAll` has landed; rejects when the bounded retries are exhausted (air-n101). */
+  /** Resolves once the first `loadAll` has landed; rejects when stopped before ready or when bounded retries are exhausted (air-n101). */
   ready(): Promise<void>;
   snapshot(): CockpitSnapshot;
   selectedPlanId(): string | null;
@@ -101,19 +101,26 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
   const readyPromise = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   readyPromise.catch(() => undefined);
   const markReady = (): void => { if (!readyResolved) { readyResolved = true; resolveReady(); } };
-  const delay = (ms: number): Promise<void> => new Promise((resolve) => { scheduler.after(ms, resolve); });
+  let startupRetry: Disposable | null = null;
+  let resolveStopped: () => void = () => {};
+  const stoppedPromise = new Promise<void>((resolve) => { resolveStopped = resolve; });
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => {
+    startupRetry = scheduler.after(ms, () => { startupRetry = null; resolve(); });
+  });
   const loadInitial = async (): Promise<void> => {
     let attempt = 1;
-    for (;;) {
+    while (!stopped) {
       try {
-        const all = await readModel.loadAll(planId);
+        const all = await Promise.race([readModel.loadAll(planId), stoppedPromise]);
+        if (stopped || all === undefined) return;
         snap = all;
         lastCursor = all.tree.cursor;
         markReady();
         return;
       } catch (e) {
+        if (stopped) return;
         if (attempt >= LOAD_ATTEMPTS || !isTransientLoadError(e)) throw e;
-        await delay(Math.min(LOAD_RETRY_BASE_MS * 2 ** (attempt - 1), LOAD_RETRY_MAX_MS));
+        await Promise.race([delay(Math.min(LOAD_RETRY_BASE_MS * 2 ** (attempt - 1), LOAD_RETRY_MAX_MS)), stoppedPromise]);
         attempt += 1;
       }
     }
@@ -345,7 +352,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
 
   return {
     async start() {
-      if (started) return;
+      if (started || stopped) return;
       started = true;
       try {
         await loadInitial();
@@ -365,6 +372,12 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     ready: () => readyPromise,
     stop() {
       stopped = true;
+      startupRetry?.dispose(); startupRetry = null;
+      resolveStopped();
+      if (!readyResolved) {
+        readyResolved = true;
+        rejectReady(new WebError("internal", "cockpit stopped before startup completed", { reason: "stopped" }));
+      }
       stream?.stop();
       snapEmit?.dispose(); snapEmit = null;
       for (const s of procSubs) s.dispose();
