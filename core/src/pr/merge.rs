@@ -147,25 +147,7 @@ pub(super) fn merge_in(ports: &Ports, home: &CpdHome, args: MergeArgs) -> Result
         .with("repo", repo.as_str())
         .with("number", number));
     };
-    // The up-to-date gate (commands.md §9.10): a head that is behind the default branch is refused and the Workflow's
-    // update Job is queued to merge the default branch in, with the merge armed for when the checks pass again.
-    if let (Some(base), Some(default)) =
-        (e.row.base_ref.as_deref(), e.row.default_branch.as_deref())
-        && base == default
-    {
-        let contained = gh::head_contains_base(&*ports.runner, home.root(), &repo, default, &head)?;
-        if !contained {
-            poll::arm_for_behind_head(&mut store, home, &repo, number)?;
-            return Err(CpdError::new(
-                ErrorCode::HeadBehindMain,
-                "behind main, updated, waiting for gate".to_owned(),
-            )
-            .with("repo", repo.as_str())
-            .with("number", number)
-            .with("head", head.as_str())
-            .with("main", default));
-        }
-    }
+    // Behind main is not a refusal (b79): a clean head behind the default branch merges like any other.
     let mut method = merge_method(&mut store, &repo)?;
     if method.is_none() {
         // The settings cache is cold (air-n70): no refusal. A paused `github` endpoint refuses with the rate limit and
