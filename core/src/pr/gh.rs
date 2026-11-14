@@ -1343,7 +1343,7 @@ pub fn reply_to_uncached(
     node: &str,
     body: &str,
 ) -> Result<(), CpdError> {
-    let query = "query($node: ID!) { node(id: $node) { __typename ... on PullRequestReviewComment { fullDatabaseId replyTo { fullDatabaseId } url pullRequest { number repository { nameWithOwner } } } ... on PullRequestReviewThread { id pullRequest { number repository { nameWithOwner } } } ... on PullRequestReview { url pullRequest { number repository { nameWithOwner } } } } }";
+    let query = "query($node: ID!) { node(id: $node) { __typename ... on PullRequestReviewComment { fullDatabaseId replyTo { fullDatabaseId } url pullRequest { number repository { nameWithOwner } } } ... on PullRequestReviewThread { id comments(last: 1) { nodes { body } } pullRequest { number repository { nameWithOwner } } } ... on PullRequestReview { url pullRequest { number repository { nameWithOwner } } } } }";
     let (args, out) = graphql_with(runner, cwd, query, &[("node", node)])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let reply = Reply {
@@ -1369,7 +1369,17 @@ pub fn reply_to_uncached(
         )));
     }
     match target["__typename"].as_str() {
-        Some("PullRequestReviewThread") => reply_to_thread(runner, cwd, node, body).map(drop),
+        Some("PullRequestReviewThread") => {
+            if target["comments"]["nodes"]
+                .as_array()
+                .and_then(|nodes| nodes.last())
+                .and_then(|comment| comment["body"].as_str())
+                .is_some_and(|body| body.contains(comments::MARKER))
+            {
+                return Ok(());
+            }
+            reply_to_thread(runner, cwd, node, body).map(drop)
+        }
         Some("PullRequestReviewComment") => {
             // databaseId is a deprecated 32-bit Int. GitHub's BigInt may be encoded as a decimal string.
             let comment = target

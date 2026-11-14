@@ -1018,3 +1018,62 @@ fn uncached_reply_rest_timeout_is_retryable() {
         ExecOutcome::Retry { .. }
     ));
 }
+
+struct AcceptedReplyTimeout(std::sync::atomic::AtomicUsize);
+impl Handler for AcceptedReplyTimeout {
+    fn handle(&self, call: &Call) -> Reply {
+        let query = call
+            .args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("query="))
+            .unwrap_or("");
+        if query.contains("node(id:") {
+            assert!(query.contains("comments(last: 1)"), "{query}");
+            let comments = if self.0.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                vec![]
+            } else {
+                vec![json!({"body": crate::pr::comments::MARKER})]
+            };
+            return Reply::ok(&json!({"data": {"node": {"__typename": "PullRequestReviewThread", "comments": {"nodes": comments},
+                "pullRequest": {"number": 801, "repository": {"nameWithOwner": "acme/pay"}}}}}).to_string());
+        }
+        assert!(query.contains("addPullRequestReviewThreadReply"), "{query}");
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Reply::ok("{}").takes(Duration::from_secs(61))
+    }
+}
+
+#[test]
+fn uncached_reply_accepted_before_timeout_is_not_posted_again() {
+    let rig = rig();
+    let wire = Arc::new(AcceptedReplyTimeout(std::sync::atomic::AtomicUsize::new(0)));
+    let _ = (*rig.fakes.runner).clone().route("gh", wire.clone());
+    let mut store = store(&rig);
+    let id = super::github_write::enqueue(
+        &mut store,
+        now(&rig),
+        KEY,
+        "reply",
+        json!({"to": "PRRT_one", "body": "Fixed.", "resolve_uncached": true}),
+        None,
+    )
+    .unwrap();
+    let mutation = outbox::get(&mut store, id).unwrap().unwrap();
+    let config = Config::load(&rig.home).unwrap();
+    let mut cx = Cx {
+        store: &mut store,
+        ports: &rig.fakes.ports,
+        home: &rig.home,
+        config: &config,
+    };
+    assert!(matches!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Retry { .. }
+    ));
+    rig.sql("UPDATE pull_requests SET feedback = '[]' WHERE number = 801");
+    assert_eq!(
+        GithubSource::default().execute(&mut cx, &mutation),
+        ExecOutcome::Done
+    );
+    assert_eq!(wire.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

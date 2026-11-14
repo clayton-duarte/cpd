@@ -447,3 +447,5 @@ rate-limit policy; those need current response metadata and separate research.
 Tests use fake provider replies and virtual time, including expired/missing
 resets, an exactly exhausted grace period, valid future resets, preserved PR
 rows and no calls during the pause.
+
+An uncached review-thread reply reads the thread’s latest comment before writing. If an earlier attempt succeeded but its response was lost, the stored reply marker settles the retried mutation without posting again.
