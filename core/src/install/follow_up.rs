@@ -239,13 +239,25 @@ impl FollowUps<'_> {
             // off), a detached waiter starts the engine once the lock frees, so the install never leaves it down.
             let handoff = if self.install.lock_wait >= super::DEFAULT_LOCK_WAIT {
                 write_install_state(self.ports, &self.install.cpd_home, "restarting");
-                if self.cpd(&WAITER_ARGS).ok() {
-                    "; a detached waiter starts it when the lock frees"
+                let handed = self.cpd(&WAITER_ARGS);
+                if handed.ok() {
+                    "; a detached waiter starts it when the lock frees".to_owned()
                 } else {
-                    "; the restart waiter could not be started: run cpd watch --ensure"
+                    let reason = format!(
+                        "the restart waiter could not be started: {} {}",
+                        describe(&handed.stdout),
+                        handed.stderr
+                    );
+                    let _ = record_install_state(
+                        self.ports,
+                        &self.install.cpd_home,
+                        "failed",
+                        Some(&reason),
+                    );
+                    format!("; {reason}: run cpd watch --ensure")
                 }
             } else {
-                ""
+                String::new()
             };
             self.fail(format!(
                 "the old engine still holds {} after {}s: it was told to stop and has not; the new engine was not started{handoff}",

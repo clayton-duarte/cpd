@@ -1122,3 +1122,35 @@ fn expired_restart_waiter_records_failure_without_ensuring_the_old_engine() {
         .unwrap();
     assert!(state.alert().unwrap().contains("timed out"));
 }
+
+#[test]
+fn failed_waiter_handoff_records_failure_with_launch_diagnostics() {
+    let rig = Rig::with(Script {
+        kill: Kill::HoldsFor(Duration::from_secs(600)),
+        ..Script::default()
+    });
+    rig.running_old_engine();
+    let _ = (*rig.fakes.runner).clone().once(
+        rig.installed_cpd().to_str().unwrap(),
+        |call| call.args == super::follow_up::WAITER_ARGS,
+        Reply::exit(1, "", "cannot open restart-waiter.log"),
+    );
+    let run = rig.run();
+    assert_ne!(run.exit, 0);
+    assert!(
+        run.stderr.contains("cannot open restart-waiter.log"),
+        "{}",
+        run.stderr
+    );
+    let state: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(rig.install.cpd_home.run_dir().join("cpd-install.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(state["status"], "failed");
+    assert!(
+        state["reason"]
+            .as_str()
+            .unwrap()
+            .contains("cannot open restart-waiter.log")
+    );
+}
