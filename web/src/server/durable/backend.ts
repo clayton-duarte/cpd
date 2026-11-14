@@ -351,6 +351,7 @@ export function createDurableBackend(deps: {
         client.onClose((error) => {
           if (gone !== null) return;
           gone = error instanceof WebError ? error : new WebError("host_disconnected", "durable host connection closed");
+          if (!ready) { snapshotError = gone; snapshotSeen?.(); }
           fail(gone);
         }),
       );
@@ -379,6 +380,7 @@ export function createDurableBackend(deps: {
       } catch (e) {
         modelsReason = `model list failed: ${e instanceof Error ? e.message : String(e)}`;
       }
+      if (gone !== null) return abortAttach(gone);
       const cwd = client.welcome.cwd;
       try {
         const name = await deps.git.branch(cwd);
@@ -387,6 +389,7 @@ export function createDurableBackend(deps: {
         branch = unknown(`git branch failed: ${e instanceof Error ? e.message : String(e)}`);
       }
 
+      if (gone !== null) return abortAttach(gone);
       const initial = footer();
       lastFooter = JSON.stringify(initial);
       send({ type: "session.attached", sessionId, capabilities, title: session.ref.title, meta: { ref: session.ref, footer: initial } });

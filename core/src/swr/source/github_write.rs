@@ -301,22 +301,6 @@ impl GithubSource {
                     Ok(None) => return self.wait_for_repo(cx, repo),
                     Err(e) => return retry(&e),
                 };
-                // The up-to-date re-check (commands.md §9.10): a head that no longer contains the default branch is
-                // not merged. The intent stays armed and the Workflow's update Job is queued.
-                match uptodate(cx, runner, cwd, repo, number, &head) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        if let Err(e) =
-                            crate::pr::poll::arm_for_behind_head(cx.store, cx.home, repo, number)
-                        {
-                            return failed(e.message());
-                        }
-                        // Handled: the update Job is queued and the intent stays armed; no error Event.
-                        // Not Done: the merge did not run; the drain re-checks the head after RETRY.
-                        return ExecOutcome::Retry { after: RETRY };
-                    }
-                    Err(e) => return retry(&e),
-                }
                 match gh::merge_pr(runner, cwd, repo, number, method, &head) {
                     Ok(()) => ExecOutcome::Done,
                     Err(e) => failed(refusal(&e)),
@@ -555,34 +539,6 @@ impl GithubSource {
         };
         sent.map_or_else(|e| retry(&e), |_| ExecOutcome::Done)
     }
-}
-
-/// Whether the merge op's `head` still contains the default branch's head (commands.md §9.10): `true` when the pull
-/// request's `base_ref` is not its default branch (nothing to compare) or the fresh compare says it does. The compare
-/// is a read through `crate::pr::gh` (the module `pr` owns); a failure is the caller's to retry.
-fn uptodate(
-    cx: &mut Cx<'_>,
-    runner: &dyn crate::host::runner::Runner,
-    cwd: &Path,
-    repo: &str,
-    number: i64,
-    head: &str,
-) -> Result<bool, CpdError> {
-    let row: Option<(Option<String>, Option<String>)> = cx.store.read(|c| {
-        Ok(c.query_row(
-            "SELECT base_ref, default_branch FROM pull_requests WHERE repo = ?1 AND number = ?2",
-            rusqlite::params![repo, number],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?)
-    })?;
-    let Some((Some(base), Some(default))) = row else {
-        return Ok(true);
-    };
-    if base != default {
-        return Ok(true);
-    }
-    crate::pr::poll::head_contains_base(runner, cwd, repo, &default, head)
 }
 
 /// GitHub's refusal text of a failed write: its stderr when it printed one.

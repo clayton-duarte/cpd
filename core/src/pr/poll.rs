@@ -1410,9 +1410,6 @@ pub(super) enum Trigger {
     /// GitHub repointed the Workflow from a base Workflow's Lead Branch to the default branch, and the default
     /// branch holds commits the Lead Branch lacks without a conflict.
     BaseMerged,
-    /// `pr merge` (or the drain) found the head behind the default branch: merge `origin/<default branch>` in
-    /// unconditionally (commands.md §9.10). No ahead decision: a head behind the default branch always merges it in.
-    Behind,
 }
 
 /// Queues Workflow `key`'s `update` Job for `trigger` (§3.7 E5, hs-d794, hs-n617), unless the Workflow already has one `queued`
@@ -1432,7 +1429,6 @@ pub(super) fn queue_update_for(
         Trigger::Conflict => Cause::Conflict,
         Trigger::BaseMerged if ahead => Cause::BaseMerged,
         Trigger::BaseMerged => return Ok(None),
-        Trigger::Behind => Cause::Behind,
     };
     let archived: bool = tx.query_row(
         "SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1",
@@ -1623,56 +1619,6 @@ fn armed_reads(
         }
     }
     Ok(out)
-}
-
-/// Whether `head` contains the current head of `base`, through GitHub's compare API (`crate::pr::gh`, which `pr` owns):
-/// the seam `swr::source::github_write` uses for the drain's up-to-date re-check (commands.md §9.10).
-pub(crate) fn head_contains_base(
-    runner: &dyn crate::host::runner::Runner,
-    cwd: &Path,
-    repo: &str,
-    base: &str,
-    head: &str,
-) -> Result<bool, CpdError> {
-    gh::head_contains_base(runner, cwd, repo, base, head)
-}
-
-/// Arms `repo#number`'s merge intent and queues its open Workflow's `update` Job for the `behind` cause (commands.md
-/// §9.10): `pr merge`'s refusal and the drain's re-check both call it, in one transaction. A pull request no open Workflow
-/// points at is only armed: there is no Job to queue. The Job's Tier is the config's `worker_tier`, as `workflow add`
-/// gives its `open` Job; `home` is the caller's.
-pub(crate) fn arm_for_behind_head(
-    store: &mut Store,
-    home: &crate::home::CpdHome,
-    repo: &str,
-    number: i64,
-) -> Result<(), CpdError> {
-    let target: Option<(String, String)> = store.read(|c| {
-        Ok(c.query_row(
-            "SELECT w.plan, w.key FROM workflows w JOIN pull_requests q ON q.id = w.pull_request\n             WHERE q.repo = ?1 AND q.number = ?2 AND w.status = 'open'",
-            rusqlite::params![repo, number],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?)
-    })?;
-    let workflow = match target {
-        Some((plan, key)) => {
-            let tier = crate::config::Config::load(home)?.worker_tier;
-            Some((PlanId::parse(&plan)?, WorkflowKey::parse(&key)?, tier))
-        }
-        None => None,
-    };
-    store.write(COMMAND, |tx| {
-        tx.execute(
-            "UPDATE pull_requests SET merge_armed = 1 WHERE repo = ?1 AND number = ?2",
-            rusqlite::params![repo, number],
-        )?;
-        if let Some((plan, key, tier)) = &workflow {
-            queue_update_for(tx, plan, key, Trigger::Behind, true, *tier)?;
-        }
-        Ok(())
-    })?;
-    Ok(())
 }
 
 #[cfg(test)]

@@ -4,7 +4,8 @@ import { PI_SEND_TEXT_MAX } from "../../protocol/domain.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
 import type { ServerMessage, SessionServerMessage } from "../../protocol/wire.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
-import { createPiBackend } from "./backend.ts";
+import { createPiBackend, isBusy } from "./backend.ts";
+import type { JsonlFacts } from "./jsonl.ts";
 import type { GitBoundary } from "../../protocol/runtime.ts";
 import type { Cpd } from "../cockpit/cli.ts";
 import type { SessionHandle } from "../hub/connection.ts";
@@ -63,8 +64,10 @@ class FakeFile implements FileBoundary {
 class FakeWatch implements WatchBoundary {
   disposed = 0;
   started = 0;
-  watch(): Disposable {
+  fire: () => void = () => undefined;
+  watch(_path?: string, onChange?: () => void): Disposable {
     this.started += 1;
+    if (onChange) this.fire = onChange;
     return { dispose: () => void (this.disposed += 1) };
   }
 }
@@ -343,4 +346,94 @@ describe("pi backend", () => {
     expect(s.scheduler.pending()).toBe(0);
     await s.handle.dispose();
   });
+});
+
+describe("busy follows the current session state", () => {
+  it("a session stopped at attach shows busy once cpd reports it working and the transcript grows", async () => {
+    const s = await attached({ ref: { state: "stopped" } });
+    expect(find(s.out, "session.status").busy).toBe(false);
+    s.cpd.show = { ...s.cpd.show, state: "working" };
+    s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n`);
+    const before = s.out.length;
+    s.watch.fire();
+    await flush();
+    const statuses = s.out.slice(before).filter((m) => m.type === "session.status") as Array<{ busy: boolean }>;
+    expect(statuses.map((m) => m.busy)).toEqual([true]);
+    await s.handle.dispose();
+  });
+});
+
+describe("transcript reset", () => {
+  it("discards an append queued before a reset instead of applying it to the new window", async () => {
+    const s = await attached();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = s.cpd.json.bind(s.cpd);
+    let armed = true;
+    s.cpd.json = async (args) => {
+      if (args[1] === "show" && armed) {
+        armed = false;
+        await gate;
+      }
+      return original(args);
+    };
+    s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n`);
+    s.watch.fire();
+    await flush();
+    s.fs.bytes = enc.encode(`${userLine(9)}\n`);
+    s.watch.fire();
+    await flush();
+    const windows = s.out.filter((m) => m.type === "session.window");
+    expect(windows.length).toBeGreaterThan(1);
+    release();
+    await flush();
+    const appended = s.out.filter((m) => m.type === "session.append").flatMap((m) => m.items.map((i) => i.id));
+    expect(appended).not.toContain("u:m1");
+    await s.handle.dispose();
+  });
+});
+
+describe("isBusy", () => {
+  const facts = { lastRole: "toolResult" } as JsonlFacts;
+  it("isBusy is false when the session is stopped and the transcript ends on a toolResult", () => {
+    expect(isBusy(facts, "stopped")).toBe(false);
+  });
+  it("isBusy is still true when the session is working and the transcript ends on a toolResult", () => {
+    expect(isBusy(facts, "working")).toBe(true);
+  });
+});
+
+it("queued appends settle busy only after the matching final transcript content is emitted", async () => {
+  const s = await attached();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const original = s.cpd.json.bind(s.cpd);
+  let armed = true;
+  s.cpd.json = async (args) => {
+    if (args[1] === "show" && armed) { armed = false; await gate; }
+    return original(args);
+  };
+  const before = s.out.length;
+  s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n`);
+  s.watch.fire(); await flush();
+  const final = JSON.stringify({ type: "message", id: "final", message: { role: "assistant", stopReason: "stop", timestamp: 123, content: [{ type: "text", text: "final answer" }] } });
+  s.fs.bytes = enc.encode(`${userLine(0)}\n${userLine(1)}\n${final}\n`);
+  s.watch.fire(); await flush();
+  release(); await flush(); await flush();
+  const events = s.out.slice(before);
+  const answer = events.findIndex((m) => m.type === "session.append" && JSON.stringify(m.items).includes("final answer"));
+  const settled = events.findIndex((m) => m.type === "session.status" && !m.busy);
+  expect(answer).toBeGreaterThanOrEqual(0);
+  expect(settled).toBeGreaterThan(answer);
+  await s.handle.dispose();
+});
+
+it("the first recorded transcript uses the engine state returned by its polling read", async () => {
+  const s = await attached({ ref: { state: "stopped", file: undefined } });
+  await s.handle.submit({ clientSubmissionId: "first", text: "hello", images: [], whenBusy: "followUp" });
+  s.cpd.show = { ...s.cpd.show, state: "working", file: FILE };
+  s.scheduler.advance(250); await flush();
+  const status = s.out.filter((m) => m.type === "session.status").at(-1);
+  expect(status).toMatchObject({ busy: true });
+  await s.handle.dispose();
 });
