@@ -201,14 +201,15 @@ pub fn run(engine: &mut Engine) {
 }
 
 pub fn resolve_checkout_path(home: &CpdHome) -> Option<PathBuf> {
+    // The home's own checkout wins over the one `HOME` names, so a home under test never reaches the user's.
+    if home.root().join("web/src/server/serve.ts").exists() {
+        return Some(home.root().to_path_buf());
+    }
     if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from)
         && let Ok(checkout) = read_root(&user_home)
         && checkout.join("web/src/server/serve.ts").exists()
     {
         return Some(checkout);
-    }
-    if home.root().join("web/src/server/serve.ts").exists() {
-        return Some(home.root().to_path_buf());
     }
     None
 }
@@ -380,6 +381,15 @@ fn is_same_service(kind: ServiceKind, cmd: &str) -> bool {
     }
 }
 
+/// The pid `run/webui.pid` names: the prod WebUI an install prepared.
+fn prepared_webui_pid(home: &CpdHome) -> Option<u32> {
+    std::fs::read_to_string(home.run_dir().join("webui.pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError> {
     let port = kind.port();
 
@@ -391,6 +401,17 @@ fn start_service(engine: &mut Engine, kind: ServiceKind) -> Result<(), CpdError>
             .is_some_and(|cmd| is_same_service(kind, cmd));
 
         if can_takeover {
+            // The holder is the WebUI an install prepared (run/webui.pid names it, pro-d592): adopt it as the
+            // engine's own, and neither signal it nor spawn a second one.
+            if prepared_webui_pid(&engine.home) == Some(holder.pid) {
+                engine.log.line(&format!(
+                    "webui: adopted port holder PID {} for {}",
+                    holder.pid,
+                    kind.name()
+                ));
+                engine.webui.services.entry(kind).or_default().pid = Some(Pid(holder.pid));
+                return Ok(());
+            }
             let cmd = cmd_opt.as_deref().unwrap_or("");
             // Send SIGTERM to holder
             let holder_pid = Pid(holder.pid);

@@ -4,7 +4,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 use time::macros::datetime;
 
-use super::model::{Condition, Kind, reconcile};
+use super::model::{self, Condition, Kind, reconcile};
 use super::rules::{Team, conditions_with};
 use super::team::{GhPr, GhState, Lookup, Review};
 use crate::error::CpdError;
@@ -275,4 +275,41 @@ fn followup_item_carries_reviewed_oid() {
     open(&mut store, &items);
     assert_eq!(column(&mut store, "reviewed_oid").as_deref(), Some(S_REV));
     assert_eq!(column(&mut store, "head_oid").as_deref(), Some(S_HEAD));
+}
+
+fn write_install_state(home: &CpdHome, json: &str) {
+    std::fs::create_dir_all(home.run_dir()).unwrap();
+    std::fs::write(home.run_dir().join("cpd-install.json"), json).unwrap();
+}
+
+#[test]
+fn engine_down_since_from_stop_stamp() {
+    let (_dir, home, _store) = store();
+    assert_eq!(model::engine_down_since(&home).unwrap(), None, "no stamp");
+    std::fs::create_dir_all(home.run_dir()).unwrap();
+    std::fs::write(model::engine_stop_stamp(&home), "2026-01-01T12:34:56Z\n").unwrap();
+    assert_eq!(
+        model::engine_down_since(&home).unwrap().as_deref(),
+        Some("2026-01-01T12:34:56Z")
+    );
+}
+
+#[test]
+fn engine_restart_reason_is_install_while_restarting() {
+    let (_dir, home, _store) = store();
+    assert_eq!(
+        model::engine_restart_reason(&home).unwrap(),
+        None,
+        "no state"
+    );
+    write_install_state(&home, r#"{"status":"ok","since":"2026-01-01T12:00:00Z"}"#);
+    assert_eq!(model::engine_restart_reason(&home).unwrap(), None, "ok");
+    write_install_state(
+        &home,
+        r#"{"status":"restarting","since":"2026-01-01T12:00:00Z"}"#,
+    );
+    assert_eq!(
+        model::engine_restart_reason(&home).unwrap(),
+        Some("install")
+    );
 }
