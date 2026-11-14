@@ -562,14 +562,15 @@ export function createDurableBackend(deps: {
         },
         async dispose() {
           if (disposed) return;
+          disposed = true;
+          for (const s of subscriptions) s.dispose();
           try {
             if (gone === null) await client.detach();
           } catch {
-            // best effort: the host may already be closing the socket
+            // best effort: the host may already be closing or silent
+          } finally {
+            client.close();
           }
-          disposed = true;
-          for (const s of subscriptions) s.dispose();
-          client.close();
         },
       };
       return handle;

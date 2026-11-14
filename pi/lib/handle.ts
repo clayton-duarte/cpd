@@ -182,5 +182,9 @@ async function deliverSessionMessage(host: Host, r: Run, ev: EventOf<"session-me
     }
   }
   if (host.run !== r) return;
+  if (from === null && clearTrip(host, r)) {
+    deliverOnce(host, r, ev, sessionMessage(ev, r.id, sender), r.totalCalls > 0 ? STEER(true) : FOLLOW_UP(true)); // a User message ends the trip; it steers a turn that has made tool calls, else starts one, like a TUI prompt (§15.15 L6)
+    return;
+  }
   deliverOnce(host, r, ev, sessionMessage(ev, r.id, sender), STEER(true), "tripped"); // pro-d400, docs/commands.md §15.7a: a User message starts the first turn
 }

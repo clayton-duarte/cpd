@@ -343,6 +343,10 @@ fn decide(
             &after.kind,
         )?;
     }
+    // A docs Job may not be made, or moved into a Workflow, where the policy sets `workflow.local_docs = false`.
+    if after.kind == "docs" && (moved || after.kind != before.kind) {
+        super::add::check_docs_allowed(conn, home, plan, after.workflow_str())?;
+    }
     // A Job that changes Workflow keeps none of its old needs: they are checked against the new Workflow.
     if let Some(needs) = &edits.needs {
         check_needs_known(&all, plan, needs)?;

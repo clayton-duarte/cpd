@@ -7,6 +7,7 @@ const fixture = { version: 1, scope: "sample-qa", timezone: "America/Toronto", l
 const { MARKER, REPOS, batchMarker, day, run, status } = createGuard(fixture);
 
 const now = new Date("2026-11-13T17:00:00Z");
+const weeklyRun = { version: 1, id: "weekly", started_at: now.toISOString(), limits: null, authorization: "Synthetic User weekly approval" };
 const item = (number, extra = {}) => ({ number, created_at: now.toISOString(), body: MARKER, ...extra });
 
 test("Toronto midnight and both daylight-saving transitions", () => {
@@ -241,4 +242,232 @@ test("run creation marks intent atomically and independently refuses each exhaus
   assert.equal(posts, 1);
   const exhausted = { ...descriptor, limits: { issues: 0, prs: 1 } };
   assert.equal(guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason", null, exhausted).exit, 3);
+});
+
+test("weekly threshold replaces cardinal caps without erasing audit counts", () => {
+  const sample = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+    remaining_percent: 50, resets_at: "2026-11-16T00:14:45Z", ordinary_usage_allowed: true, spend_control_reached: false };
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  for (const percent of [49, 50, 51]) {
+    const guard = createGuard(config, { clock: () => now, readUsage: () => ({ ...sample, remaining_percent: percent }) });
+    const s = guard.status(() => [item(1)], now, null, weeklyRun);
+    assert.equal(s.can_create_issue, percent >= 50);
+    assert.equal(s.can_create_pr, percent >= 50);
+    assert.deepEqual(s.remaining, { issues: null, prs: null });
+    assert.deepEqual(s.counts, { issues: 2, prs: 0 });
+  }
+  const capped = createGuard({ ...config, limits: { issues: 0, prs: 1 } }, { clock: () => now, readUsage: () => sample });
+  assert.equal(capped.status(() => [], now, null, weeklyRun).can_create_issue, false);
+  assert.equal(capped.status(() => [], now, null, weeklyRun).can_create_pr, true);
+  const descriptor = { version: 1, id: "weekly", started_at: now.toISOString(), limits: null, authorization: "User: weekly policy" };
+  assert.equal(createGuard(config, { clock: () => now, readUsage: () => sample }).status(() => [], now, null, descriptor).run.remaining, null);
+});
+
+test("weekly policy rejects missing policy, unsafe freshness and malformed telemetry before GitHub", () => {
+  assert.throws(() => createGuard({ ...fixture, limits: null }), /require/);
+  for (const weekly_allowance of [null, {}, { min_remaining_percent: 0, max_age_seconds: 60 },
+    { min_remaining_percent: 50, max_age_seconds: 61 }, { min_remaining_percent: 50, max_age_seconds: 0 }]) {
+    assert.throws(() => createGuard({ ...fixture, weekly_allowance }));
+  }
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  const sample = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+    remaining_percent: 70, resets_at: "2026-11-16T00:14:45Z", ordinary_usage_allowed: true, spend_control_reached: false };
+  const noApi = () => assert.fail("invalid telemetry must fail before GitHub");
+  for (const change of [{ sampled_at: "2026-11-13T16:58:59Z" }, { sampled_at: "2026-11-13T17:00:01Z" }, { sampled_at: null },
+    { resets_at: now.toISOString() }, { resets_at: "2027-01-01T00:00:00Z" }, { remaining_percent: NaN }, { remaining_percent: -1 },
+    { window_minutes: 300 }, { limit_id: "other" }, { ordinary_usage_allowed: null }, { spend_control_reached: null }, { token: "forbidden" }]) {
+    assert.throws(() => createGuard(config, { clock: () => now, readUsage: () => ({ ...sample, ...change }) }).status(noApi, now));
+  }
+  assert.throws(() => createGuard(config, { clock: () => now, readUsage: () => { throw new Error("reader unavailable"); } }).status(noApi, now), /reader unavailable/);
+  for (const change of [{ ordinary_usage_allowed: false }, { spend_control_reached: true }]) {
+    assert.equal(createGuard(config, { clock: () => now, readUsage: () => ({ ...sample, ...change }) }).status(() => [], now, null, weeklyRun).can_create_pr, false);
+  }
+});
+
+test("status refreshes weekly usage after pagination before authorizing work", () => {
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 1 } };
+  for (const scenario of ["stale", "revoked", "fresh", "rounding", "missing", "reset"]) {
+    let current = now.getTime(), reads = 0;
+    const initial = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+      remaining_percent: 70, resets_at: new Date(current + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false };
+    const guard = createGuard(config, { clock: () => new Date(current), readUsage: () => {
+      if (++reads === 1 || scenario === "stale") return initial;
+      if (scenario === "missing") throw new Error("reader unavailable");
+      return { ...initial, sampled_at: new Date(current).toISOString(),
+        remaining_percent: scenario === "revoked" ? 49 : 70,
+        resets_at: scenario === "reset" ? new Date(current + 2 * 86400_000).toISOString() : scenario === "rounding" ? new Date(Date.parse(initial.resets_at) + 1000).toISOString() : initial.resets_at };
+    } });
+    const api = () => { current += 1250; return []; };
+    if (["stale", "missing", "reset"].includes(scenario)) assert.throws(() => guard.run(["status"], api, undefined, null, weeklyRun), /stale|unavailable|window/);
+    else {
+      const result = guard.run(["status"], api, undefined, null, weeklyRun);
+      assert.equal(result.result.can_create_issue, ["fresh", "rounding"].includes(scenario));
+      assert.equal(result.result.weekly_allowance.remaining_percent, ["fresh", "rounding"].includes(scenario) ? 70 : 49);
+    }
+    assert.equal(reads, 2);
+  }
+});
+
+test("creation refreshes usage through status and immediately before POST", () => {
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  const sample = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+    remaining_percent: 70, resets_at: new Date(now.getTime() + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false };
+  for (const changedRead of [2, 3]) for (const scenario of ["threshold", "stale", "fresh", "reset"]) {
+    let reads = 0, posts = 0;
+    const guard = createGuard(config, { clock: () => now, readUsage: () => {
+      ++reads;
+      if (reads < changedRead) return sample;
+      return { ...sample, remaining_percent: scenario === "threshold" ? 49 : 70,
+        sampled_at: scenario === "stale" ? new Date(now.getTime() - 61000).toISOString() : sample.sampled_at,
+        resets_at: scenario === "reset" ? new Date(now.getTime() + 2 * 86400_000).toISOString() : sample.resets_at };
+    } });
+    const api = (args) => { if (args.includes("POST")) { posts++; return { number: 1 }; } return []; };
+    if (["stale", "reset"].includes(scenario)) assert.throws(() => guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason", null, weeklyRun), /stale|window/);
+    else assert.equal(guard.run(["issue", REPOS[0], "title", "body"], api, () => "reason", null, weeklyRun).exit, scenario === "fresh" ? 0 : 3);
+    assert.equal(posts, scenario === "fresh" ? 1 : 0);
+    assert.equal(reads, scenario === "fresh" ? 3 : changedRead);
+  }
+});
+
+test("PR upkeep reports conflicted owned PRs and ignores unmarked ones without writing", () => {
+  const guard = createGuard(fixture, { clock: () => now });
+  const result = guard.run(["pr-status"], (args) => {
+    assert.equal(args.length, 1, "all calls are GETs");
+    if (args[0].includes("/issues?")) return [];
+    if (args[0].includes("/pulls?")) return args[0].includes(REPOS[0])
+      ? [{ number: 1, body: MARKER }, { number: 2, body: "another operator" }] : [];
+    assert.equal(args[0], `repos/${REPOS[0]}/pulls/1`);
+    return { number: 1, state: "open", body: MARKER, title: "owned fix", html_url: "https://example.test/pr/1",
+      head: { sha: "a".repeat(40), ref: "qa/fix" }, base: { sha: "b".repeat(40), ref: "main" }, mergeable: false };
+  });
+  assert.equal(result.exit, 4);
+  assert.equal(result.result.pull_requests.length, 1);
+  assert.equal(result.result.pull_requests[0].mergeability, "conflicted");
+  assert.equal(result.result.pull_requests[0].head_sha, "a".repeat(40));
+});
+
+const prInfo = (number, mergeable = true, extra = {}) => ({ number, state: "open", body: MARKER,
+  head: { sha: "a".repeat(40), ref: `qa/${number}` }, base: { sha: "b".repeat(40), ref: "main" }, mergeable, ...extra });
+
+test("PR upkeep paginates all open attributed PRs across repositories and older runs", () => {
+  const calls = [];
+  const guard = createGuard(fixture, { clock: () => now });
+  const checked = guard.run(["pr-status"], ([path]) => {
+    calls.push(path);
+    if (path.includes("/issues?")) return [];
+    if (path.includes("/pulls?")) {
+      if (path.includes(REPOS[1])) return [{ number: 3, body: MARKER }];
+      return path.endsWith("page=1")
+        ? Array.from({ length: 100 }, (_, i) => ({ number: i + 1, body: i === 0 ? `${MARKER}\nold run` : null }))
+        : [{ number: 101, body: `${MARKER}\nold run` }];
+    }
+    const number = Number(path.split("/").at(-1));
+    return prInfo(number, number === 101 ? null : true);
+  });
+  assert.equal(checked.exit, 4);
+  assert.deepEqual(checked.result.pull_requests.map((p) => [p.repository, p.number, p.mergeability]),
+    [[REPOS[0], 1, "mergeable"], [REPOS[0], 101, "pending"], [REPOS[1], 3, "mergeable"]]);
+  assert.ok(calls.some((p) => p.includes("/pulls?") && p.endsWith("page=2")));
+  assert.ok(!calls.some((p) => p.endsWith("/pulls/2")), "unmarked PRs are not inspected");
+});
+
+test("mergeable PRs pass while PRs closed or unmarked during inspection leave the active set", () => {
+  const guard = createGuard(fixture, { clock: () => now });
+  const result = guard.prStatus(([path]) => {
+    if (path.includes("/issues?")) return [];
+    if (path.includes("/pulls?")) return [{ number: 1, body: MARKER }, { number: 2, body: MARKER }, { number: 3, body: MARKER }];
+    const number = Number(path.split("/").at(-1));
+    return prInfo(number, true, number === 2 ? { state: "closed" } : number === 3 ? { body: null } : {});
+  });
+  assert.equal(result.exit, 0);
+  assert.equal(result.result.pull_requests.length, 2, "only the active owned PR in each repo remains");
+  assert.equal(result.result.checked_at, now.toISOString());
+});
+
+test("PR upkeep fails closed on malformed metadata, API failures and repeated pagination", () => {
+  const guard = createGuard(fixture, { clock: () => now });
+  for (const info of [null, {}, prInfo(2), prInfo(1, "true"), { ...prInfo(1), mergeable: undefined }, prInfo(1, true, { head: {} })]) {
+    assert.throws(() => guard.prStatus(([path]) => {
+      if (path.includes("/issues?")) return [];
+      if (path.includes("/pulls?")) return [{ number: 1, body: MARKER }];
+      return info;
+    }), /metadata|mergeability/);
+  }
+  assert.throws(() => guard.prStatus(([path]) => {
+    if (path.includes("/issues?")) return [];
+    throw new Error("PR API unavailable");
+  }), /unavailable/);
+  assert.throws(() => guard.prStatus(([path]) => path.includes("/issues?") ? [] : {}), /open PR response/);
+  const repeated = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, body: null }));
+  assert.throws(() => guard.prStatus(([path]) => path.includes("/issues?") ? [] : repeated), /pagination made no progress/);
+});
+
+test("PR upkeep checks fresh allowance before and after PR metadata reads", () => {
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  const initial = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+    remaining_percent: 70, resets_at: "2026-11-16T00:14:45Z", ordinary_usage_allowed: true, spend_control_reached: false };
+  for (const scenario of ["blocked", "revoked", "stale", "reset"]) {
+    let sample = { ...initial, remaining_percent: scenario === "blocked" ? 49 : 70 };
+    let current = now.getTime(), prCalls = 0;
+    const guard = createGuard(config, { clock: () => new Date(current), readUsage: () => sample });
+    const api = ([path]) => {
+      if (path.includes("/issues?")) return [];
+      prCalls++;
+      if (scenario === "revoked") sample = { ...sample, remaining_percent: 49 };
+      if (scenario === "stale") current += 61_000;
+      if (scenario === "reset") sample = { ...sample, resets_at: "2026-11-17T00:14:45Z" };
+      return [];
+    };
+    if (["stale", "reset"].includes(scenario)) assert.throws(() => guard.prStatus(api), /stale|window changed/i);
+    else {
+      const result = guard.prStatus(api);
+      assert.equal(result.exit, 3);
+      assert.equal(result.result.can_create_pr, false);
+    }
+    if (scenario === "blocked") assert.equal(prCalls, 0);
+  }
+});
+
+test("weekly creation needs an anchored run while standalone inspection remains available", () => {
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  const sample = { version: 1, source: "codex-app-server", sampled_at: now.toISOString(), limit_id: "codex", window_minutes: 10080,
+    remaining_percent: 100, resets_at: "2026-11-16T00:14:45Z", ordinary_usage_allowed: true, spend_control_reached: false };
+  const guard = createGuard(config, { clock: () => now, readUsage: () => sample });
+  const s = guard.status(() => [], now);
+  assert.equal(s.run_required, true);
+  assert.equal(s.can_create_issue, false);
+  assert.equal(s.can_create_pr, false);
+  for (const args of [["issue", REPOS[0], "title", "body"], ["pr", REPOS[0], "branch", "title", "body"]]) {
+    const result = guard.run(args, (args) => { assert.ok(!args.includes("POST")); return []; }, () => "reason");
+    assert.equal(result.exit, 3);
+    assert.equal(result.result.run_required, true);
+  }
+});
+
+test("fresh guard processes bind an immutable weekly run to its starting allowance window", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const config = { ...fixture, limits: null, weekly_allowance: { min_remaining_percent: 50, max_age_seconds: 60 } };
+  const descriptor = { version: 1, id: "same-run", started_at: "2026-11-09T00:00:00Z", limits: null, authorization: "Synthetic User approval" };
+  // Exactly the window start is valid; one millisecond earlier belongs to the old window.
+  for (const [reset, start, allowed] of [
+    ["2026-11-16T00:00:00Z", descriptor.started_at, true],
+    ["2026-11-16T00:00:00Z", "2026-11-08T23:59:59.999Z", false],
+    ["2026-11-23T00:00:00Z", descriptor.started_at, false],
+  ]) {
+    const current = new Date(Date.parse(reset) - 86400_000);
+    const sample = { version: 1, source: "codex-app-server", sampled_at: current.toISOString(), limit_id: "codex", window_minutes: 10080,
+      remaining_percent: 50, resets_at: reset, ordinary_usage_allowed: true, spend_control_reached: false };
+    const script = `import { createGuard } from ${JSON.stringify(new URL("./qa.mjs", import.meta.url).href)};
+      const guard = createGuard(${JSON.stringify(config)}, { clock: () => new Date(${JSON.stringify(current)}), readUsage: () => (${JSON.stringify(sample)}) });
+      let calls = 0;
+      try {
+        const result = guard.status(() => { calls++; return []; }, new Date(${JSON.stringify(current)}), null, ${JSON.stringify({ ...descriptor, started_at: start })});
+        console.log(JSON.stringify({ allowed: result.can_create_issue, run_required: result.run_required }));
+      } catch (error) { console.log(JSON.stringify({ error: error.message, calls })); process.exitCode = 1; }`;
+    const result = spawnSync(process.execPath, ["--input-type=module"], { input: script, encoding: "utf8" });
+    const value = JSON.parse(result.stdout);
+    assert.equal(result.status, allowed ? 0 : 1, result.stderr || result.stdout);
+    if (allowed) assert.deepEqual(value, { allowed: true, run_required: false });
+    else { assert.match(value.error, /authorized weekly window/i); assert.equal(value.calls, 0); }
+  }
 });
