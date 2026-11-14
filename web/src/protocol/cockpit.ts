@@ -137,6 +137,7 @@ export type CockpitAction =
   | { kind: "session.rename"; sessionId: string; name: string }
   | { kind: "session.fork"; sourceId: string; name: string }
   | { kind: "session.close"; sessionId: string }
+  | { kind: "session.resume"; sessionId: string }
   | { kind: "context.archive"; contextId: string }
   | { kind: "plan.archive"; planId: string }
   | { kind: "session.archive"; sessionId: string }
@@ -181,6 +182,7 @@ export function parseCockpitAction(raw: unknown): CockpitAction {
     "session.rename": ["sessionId", "name"],
     "session.fork": ["sourceId", "name"],
     "session.close": ["sessionId"],
+    "session.resume": ["sessionId"],
     "context.archive": ["contextId"],
     "plan.archive": ["planId"],
     "session.archive": ["sessionId"],

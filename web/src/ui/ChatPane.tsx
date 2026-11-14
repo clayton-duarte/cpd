@@ -67,6 +67,11 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         completion={view.completion ?? null}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
       />
+      {view.ref?.state === "stopped" ? (
+        <Button type="button" data-action="resume" onClick={() => {
+          try { connection.action({ kind: "session.resume", sessionId: view.id }); } catch { /* The connection reports transport errors to the toast. */ }
+        }}>Resume</Button>
+      ) : null}
       {!view.attached && view.error !== null ? (
         <div data-attach-status role="status" className="flex items-center gap-2 px-4 py-2 text-sm text-destructive">
           <span>{view.error.code}: {view.error.message}</span>
