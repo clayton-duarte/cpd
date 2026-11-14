@@ -175,7 +175,7 @@ pub fn changed_paths(dir: &Path, diff_base: &str, branch: &str) -> Result<Vec<St
 }
 
 /// The paths `diff_base...sha` changes that differ from EVERY ref of `compare_with` (contract §7.3, "The written files"), in
-/// the range diff's order: one range diff plus one `git diff --name-only --no-renames -z <ref> <sha>` per ref.
+/// the range diff's order: one range diff, then two tree diffs and one merge-base lookup per ref.
 /// A path that equals a ref's version still counts when that ref left it unchanged since its merge base with
 /// `diff_base`: the Job itself reverted it, a base merge did not bring it.
 pub fn written_paths(
@@ -192,13 +192,12 @@ pub fn written_paths(
         )?;
         let differs: HashSet<&str> = out.split('\0').filter(|p| !p.is_empty()).collect();
         let fork = ok(dir, &["merge-base", diff_base, rev])?.trim().to_owned();
-        let mut kept = Vec::new();
-        for p in paths {
-            if differs.contains(p.as_str()) || blob(dir, rev, &p)? == blob(dir, &fork, &p)? {
-                kept.push(p);
-            }
-        }
-        paths = kept;
+        let ref_diff = ok(
+            dir,
+            &["diff", "--name-only", "--no-renames", "-z", &fork, rev],
+        )?;
+        let ref_changed: HashSet<&str> = ref_diff.split('\0').filter(|p| !p.is_empty()).collect();
+        paths.retain(|p| differs.contains(p.as_str()) || !ref_changed.contains(p.as_str()));
     }
     Ok(paths)
 }

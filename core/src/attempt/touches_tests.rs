@@ -638,3 +638,32 @@ fn an_explore_job_runs_no_touches_check() {
     });
     refused(work.submit(), ErrorCode::TouchesViolation);
 }
+
+#[test]
+fn written_path_comparisons_use_constant_git_calls_per_reference() {
+    let r = rig(Spec {
+        changed: &[("new/a", "a"), ("new/b", "b"), ("new/c", "c")],
+        ..Spec::default()
+    });
+    let before = r.fakes.runner.calls().len();
+    let paths = Ports::scope(&r.fakes.ports, || {
+        crate::git::tamper::written_paths(&r.root, &r.base.to_string(), "cpd/pay/a", &["main"])
+    })
+    .unwrap();
+    assert_eq!(paths, ["new/a", "new/b", "new/c"]);
+    let calls = r.fakes.runner.calls();
+    let git: Vec<_> = calls[before..]
+        .iter()
+        .filter(|c| c.program == "git")
+        .collect();
+    assert_eq!(
+        git.len(),
+        4,
+        "one range diff, two tree diffs and one merge-base lookup, independent of path count: {git:?}"
+    );
+    assert!(
+        !git.iter()
+            .any(|c| c.args.first().is_some_and(|a| a == "rev-parse")),
+        "no per-path blob lookups"
+    );
+}
