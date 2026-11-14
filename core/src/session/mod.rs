@@ -40,6 +40,8 @@ mod resolve;
 #[cfg(test)]
 mod resolve_tests;
 mod resume;
+#[cfg(test)]
+mod resume_tests;
 mod retier;
 pub(crate) mod retitle;
 pub(crate) mod row;

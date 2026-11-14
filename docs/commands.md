@@ -167,7 +167,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `not_approvable` | 3 | `inbox approve` (§21.13): the item is not `deploy`; `details.item`, `details.kind` |
 | `post_not_found` | 3 | `inbox claim` (§21.7): the team review cache holds no primary post of the pull request (C4); `pr repost` (§9.8b2): the Workflow has no post |
 | `webui_token_invalid` | 3 | `session send --origin webui` (§10.4; contract §6.16 "The clear and its evidence"): `--webui-token` is missing, or is not the content of `$CPD_HOME/run/webui-token` (or that file does not exist); nothing is written; `details` is empty (the token is never echoed) |
-| `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `φ: loop guard`; `details` `{state, label}` |
+| `session_running` | 3 | `session resume` (§10.17): the Session is not `stopped` or is already running its pi; a running Session is no-op (`"already": true`); `details` `{state}` |
 | `slack_auth` | 3 | a Slack helper (§21.6, §21.7) found no usable Slack sign-in in pi's MCP credentials; the message says to run `pi mcp login slack` |
 | `slack_not_configured` | 3 | a Slack helper (§21.6, §21.7) found no `slack` server in `~/.pi/agent/mcp.json`; the message says to run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
 | `slack_failed` | 1 | a Slack helper (§21.6, §21.7) could not read the channel (`team-review`), send a message (pr post), or timed out; for `pr post` the outcome is unknown, and the engine's Slack poll records a message that was sent (§9.8b) |
@@ -1902,6 +1902,7 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--draft --waiting-on 
 | without `--draft`, a `verify` Job needs at least one `impl` Job of its Workflow that is not `cancelled`; `details` `{plan, job, jobs}`, `jobs` the Workflow's `impl` Jobs | `impl_job_required` | 3 |
 | with `--draft`, in phase `dispatch`, `deploy` or `done` (phase `plan` is never refused: the Lead composes the first batch there): the draft's Workflow waits for another Workflow, or its needs chain, through drafts, to a `queued`, `running` or `failed` Job (contract §2.2 "A parked draft", rule 3, pro-d404; `job edit` (§5.2) is refused the same way). Never refused: a draft that waits on nothing. `details` `{plan, job, workflow, needs}`; the message names the legal forms: add the Job it waits for `queued` with `--needs` and no `--draft`; or put the draft under a Plan review in the same turn; or, when it only carries out a recorded decision, add it queued (no `--draft`, hs-d301) | `draft_parked` | 3 |
 | the Workflow's stored shape allows the kind, while the Workflow is `waiting` or `dispatch` (hs-d497, contract §2.2 "Job kinds"): `tdd` allows `docs`, `test`, `impl`, `verify`; `docs` allows `docs`; `config` allows `work`; `free` allows every kind; `details` `{workflow, shape, kind, allowed}`. **A Workflow whose status is `open` allows only `work`** (pro-d68, contract §2.2 "Job kinds"): `docs`, `test`, `impl` and `verify` are refused whatever the shape, `details` `{plan, workflow, status: "open", shape, kind, allowed: ["work"]}` | `shape_violation` | 3 |
+| the Workflow's policy sets `workflow.local_docs = false` and `--kind docs` (b72, contract §8.3 "The `workflow` domain"): repositories whose policy sets workflow.local_docs=false keep decisions in the Context (`cpd context decide`), not local markdown; the error message names the policy key and describes this style | `docs_forbidden` | 3 |
 | the Spec file has `tests` and `test_files` exactly when the kind is `test` and the Job is not a stub (§5) | `spec_invalid` | 2 |
 | every string of the Spec (each field, each `touches` entry, each `acceptance` item and their `test` and `test_files` for a test Job) names only repo-relative paths, not the primary checkout of any Workflow's repo (contract §8.3); a match is a substring ending at the end of the string or before a non-letter, non-digit, `.`, `_` or `-` character; `details: {path, primary, workflow}` names the JSON path, the root realpath (or `~`/`$HOME` prefix) and the Workflow | `spec_invalid` | 2 |
 | `--tier` is outside the range of the Job's role, checked after `tier_invalid`: for every Job but `scout` and `research`, the **worker** range, from `worker_tier` through the highest valid rung at or below `lead_tier` (contract §9 "Roles and ranges"); `details` `{tier, role: "worker", floor, ceiling, allowed: "<floor>-<ceiling>", key: "worker_tier"}`, message naming that range and the keys `worker_tier` and `lead_tier`. For `scout` the explore range: letter `H`, effort ≥ 1 or `X`, up to the worker ceiling; for `research` letter `S`, effort ≥ 1 or `X`, up to the worker ceiling (Plan `explore-roles`, R6; contract §2.2, A17). `details` name the kind and its range; a Tier of the other letter, `O`, effort 0 or an effort above the ceiling is refused | `tier_not_allowed` | 2 |
@@ -2050,9 +2051,33 @@ The sole recovery for a locked `test` Job whose selector or file ownership is wr
 
 A refused replacement is refused whole: nothing is written, and the source keeps its status.
 
-Effects, in two phases. First the operation commits a durable replacement intent (source, requested fields, requester, reason) and fences the source from starting another Attempt. A running source Attempt is stopped through `attempt abort` (contract §3.4); the command waits until that Attempt is terminal and its runner has acknowledged teardown. If teardown fails, times out, or cpd exits first, the intent remains and no replacement or redirect is visible; re-running the same command with the same arguments resumes the intent, and a different request is refused until the Lead resumes or abandons it. Second, once the source is quiescent, one write transaction re-reads the intent, source, Attempts and dependency graph and: appends the replacement `test` Job, queued, with the source's title, Tier, resources and incoming Dependencies and a fresh Locked-Job fingerprint; redirects every dependency edge of each eligible downstream Job from the source's key to the new key; marks the source `cancelled` with a replacement reason; completes the intent; and appends the replacement history and Events (the selector correction and the old-to-new key mapping are recorded there). The transaction is all-or-nothing. Downstream Jobs are not failed or cancelled by it. The source, its Attempts and their branch and commit refs stay addressable as superseded history; the replacement's starting commit includes the source Attempt's red-test commit(s) by ancestry, without recreating or cherry-picking them.
+Effects, in two phases. First the operation commits a durable replacement intent (source, requested fields, requester, reason) and fences the source from starting another Attempt. A running source Attempt is stopped through `attempt abort` (contract §3.4); the command waits until that Attempt is terminal and its runner has acknowledged teardown. When an Attempt is stopped for replacement, the Lead Branch is never reset: the Attempt's base worktree (the Lead worktree) stays at the Attempt's committed state and is not cleaned (contract §7.2 "Attempt worktree", A9 cleanup exception). Selector validation reads the Worker's committed state, the red-test commit, not the pre-stop or pre-restore state. If teardown fails, times out, or cpd exits first, the intent remains and no replacement or redirect is visible; re-running the same command with the same arguments resumes the intent, and a different request is refused until the Lead resumes or abandons it. Second, once the source is quiescent, one write transaction re-reads the intent, source, Attempts and dependency graph and: appends the replacement `test` Job, queued, with the source's title, Tier, resources and incoming Dependencies and a fresh Locked-Job fingerprint; redirects every dependency edge of each eligible downstream Job from the source's key to the new key, and recomputes and stores the Locked-Job fingerprint of each downstream Job whose need is redirected (§2.3: the fingerprint inputs include needs), in the same transaction; marks the source `cancelled` with a replacement reason; completes the intent; and appends the replacement history and Events (the selector correction and the old-to-new key mapping are recorded there). The transaction is all-or-nothing. Downstream Jobs are not failed or cancelled by it. The source, its Attempts and their branch and commit refs stay addressable as superseded history; the replacement's starting commit includes the source Attempt's red-test commit(s) by ancestry, without recreating or cherry-picking them.
 
 Idempotent: yes, as stated above. An abandoned or failed operation never removes a commit or restores a stopped process.
+
+### 5.4b `job reseal`
+
+```
+cpd job reseal <key> [--plan <id>]
+```
+
+Recomputes and stores the Locked-Job fingerprint of a Job when its stored fingerprint does not match the current inputs (§2.3), but only when every unexplained difference can be attributed to a recorded redirect of one of its needs by a `job replace-test` operation. Use this to repair a Job that `doctor` reports as tampered due to replaced test dependencies (§14.1; contract §3.7 "The window", bug b62). A Job whose fingerprint mismatch has any other cause (a specification field changed without a recorded redirect, or changes made outside cpd) is refused `reseal_unexplained` (exit 3) and is not rewritten. **The Lead only**: a Worker (`CPD_ATTEMPT` set), or a session that is not the target Plan's Lead, is refused `not_a_lead` (exit 3), and nothing is written. The Job's needs are reconstructed at its actual sealing point: any point along each need's recorded redirect chain that reproduces the sealed fingerprint explains the drift.
+
+When it applies: the Job is `queued` or `running`, its stored `fingerprint` does not match the Locked-Job fingerprint computed from its current Locked fields and needs, and the `jobs_history` rows of all prior `job-edited` Events linked to `job-replaced` Events document that every need change is a redirect from a `replace-test` operation (the old and new test Job keys are recorded in the redirect Event).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the caller is a Worker (`CPD_ATTEMPT` set) or is not the Plan's Lead session | `not_a_lead` | 3 |
+| the Job's stored fingerprint matches the Locked-Job fingerprint of its current inputs (the Job is not tampered) | `already` | 0 |
+| the Job's stored fingerprint does not match, but the mismatch cannot be fully explained by recorded `job replace-test` redirects of its needs (some difference is unexplained, meaning a field was changed outside of a replace-test, or a replace-test Event is missing, or the Spec or other Locked fields are not as sealed) | `reseal_unexplained` | 3 |
+
+Effects: **rows**, one transaction: `jobs.fingerprint` is recomputed and stored, matching the current Locked-Job fingerprint. **Event** `job-edited` `{fields: ["fingerprint"]}`, its `text` describing the reseal as a restore from replaced-test redirects. And, when the Plan's working Lead runs it, it names the Job's Workflow as the Lead's Workflow (§1.3).
+
+```json
+{"ok": true, "job": {"key": "api-test", "workflow": "api", "status": "queued"}, "fields": ["fingerprint"]}
+```
+
+Idempotent: yes; a Job whose stored fingerprint already matches its inputs returns `"already": true` and writes nothing.
 
 ### 5.5 `job dispatch`
 
@@ -2288,6 +2313,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | at least one commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits` | 3 |
 | the tamper check passes (§7.5; a protected path whose Attempt version equals the Lead tip's or `origin/<base>`'s, as a base merge brings it, is allowed); `details.paths` lists the protected paths touched that are not allowed | `gate_tampered` | 3 |
 | the touches guard passes (§7.5): a path outside the Job's Spec `touches` is refused, unless a base merge brought it, the repo's `[generated] paths` (§8.3) match it, or the Lead approved it with `job approve-touches` (§5.9a); `details.paths`, `details.touches`, `details.generated` (contract §7.5, §7.7) | `touches_violation` | 3 |
+| the Workflow's policy sets `workflow.local_docs = false` and the diff adds a new file matching `docs/**/*.md` (b72, contract §8.3 "The `workflow` domain"): repositories whose policy sets workflow.local_docs=false keep decisions in the Context (`cpd context decide`), not local markdown; the error message names the policy key and describes this style. Modified or deleted `.md` files, and `.md` files outside `docs/` pass | `docs_forbidden` | 3 |
 | (kind `impl`) it changes no path guarded by the `test_files` of a `test` Job it needs, unless `job approve-tests` (§5.9) approved it; `details.paths`, `details.jobs` (contract §7.5, §7.7) | `tests_tampered` | 3 |
 | (kind `test`) every `test_files` entry matches a path the Job changed (`git diff --name-only --no-renames <lead branch>...HEAD`); `details.paths` lists the entries that match none | `test_files_missing` | 3 |
 | (kinds `test`, `impl`) the Workflow's repo policy has `[test-commands]` (none when there is no repo file or the file lacks the table) | `tests_unconfigured` | 3 |
@@ -2705,7 +2731,7 @@ Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the 
 ### 9.4 `workflow add`
 
 ```
-cpd workflow add <key> --repo <path> --title <text> [--jira <KEY>] [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--jobs <file.json>] [--base <branch> | --base <key> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
+cpd workflow add <key> --repo <path> --title <text> [--jira <KEY>] [--bug <id>] [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--jobs <file.json>] [--base <branch> | --base <key> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
 ```
 
 Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an unlocked `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done`, and in a re-planned `plan` (`locked_at` set, A1), it is **appended**, like `job add` and engine `workflow-start` starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy`, `done` and a re-planned `plan` it also **moves the Plan back to `dispatch`** (A3, pro-d429; hs-d87: a merged Workflow can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the Workflow itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up Workflow is registered at once, even when it cannot run yet: `workflow add <key> --repo … --needs …`. Before the lock its template's stub drafts follow (§9.4); after the lock it takes `--jobs <file.json>`, which queues the template's Jobs (pro-d404: a Job that waits is queued with its needs, never a draft; contract §2.2 "A parked draft", rule 2). With `--adopt` it adopts an existing pull request whose head branch does not equal the stored `lead_branch` of any Workflow of that repo: cpd works it like a Plan (Jobs that address review comments and failing CI checks) and pushes to the pull request's own head branch, never a second pull request (pro-n8).
@@ -2722,6 +2748,7 @@ Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an 
 | `--no-needs` | no needs, the way a Workflow with no needs is stated in `dispatch` when the default does not apply; exclusive with `--needs` (`usage`); in `grounding`, `plan`, `deploy` or `done` it changes the default to explicitly none |
 | `--title <text>` | required (hs-d285): the Workflow's own title, which names its change and becomes the pull request's title and then, when the repo squash-merges, the squash commit's subject on `main`. 1–72 characters, one line, no control characters, else `usage` (§1.5). `workflow add` is the only place a Workflow is created. Under `--adopt` it is a local label (it names the stub Jobs): cpd never sends it to GitHub, the pull request keeps its own title, and an adopted Workflow is exempt from the Jira title rule (`jira_title_invalid`) |
 | `--jira <KEY>` | optional (pro-d127, B1): the Workflow's own Jira ticket, a key matching `^[A-Z][A-Z0-9]+-[0-9]+$` (else `usage`, exit 2, as `context new --jira`). One ticket per Workflow: the Plan's `jira` never fills it. Set here or by `workflow edit <key> --jira <KEY>` (§9.5); needed before the Workflow opens when its owner's policy sets `workflow.jira_required` (§9.1, §5.5); under that policy the title must compose with it (`--title` above, §9.5) |
+| `--bug <id>` | optional: a bug id (`b<k>`), linking the Workflow to a bug record. The bug must have an issue URL recorded (checked before the Workflow starts). A bug unknown or a bug with no issue is refused `bug_unknown` (exit 4) or `bug_issue_required` (exit 3). Set only here; `workflow edit` takes no `--bug`. A rerun with another or a new `--bug` than the stored one is `workflow_exists`. Exclusive with `--adopt` (`adopt_bug_unsupported`, exit 2: an adopted pull request keeps its own body, so cpd cannot add the closing reference). When the Workflow merges, the PR body ends with `Fixes #<N>` or `Fixes <owner>/<repo>#<N>` |
 | `--adopt <number>` | adopt the existing pull request `<number>` of `--repo`'s `origin` (below). The Workflow's base is the pull request's `baseRefName` (it must exist as `origin/<base>`: `base_not_found`) and its head is `head_ref`, stored in `workflows.head_ref` |
 | `--confirm-author <login>` | the pull request's author, when it is not the User (`adopt_foreign`); accepted and does nothing when the author is the User. Needs `--adopt` |
 | `--base <key>` | exclusive with `--adopt`. **Stack on a Workflow**, the bare form: the Workflow `<key>` of this Plan in the repo, as in the table above (contract §2.2 "A Workflow reference") |
@@ -2749,6 +2776,9 @@ Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an 
 | a Workflow of an archived Plan is referenced only as a `merged` need; `details` is `{plan, next}`, `next` the `cpd plan unarchive` command | `archived` | 3 |
 | the base Workflow is not also in `--needs` (a need is merged before this Workflow starts, a base Workflow is the implied need met when it is `open`) | `usage` | 2 |
 | no Workflow of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape, needs and `jira` (compared only when `--jira` is given) equal the resolved flags, the default needs included (then `already`) | `workflow_exists` | 3 |
+| `--bug` and `--adopt` are not both given | `adopt_bug_unsupported` | 2 |
+| `--bug`, if given: names a `bug_records` row of the Plan | `bug_unknown` | 4 |
+| `--bug`, if given: the bug has an `issue` URL recorded | `bug_issue_required` | 3 |
 | in phase `dispatch`, one of `--needs` or `--no-needs` is required; an existing Workflow key is compared first (`already` when the flags match, else `workflow_exists`), so a rerun is never refused (idempotence, pro-d46) | `needs_required` | 3 |
 | (`--adopt`) the pull request's state is `OPEN`; `details` is `{number, url, state}` | `adopt_not_open` | 3 |
 | (`--adopt`) it is not from a fork (`isCrossRepository` false); `details` is `{number, url}` | `adopt_fork` | 3 |
@@ -2760,6 +2790,7 @@ Adds a Workflow to the Plan, `waiting` (R34, A13, §3.8). In `grounding` and an 
 | no need is `cancelled`; `details.needs` lists them | `needs_unavailable` | 3 |
 | the graph of Workflow needs and base Workflows stays acyclic across every Plan (a Workflow stacked on `B` cannot be needed, directly or not, by `B`: it would wait for `B` to start while `B` waits for it to merge); `details.cycle` lists the references | `dependency_cycle` | 3 |
 | the Lead Branch `<plan>/<key>` and its parent path `<plan>` do not exist in the repo (except a leftover of an interrupted start); `details.branch` names it | `branch_exists` | 3 |
+| (`--shape docs`) the Workflow's repo policy sets `workflow.local_docs = false` (b72, contract §8.3 "The `workflow` domain"): repositories whose policy sets workflow.local_docs=false keep decisions in the Context (`cpd context decide`), not local markdown; the error message names the policy key and describes this style | `docs_forbidden` | 3 |
 | (`--shape tdd`) the Workflow's repo policy has `[test-commands]` (contract §7.7; none when there is no repo file or the file lacks the table); the message names `--shape docs`, `--shape config` and the table | `tests_unconfigured` | 3 |
 | none of the Job keys the shape lays out exists in the Plan; `details.jobs` | `job_key_exists` | 3 |
 | `--jobs` only after the lock (phase `dispatch`, `deploy` or `done`, or a re-planned `plan`); in `grounding` or an unlocked `plan` the template is unchanged | `usage` | 2 |
@@ -3953,26 +3984,29 @@ Output:
 cpd session resume <id>
 ```
 
-Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3. Only the User and the engine resume: an agent is refused (pro-d374).
+Restarts a stopped pi Session (§6.2, issue #1207): a Lead or a Manager with `runner` `pi` and `state` `stopped`. The Session's id and transcript are preserved; the cockpit must exist. `<id>` accepts any form of §1.3. Only the User and the engine resume: an agent is refused (pro-d374).
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the caller has `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty (an agent); `details` `{command: "session resume", session, attempt}`, `session` and `attempt` the values of those variables or `null`; the check and message are §1.3's `agent_forbidden`, refused before the Ledger is opened | `agent_forbidden` | 3 |
 | the Session exists | `session_not_found` | 4 |
-| it is a `lead` or a `manager` | `not_a_lead` | 3 |
+| it is a `lead` or a `manager`; a Worker has no pane and cannot be resumed this way | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
-| it is `blocked` with the label `φ: loop guard`; `details` `{state, label}` | `not_loop_guarded` | 3 |
+| it is `stopped` (§3.6, contract §2.2 "States"); a running Session is no-op; `details` `{state}` | `session_running` | 3 |
+| its `runner` is `pi`; a `durable` Session (contract §3.6) has no pane, so there is nothing to restart here; the engine starts durable Sessions; refused before any write or tmux call (§1.3) | `durable_session` | 3 |
+| the tmux cockpit exists (`tmux.cockpit_session` and its `main` window with chat slot); `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects:
-- **Rows**, one transaction: nothing is written to the Session.
-- **Event** `session-resumed` (session = the target, context and plan = the target's), `data` `{}`, `text` `Loop guard of Session <id> resumed.`. The adapter clears the trip (L5): empties the window, closes the blocking reason, appends the pi session entry `{tripped: false}` and delivers ONE message with a turn (the Event's text, `followUp`), so one turn starts.
-- **tmux:** none.
+- **Already running or not stopped:** the Session's `state` is not `stopped`: nothing is written; `"already": true` in the output; no Event, no tmux.
+- **Rows:** none for the state: it stays `stopped` until the restarted pi's adapter connects and reports `idle`, so the adapter watchdog (a pi running while the adapter reports `stopped`) still applies. No `session-state` Event.
+- **A live wrapper:** a pane tagged with the Session that is still alive is the wrapper `session run` leaves at "Press Enter to resume" after pi exited; it is killed and replaced by the new window.
+- **tmux:** as `session open` (§10.4) for a pi Session with no live pane: `new-window -d -t =cpd: -n park-<label> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<id> -P -F '#{window_id} #{pane_id}' -- <the engine's own executable> session run <id>`, set `@cpd_session`, `@cpd_title` (dynamic `title` or key/name), record `tmux_pane`; **Event** `session-moved` `{place: "parked"}`.
 
 ```json
-{"ok": true, "event": 4816, "session": "a41b…"}
+{"ok": true, "session": "596d007f-…", "pane": "%41", "state": "stopped", "already": false}
 ```
 
-`event` is the id of the `session-resumed` Event. Idempotent: no; each call is one Event. A second call finds the Session no longer blocked once the adapter has acted.
+`pane` is the new pane, or null if already running. `state` is the Session's state (`stopped` after a restart). Idempotent: yes; a running Session (not `stopped`) returns `"already": true` and changes nothing.
 
 ### 10.19 `session tail` (P1.11)
 
@@ -6273,7 +6307,7 @@ For cpd secret approve:
 <session name> asks to <action> in vault <vault>: item <item>, field <field>. Reason: <reason>
 ```
 
-with the options `Allow once` and `Deny`. **`Allow once`:** the adapter runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` (commands §24.7) atomically, writing `$CPD_HOME/run/secret/approve/<uuid>.json` with `{session, action, vault, item, field, at}`. The tool returns the text `Approved for one command in the next 10 minutes: run it now.` **`Deny`:** nothing is run and the tool returns `The User denied it. Do not try again.` **No dialog available** (no UI): an error `no_ui` saying the cockpit chat is needed.
+with the options `Allow once` and `Deny`. **`Allow once`:** the adapter runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` (commands §24.7) atomically, writing `$CPD_HOME/run/secret/approve/<uuid>.json` with `{session, action, vault, item, field, at}`. The tool returns the text `Approved for one command in the next 10 minutes: run it now.` **`Deny`:** nothing is run and the tool returns `The User denied it. Do not try again.` **Aborted:** when the tool call is aborted (for example, by a Session timeout or a Plan abort), the dialog is dismissed and the blocked fact is closed, releasing the Session. **No dialog available** (no UI): an error `no_ui` saying the cockpit chat is needed.
 
 #### A Worker's way
 
@@ -6287,7 +6321,7 @@ This writes `$CPD_HOME/run/secret/allow/<attempt-id>.json` (contract §8.4). The
 
 ### 15.18 The pi tool `cpd_host_approve`
 
-**Manager only** (internal): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 `host-alert`). The adapter refuses an agent's bash `cpd host approve` with the reason `φ: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: cpd host approve` (model: §15.17).
+**Manager only** (internal): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 `host-alert`). **Aborted:** when the tool call is aborted, the dialog is dismissed and the blocked fact is closed, releasing the Session. The adapter refuses an agent's bash `cpd host approve` with the reason `φ: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: cpd host approve` (model: §15.17).
 
 ### 15.19 The compaction ratio (hs-d660)
 
@@ -6553,6 +6587,8 @@ On `Allow once` the tool runs, by `kind`:
 - `pr_reply`: `cpd pr approve --kind reply --workflow <workflow> --to <to>`
 - `pr_post`: `cpd pr approve --kind post --workflow <workflow>`
 - `slack_send`: no command. The grant is in process and one-shot: the next `mcp__slack__slack_send_message` or `mcp__slack__slack_send_message_draft` call of that Session passes, then the grant is gone (nothing is written to a file).
+
+**Aborted:** when the tool call is aborted, the dialog is dismissed and the blocked fact is closed, releasing the Session.
 
 `cpd pr approve --kind reply|post --workflow <key> [--to <item-id>] [--plan <id>]` is internal and Lead only: it needs `$CPD_SESSION` (else `usage`), requires `--to` for `reply` and refuses it for `post`, and writes one JSON file `$CPD_HOME/run/pr/approve/<uuid>.json` (directory 0700, file 0600, atomic write, valid 10 minutes, checked at read) holding `{session, kind, plan, workflow, to?, at}`. It is bound to the calling Session, the kind, the Workflow and, for `reply`, the item id. Kind `post` approves one `pr post` or one `pr repost` of that Workflow. It is removed only after the guarded action succeeded. Output `{"ok": true, "approved": {"kind", "workflow", "to", "expires_at"}}`. An agent is a process with `$CPD_SESSION` set and non-empty; the cockpit runs without it and is never asked.
 
@@ -7876,6 +7912,9 @@ cpd test run <name>...
 
 Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>` and refused when the title is in no `test(` or `it(` call of the file), a web name, `web/<file>.test.ts(x)::<title>` (the file's path, `::`, the exact vitest title; run through the web package's vitest, `pnpm --filter cpd-web-client exec vitest run --testNamePattern <title> <file>`), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). For web execution, the default reporter output is forwarded and an isolated, automatically cleaned JSON report must confirm passed assertions for the requested file/title. Missing, malformed, unrelated or skipped/todo-only execution reports fail even when Vitest exits 0 (#1235). This does not change collection-only `list` behavior. All run filtered, so none takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
 
+Node runs preserve the human spec reporter and confirm each requested title/file through a private structured execution report. A skipped/todo, absent, failed or unverified requested test is nonzero even if Node itself exits zero. Temporary reports and the official-API reporter module are removed after each run.
+
+
 ### 23.3 `test list` and `test build`
 
 ```
@@ -8385,7 +8424,7 @@ Records a bug and opens its protocol state. `--title` is the one-line name (1 to
 **Output:**
 
 ```json
-{"ok": true, "bug": {"id": "b7", "plan": "protocol-enforce", "title": "pr merge refused on a clean stacked PR", "symptom": "...", "cause": null, "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:30:00Z", "closed_at": null, "closed_by": null}}
+{"ok": true, "bug": {"id": "b7", "plan": "protocol-enforce", "title": "pr merge refused on a clean stacked PR", "symptom": "...", "cause": null, "mitigation": null, "mitigated_by": null, "mitigated_at": null, "issue": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:30:00Z", "closed_at": null, "closed_by": null}}
 ```
 
 **Not idempotent:** every call reports a new bug.
@@ -8393,23 +8432,25 @@ Records a bug and opens its protocol state. `--title` is the one-line name (1 to
 ### 33.2 `protocol bug mitigate`
 
 ```
-cpd protocol bug mitigate <id> --mitigation <text> [--cause <text>]
+cpd protocol bug mitigate <id> --mitigation <text> --issue <url> [--cause <text>]
 ```
 
-Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b<k>`), `--mitigation` the stopgap that removes or contains the User's symptom now (1 to 20000 characters with no NUL), `--cause` the diagnosed cause when it is first known here. `<id>` that no row holds is `bug_not_found` (exit 4); a bug whose `status` is `closed` takes no mitigation (`illegal_transition`, exit 3, nothing written).
+Records the mitigation applied to an open bug (air-d103): `<id>` is a bug id (`b<k>`), `--mitigation` the stopgap that removes or contains the User's symptom now (1 to 20000 characters with no NUL), `--issue` a GitHub issue URL on the Context's repo, `--cause` the diagnosed cause when it is first known here. `<id>` that no row holds is `bug_not_found` (exit 4); a bug whose `status` is `closed` takes no mitigation (`illegal_transition`, exit 3, nothing written).
 
 | Precondition | Code | Exit |
 |---|---|---|
-| `--mitigation` present, 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL | `usage` | 2 |
+| `--mitigation` and `--issue` present; `--mitigation` is 1 to 20000 characters, no NUL; `--cause`, if present, 1 to 20000 characters, no NUL; `--issue` matches `https://github.com/<owner>/<repo>/issues/<N>` (with N a positive integer) | `usage` or `issue_invalid` | 2 or 2 |
+| `--issue` is missing | `issue_required` | 3 |
 | `<id>` names a `bug_records` row | `bug_not_found` | 4 |
 | the bug's `status` is `open` | `illegal_transition` | 3 |
+| the bug has no issue yet, or `--issue` equals the one it has (linked pull requests close the recorded issue, so it is never changed) | `issue_conflict` | 3 |
 | the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
 
-**Effects:** one transaction, the row's `mitigation` set from the flag, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set from `--cause` when it is given; without `--cause` a recorded `cause` stands. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
+**Effects:** one transaction, the row's `mitigation` set from the flag, `issue` set from `--issue`, `mitigated_by` the caller's Session id (`CPD_SESSION`; null when unset), `mitigated_at` the transaction's time, and `cause` set from `--cause` when it is given; without `--cause` a recorded `cause` stands. A second `mitigate` of an open bug replaces the first (the applied stopgap stands); the same values again write nothing. **No Event is appended.**
 
 **Output:** the `bug` object of §33.1, with the new values.
 
-**Idempotent:** the same `--mitigation` (and `--cause`) on an open bug whose stored values already equal them is `{"ok": true, "already": true}` with the `bug` object, nothing written.
+**Idempotent:** the same `--mitigation`, `--issue` (and `--cause`) on an open bug whose stored values already equal them is `{"ok": true, "already": true}` with the `bug` object, nothing written.
 
 ### 33.3 `protocol bug close`
 
@@ -8424,6 +8465,7 @@ Closes a bug whose root fix is in and its regression test recorded (air-d107). `
 | `--root-fix` and `--regression-test` present, 1 to 200 characters each, no NUL (`details` `{"missing": [...]}`) | `root_fix_required` | 3 |
 | `<id>` names a `bug_records` row | `bug_not_found` | 4 |
 | the bug's `status` is `open` | `illegal_transition` | 3 |
+| the bug has an `issue` URL recorded (checked before the existing root_fix_required checks' success path) | `bug_issue_required` | 3 |
 | the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
 
 **Effects:** one transaction: `root_fix` and `regression_test` set from the flags, `status` `closed`, `closed_at` the transaction's time, `closed_by` the caller's Session id (`CPD_SESSION`; null when unset). **No Event is appended.** Nothing else changes: the root-fix Job or Workflow is queued and merged by the Plan's own machinery, never by this command.
@@ -8448,7 +8490,7 @@ Lists bug records, `id` ascending (b1, b2, …). The filters combine: `--plan <i
 **Output:**
 
 ```json
-{"ok": true, "bugs": [{"id": "b3", "plan": null, "title": "...", "symptom": "...", "cause": "...", "mitigation": null, "mitigated_by": null, "mitigated_at": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:00:00Z", "closed_at": null, "closed_by": null}]}
+{"ok": true, "bugs": [{"id": "b3", "plan": null, "title": "...", "symptom": "...", "cause": "...", "mitigation": null, "mitigated_by": null, "mitigated_at": null, "issue": null, "root_fix": null, "regression_test": null, "status": "open", "reported_by": "<session-id>", "reported_at": "2026-11-08T05:00:00Z", "closed_at": null, "closed_by": null}]}
 ```
 
 **Idempotent:** a read; the same store gives the same list.

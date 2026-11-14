@@ -201,3 +201,59 @@ Sources consulted 2026-11-13. The dependency-free copy-based adoption method is
 retained; no new updater service, registry or credential is required. The local
 copy is deliberately a consumer, with upstream revision/file hashes verified in
 CPD tests. Changes go upstream first, then consumers update through reviewed PRs.
+
+
+## 2026-11-13 — continuous weekly allowance gate
+
+Supersedes20 issues/10 PRs and the completed10/5 pilot for the newly authorized
+run. The User said: “lift the cardinal limits” and “run loops continuously until
+weekly allowance is under50%,” then authorized keeping the authenticated reader
+for unattended checks. Config uses null count caps and a50% threshold with a
+maximum60-second sample age. Scope/attribution remains shared across CPD,
+dotfiles and skills. No new reset, paid/reset credits, merge or live-access
+permissions. Official Codex account telemetry is the gate; unverified usage
+pauses work. Research, alternatives and the canonical run descriptor live in
+[#1187](https://github.com/clayton-duarte/cpd/issues/1187). Source PR precedes
+consumer merge; both require User review. The reader is telemetry, not a scheduler,
+and does not make an inactive agent session persistent.
+
+
+## 2026-11-13 — reusable allowance authentication
+
+The User rejected recurring logins for an OpenAI-hosted unattended agent. This
+supersedes treating ephemeral login as the only reader mode. Official
+[Codex auth documentation](https://developers.openai.com/codex/auth) documents
+cached login and automatic refresh. Use private persistent CLI state outside Git,
+isolated from managed cloud credentials, and one-shot fresh readings. The helper
+refuses the managed home and Git directories; Unix permissions are0700/0600.
+It never prints credential contents. No new sign-in is started without explicit
+`--login`. Live reuse was verified by starting a separate reader after bootstrap.
+Token-expiry refresh is documented CLI behavior, not a forced live experiment.
+A read-only platform-native allowance tool would be preferable, but none is
+exposed here. Process persistence is no longer a prerequisite for authentication;
+a destroyed credential volume or revocation remains a real reauthentication case.
+Research/code/restart regressions: source PR3, linked from #1187 and consumer #1188.
+The weekly threshold and User-review/merge policy remain in force.
+
+
+## 2026-11-13 — proactive PR conflict maintenance
+
+The User reported a conflicted QA PR and explicitly said they should not have to
+ask QA to address it. Add mergeability to every iteration's CI/review upkeep and
+recheck when the base/head changes. Resolve conflicts on the same PR branch,
+preserve both intended changes, run focused checks and verify the pushed result.
+A nullable/pending result is not confirmed mergeability. The User retains final
+PR review/merge; no clean branch is bulk-rebased solely for being behind.
+
+The immediate #1191 conflict was resolved against main58192c9f atdd9f108f;
+300 affected tests, core Clippy, formatting and whitespace passed. The source
+method/command is tracked in skills#5 and proposed in skills#6. Research:
+https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request (accessed2026-11-13).
+This is a User operating decision and documented API behavior, not a claim of
+universal consensus. Consumers update immutable reviewed pins separately.
+
+
+The User merged skills#6 on 2026-11-13. CPD now pins reviewed source 53523a3e5fcaf68aad249410fb391e53a0531bfe, including the read-only `pr-status` gate. The vendor manifest hashes the exact upstream tracked files. Weekly cross-process window binding remains tracked in skills#4/PR#7; the active native helper also pins this run's authorized reset, so no later weekly window is allowed.
+
+
+The User merged skills#7. CPD pins reviewed source 5569e37c4f09e079d7be30dce177eb2c351340c3, including cross-process weekly-window binding and required descriptors for weekly creation. Compatibility coverage supplies a synthetic approved current-window descriptor rather than bypassing this requirement. The recorded active run ID/start and shared repository scope remain unchanged.

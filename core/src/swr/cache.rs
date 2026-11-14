@@ -233,3 +233,18 @@ pub fn settle(
         Ok::<(), CpdError>(())
     })
 }
+
+/// The target keys of `system`'s `revalidating` mutations: each still shows its overlay, and only a fetch of that key
+/// (its `commit`, which settles by key after `completed_at`) proves upstream has the write. A poll of other keys settles none.
+pub fn unsettled_targets(store: &mut Store, system: &str) -> Result<Vec<String>, CpdError> {
+    store.read(|c| {
+        let mut stmt = c.prepare(
+            "SELECT DISTINCT target_key FROM swr_mutations
+             WHERE system = ?1 AND status = 'revalidating' AND target_key IS NOT NULL ORDER BY target_key",
+        )?;
+        let rows = stmt
+            .query_map([system], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
