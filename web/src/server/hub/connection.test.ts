@@ -470,3 +470,20 @@ it("a failed cockpit action can be retried with the same ID", async () => {
   expect(t.actions).toHaveLength(2);
   expect(t.sent.at(-1)).toMatchObject({ type: "action.result", actionId: "retry", ok: true });
 });
+
+it("a completed action stays deduplicated when persistence fails", async () => {
+  let fail = true;
+  const dedup = createDedupStore({ cap: 10, storage: {
+    read: () => undefined,
+    write: () => { if (fail) { fail = false; throw new Error("disk full"); } },
+  } });
+  const t = setup({ dedup });
+  const action = { type: "cockpit.action", actionId: "disk-full", action: { kind: "inbox.dismiss", itemId: 4 } };
+  await t.hub.handle(action);
+  await t.hub.handle(action);
+  expect(t.actions).toHaveLength(1);
+  expect(t.sent.filter((m) => m.type === "action.result")).toEqual([
+    expect.objectContaining({ actionId: "disk-full", ok: true }),
+    expect.objectContaining({ actionId: "disk-full", ok: true }),
+  ]);
+});

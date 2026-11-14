@@ -274,3 +274,5 @@ Content-Length: ...
 - [MDN Service Worker Guide](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API/Using_Service_Workers)
 - [mkcert README](https://github.com/FiloSottile/mkcert)
 - [MDN PWA Guide](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps)
+
+Server deduplication retains completed results in memory when its file cannot be written, so retrying the same action ID does not repeat the operation in that process. Results that could not be persisted may be lost on a server restart. Client reconnect handling also drains entries requeued after a pending storage write finishes.

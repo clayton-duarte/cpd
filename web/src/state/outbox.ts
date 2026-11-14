@@ -36,6 +36,7 @@ export interface Outbox {
 export function createOutbox(deps: OutboxDeps): Outbox {
   const entries = new Map<string, OutboxEntry>();
   const subscribers = new Set<() => void>();
+  let connectionEpoch = 0;
   let connection: ConnectionState = "connecting";
   let loaded = false;
   let persistent = true;
@@ -75,6 +76,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
 
   /** Sends one entry and settles it on its answer. A send that threw (the connection dropped) puts it back to queued. */
   async function sendOne(entry: OutboxEntry): Promise<void> {
+    const sentEpoch = connectionEpoch;
     entry.state = "sending";
     delete entry.error;
     notify();
@@ -88,6 +90,8 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         entry.state = "queued";
         notify();
         await put({ ...entry });
+        // A reconnect may have scanned while this entry still looked in flight.
+        if (connection === "open" && connectionEpoch !== sentEpoch) void flush();
       }
       return;
     }
@@ -141,6 +145,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     },
     flush,
     onConnection(state) {
+      connectionEpoch += 1;
       connection = state;
       return state === "open" ? flush() : Promise.resolve();
     },

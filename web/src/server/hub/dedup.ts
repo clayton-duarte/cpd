@@ -51,11 +51,15 @@ export function createDedupStore(opts: { storage: DedupStorage; cap: number }): 
   const entries = new Map<string, Entry>(raw === undefined ? [] : (JSON.parse(raw) as Array<[string, Entry]>));
   const pending = new Map<string, Promise<Entry>>();
 
+  const persist = (): void => {
+    try { opts.storage.write(JSON.stringify([...entries])); }
+    catch { /* Completed results remain authoritative in memory for this process. */ }
+  };
   const remember = (key: string, entry: Entry): void => {
     entries.delete(key);
     entries.set(key, entry);
     while (entries.size > opts.cap) entries.delete(entries.keys().next().value as string);
-    opts.storage.write(JSON.stringify([...entries]));
+    persist();
   };
   const replay = <T>(entry: Entry): T => {
     if (entry.ok) return entry.value as T;
@@ -64,7 +68,7 @@ export function createDedupStore(opts: { storage: DedupStorage; cap: number }): 
 
   return {
     forget(key) {
-      if (entries.delete(key)) opts.storage.write(JSON.stringify([...entries]));
+      if (entries.delete(key)) persist();
     },
     async run<T>(key: string, exec: () => Promise<T> | T): Promise<T> {
       const hit = entries.get(key);

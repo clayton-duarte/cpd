@@ -126,3 +126,25 @@ it("continues in memory after a persistent write fails", async () => {
   await outbox.retry("a"); await outbox.discard("a");
   expect(outbox.list()).toEqual([]);
 });
+
+it("retries after reconnect even when the old sending-state write was pending", async () => {
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => { release = resolve; });
+  let sends = 0;
+  const outbox = createOutbox({
+    storage: { load: () => [], put: async (entry) => { if (entry.state === "sending" && sends === 0) await delayed; }, remove: async () => {} },
+    send: async () => { if (++sends === 1) throw new Error("disconnected"); return { ok: true }; },
+    now: () => "now",
+  });
+  await outbox.enqueue(e("delayed", "now"));
+  const first = outbox.onConnection("open");
+  await Promise.resolve();
+  await outbox.onConnection("closed");
+  await outbox.onConnection("open");
+  expect(sends).toBe(1);
+  release();
+  await first;
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(sends).toBe(2);
+  expect(outbox.list()).toEqual([]);
+});
