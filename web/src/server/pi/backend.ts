@@ -91,7 +91,6 @@ function attachmentFileName(prefix: string, name: string): string {
   const suffix = extension.length < room ? safe.slice(0, room - extension.length) + extension : safe.slice(0, room);
   return prefix + suffix;
 }
-}
 const no = (reason: string): { supported: false; reason: string } => ({
   supported: false,
   reason,
