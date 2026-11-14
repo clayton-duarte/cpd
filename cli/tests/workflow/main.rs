@@ -55,5 +55,6 @@ mod workflow_live_spec;
 mod workflow_local_needs;
 mod workflow_merge_drafts;
 mod workflow_needs_required;
+mod workflow_refactor_protocol;
 mod workflow_start;
 mod workflow_template_jobs;

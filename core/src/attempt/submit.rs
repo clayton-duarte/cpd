@@ -296,6 +296,11 @@ fn run_checks(
         base,
         sha,
     )?;
+    if let Some(workflow) = &job.workflow {
+        env.store.read(|conn| {
+            crate::workflow::guard_refactor_tests(conn, plan, workflow, root, compare, sha)
+        })?;
+    }
     if !policy.workflow.local_docs {
         let added = crate::job::add::added_docs(root, compare, sha)?;
         if !added.is_empty() {
@@ -363,7 +368,7 @@ fn run_checks(
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
     // is the Attempt's base for every Attempt (a parallel Attempt's `base_sha` is its branch point too).
-    if kind::has_checks(job) {
+    if kind::has_checks(env, plan, job, &policy)? {
         kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
     }
     written(root, branch, &lead, &base_refs, base, sha)

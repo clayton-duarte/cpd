@@ -470,14 +470,7 @@ fn t7_ready_raises_one_inbox_item() {
 fn t8_peer_review_requested_and_approved() {
     let fx = fixture(true, true, "any"); // posted = true
 
-    // Make compare return ahead
-    let _ = (*fx.fakes.runner).clone().on(
-        "gh",
-        |c| c.args.iter().any(|a| a.contains("/compare/")),
-        Reply::ok(r#"{"status":"ahead"}"#),
-    );
-
-    // Initial poll: posted, waiting for review
+    // Initial poll: posted, clean, green, no decision. Containment is not read (b79), so it is ready to merge at once.
     step(&fx, "U1", "SUCCESS", None, vec![]);
 
     let now = fx.fakes.clock.utc();
@@ -490,7 +483,7 @@ fn t8_peer_review_requested_and_approved() {
         .find(|c| c.subject == "pr:acme/pay#812")
         .expect("pr item exists");
     assert!(
-        pr_item.label.contains("waiting for peer review"),
+        pr_item.label.contains("ready to merge"),
         "label: {}",
         pr_item.label
     );

@@ -252,11 +252,13 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261113T0800-bug-issue",
             "20261113T0801-bug-issue-backfill",
             "20261113T0802-job-touches-waived",
+            "20261113T0803-coverage-baseline",
+            "20261113T0804-refactor-shapes",
         ]
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261113T0802-job-touches-waived")
+        Some("20261113T0804-refactor-shapes")
     );
 }
 

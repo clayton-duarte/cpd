@@ -482,3 +482,15 @@ fn what_one_block_took_on_the_clock_is_not_left_to_the_next() {
         (None, vec![Duration::from_secs(5), Duration::from_secs(1)])
     );
 }
+
+#[test]
+fn stdout_is_kept_apart_from_stderr_and_both_reach_the_tail() {
+    let runner = runner().on(
+        "sh",
+        |_| true,
+        Reply::exit(0, "[\"a.test.ts\"]", "warning: deprecated\n"),
+    );
+    let run = one(&runner, "related");
+    assert_eq!(run.done.stdout, b"[\"a.test.ts\"]");
+    assert!(run.done.tail.iter().any(|l| l.contains("deprecated")));
+}

@@ -34,7 +34,7 @@ use crate::store::WriteTxn;
 const COMMAND: &str = "workflow add";
 
 /// The shapes `workflow add` writes (contract §2.2 "Job kinds"); `free` is only what the migration gave an older Workflow.
-pub(crate) const SHAPES: [&str; 3] = ["tdd", "docs", "config"];
+pub(crate) const SHAPES: [&str; 5] = ["tdd", "docs", "config", "coverage", "refactor"];
 
 /// One stub draft of a shape's template.
 struct Stub {
@@ -69,6 +69,8 @@ fn template(shape: &str, local_docs: bool, workflow: &WorkflowKey, title: &str) 
             stub("impl", "impl", "Implement", Some("tests")),
         ],
         "docs" => vec![stub("docs", "docs", "Docs", None)],
+        "coverage" => vec![stub("cov", "work", "Coverage", None)],
+        "refactor" => vec![stub("impl", "impl", "Refactor", None)],
         _ => vec![stub("config", "work", "Config", None)],
     }
 }
@@ -403,6 +405,70 @@ pub(super) fn resolve_refs(
     base: &BaseWanted,
     needs: &[String],
 ) -> Result<Resolved, CpdError> {
+    // A refactor Workflow keeps its coverage base through an edit: revalidate it, and let it be merged.
+    let refactor: bool = conn
+        .query_row(
+            "SELECT shape = 'refactor' FROM workflows WHERE plan = ?1 AND key = ?2",
+            [subject.plan.as_str(), subject.key.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if refactor {
+        let green = match base {
+            BaseWanted::Workflow(base_plan, base_key) => {
+                coverage_green(conn, base_plan, base_key.as_str(), subject.repo)?
+            }
+            // A needs-only edit carries the stored branch: resolve it back to its coverage workflow.
+            BaseWanted::Branch(branch) => {
+                let mut green = false;
+                for k in known_workflows(conn, subject.plan)? {
+                    if k.repo == subject.repo
+                        && (k.lead_branch == *branch || (k.status == "merged" && k.base == *branch))
+                        && coverage_green(conn, subject.plan, &k.key, subject.repo)?
+                    {
+                        green = true;
+                        break;
+                    }
+                }
+                green
+            }
+        };
+        if !green {
+            return Err(base_coverage_required());
+        }
+    }
+    resolve_refs_with_merged(conn, subject, base, needs, refactor)
+}
+
+fn base_coverage_required() -> CpdError {
+    CpdError::new(
+        ErrorCode::BaseCoverageRequired,
+        "A refactor requires a green or merged coverage workflow as its --base.",
+    )
+}
+
+/// Whether Workflow `key` of `plan` is a coverage Workflow of `repo` that is merged or green (every Job merged, its PR checks passed).
+fn coverage_green(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &str,
+    repo: &str,
+) -> Result<bool, CpdError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM workflows w LEFT JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2 AND w.repo = ?3 AND w.shape = 'coverage' AND (w.status = 'merged' OR (EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status = 'merged') AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = w.plan AND j.workflow = w.key AND j.status NOT IN ('merged', 'cancelled')) AND (p.id IS NULL OR p.checks = 'passed'))))",
+        rusqlite::params![plan.as_str(), key, repo],
+        |r| r.get::<_, bool>(0),
+    )?)
+}
+
+fn resolve_refs_with_merged(
+    conn: &Connection,
+    subject: &Subject<'_>,
+    base: &BaseWanted,
+    needs: &[String],
+    allow_merged: bool,
+) -> Result<Resolved, CpdError> {
     let plan = subject.plan;
     if let BaseWanted::Workflow(base_plan, base_key) = base
         && base_plan != plan
@@ -427,7 +493,9 @@ pub(super) fn resolve_refs(
                 .with("plan", plan.as_str())
                 .with("workflow", base_key.as_str()));
             };
-            check_base_workflow_state(workflow)?;
+            if !(allow_merged && workflow.status == "merged") {
+                check_base_workflow_state(workflow)?;
+            }
             if workflow.repo != subject.repo {
                 return Err(CpdError::new(
                     ErrorCode::BaseWorkflowOtherRepo,
@@ -437,7 +505,14 @@ pub(super) fn resolve_refs(
                 .with("repo", subject.repo)
                 .with("base_repo", workflow.repo.as_str()));
             }
-            (workflow.lead_branch.clone(), Some(workflow))
+            (
+                if allow_merged && workflow.status == "merged" {
+                    workflow.base.clone()
+                } else {
+                    workflow.lead_branch.clone()
+                },
+                Some(workflow),
+            )
         }
         BaseWanted::Branch(branch) => {
             // A branch that is already a Lead Branch of a Workflow of the Plan is stacked all the same.
@@ -602,6 +677,57 @@ fn find_cycle(
     None
 }
 
+/// The commit a coverage baseline is measured at: the remote tip of `branch` when the repo has one (a merged coverage
+/// Workflow landed there; a stale local branch may lack it), else the local branch.
+fn authoritative_commit(repo: &Path, branch: &str) -> Result<String, CpdError> {
+    if has_origin(repo)? {
+        // Fetch first: the stored baseline must be the commit the remote has now, not a stale tracking ref.
+        let fetched = run(repo, &["fetch", "origin", branch])?;
+        let tracked = format!("refs/remotes/origin/{branch}");
+        if fetched.code != 0
+            && run(repo, &["rev-parse", "--verify", "--quiet", &tracked])?.code == 0
+        {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!(
+                    "Could not fetch origin/{branch} to measure its coverage baseline: {}",
+                    fetched.stderr.trim()
+                ),
+            ));
+        }
+        let remote = run(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("refs/remotes/origin/{branch}^{{commit}}"),
+            ],
+        )?;
+        if remote.code == 0 {
+            return Ok(remote.stdout.trim().to_owned());
+        }
+    }
+    crate::git::run::rev_parse(repo, branch)
+}
+
+/// Fetches the base, then measures its coverage with the repo's `measure` command: the `(base_sha, report json)` a refactor
+/// Workflow is held to; `None` when the repo has no measure command.
+pub(super) fn capture_coverage_baseline(
+    repo: &Path,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    base_branch: &str,
+    policy: &Policy,
+) -> Result<Option<(String, String)>, CpdError> {
+    let Some(command) = &policy.coverage_commands.measure else {
+        return Ok(None);
+    };
+    let sha = authoritative_commit(repo, base_branch)?;
+    let report = super::measure_coverage(repo, plan, key, &sha, command)?;
+    let json = serde_json::to_string(&report).map_err(|e| CpdError::bad_row(e.to_string()))?;
+    Ok(Some((sha, json)))
+}
+
 pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     if args.adopt.is_some() && args.bug.is_some() {
@@ -657,6 +783,12 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
             .store
             .read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
     };
+    if args.shape == "refactor" && !matches!(base, BaseArg::Workflow(..)) {
+        return Err(CpdError::new(
+            ErrorCode::BaseCoverageRequired,
+            "A refactor requires a green or merged coverage workflow as its --base.",
+        ));
+    }
     // A branch that is a Workflow's Lead Branch of the Plan and repo is its base Workflow's: it needs no branch yet (that Workflow may be `waiting`).
     let lead_branch_of_workflow = match &base {
         BaseArg::Branch(Some(branch)) => env.store.read(|conn| {
@@ -719,7 +851,15 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
             needs,
             true,
         ),
-        Decision::Insert { .. } => {
+        Decision::Insert {
+            base: base_branch, ..
+        } => {
+            // Capture the coverage base before creating the refactor workflow.
+            let coverage_baseline = if wanted.shape == "refactor" {
+                capture_coverage_baseline(&repo, &plan, &wanted.key, &base_branch, &policy)?
+            } else {
+                None
+            };
             // git, outside any transaction.
             no_branch_clash(&repo, &plan, &workflow_branch(&plan, &wanted.key))?;
             if let Some(jobs) = &wanted.jobs {
@@ -744,6 +884,9 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         )?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
+                    if let Some((sha, report)) = &coverage_baseline {
+                        tx.execute("INSERT INTO refactor_coverage_baselines (plan, workflow, base_sha, report) VALUES (?1, ?2, ?3, ?4)", rusqlite::params![plan.as_str(), wanted.key.as_str(), sha, report])?;
+                    }
                     let stubs = insert_stubs(tx, &home, &plan, &wanted, appended)?;
                     let with = if needs.is_empty() { String::new() } else { format!(", needs {}", needs.join(", ")) };
                     let text = format!(
@@ -908,7 +1051,7 @@ fn decide(
                 title.as_deref(),
                 wanted,
                 &workflows,
-                &base_branch(conn, &wanted.base)?,
+                &base_branch(conn, &wanted.base, wanted.shape == "refactor")?,
             )
         {
             let base_workflow = derived_base_workflow(
@@ -943,6 +1086,16 @@ fn decide(
         .with("head_ref", existing.head_ref.clone())
         .with("status", existing.status.as_str()));
     }
+    if wanted.shape == "refactor" {
+        let green = if let BaseWanted::Workflow(base_plan, base_key) = &wanted.base {
+            coverage_green(conn, base_plan, base_key.as_str(), &wanted.repo)?
+        } else {
+            false
+        };
+        if !green {
+            return Err(base_coverage_required());
+        }
+    }
     // Stacked (§2.2 "The base Workflow"): `--base` names a base Workflow, or a branch that is a Workflow's Lead Branch; its base is its link.
     let stacked = match &wanted.base {
         BaseWanted::Workflow(..) => true,
@@ -952,7 +1105,9 @@ fn decide(
     };
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
-        None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&workflows),
+        None if matches!(phase, Phase::Deploy | Phase::Done) => {
+            merged_keys_except(&workflows, refactor_base_key(wanted))
+        }
         None if locked && stacked => Vec::new(),
         None if locked => {
             return Err(CpdError::new(
@@ -965,7 +1120,7 @@ fn decide(
         }
         None => Vec::new(),
     };
-    let resolved = resolve_refs(
+    let resolved = resolve_refs_with_merged(
         conn,
         &Subject {
             plan,
@@ -974,6 +1129,7 @@ fn decide(
         },
         &wanted.base,
         &needs,
+        wanted.shape == "refactor",
     )?;
     if let Some(error) = unconfigured {
         return Err(error.clone());
@@ -1121,13 +1277,24 @@ fn check_template_keys_free(
 }
 
 /// The branch `base` names, before any validation: a base Workflow is looked up (`base_workflow_unknown`).
-fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError> {
+/// The branch `base` resolves to: a refactor stacked on a merged coverage Workflow resolves to that Workflow's own base, as `resolve_refs` does.
+fn base_branch(
+    conn: &Connection,
+    base: &BaseWanted,
+    allow_merged: bool,
+) -> Result<String, CpdError> {
     match base {
         BaseWanted::Branch(branch) => Ok(branch.clone()),
         BaseWanted::Workflow(plan, key) => known_workflows(conn, plan)?
             .into_iter()
             .find(|p| p.key == key.as_str())
-            .map(|p| p.lead_branch)
+            .map(|p| {
+                if allow_merged && p.status == "merged" {
+                    p.base
+                } else {
+                    p.lead_branch
+                }
+            })
             .ok_or_else(|| {
                 CpdError::new(
                     ErrorCode::BaseWorkflowUnknown,
@@ -1137,6 +1304,21 @@ fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError>
                 .with("workflow", key.as_str())
             }),
     }
+}
+
+/// The key of the base Workflow of a refactor: its coverage base, which the refactor stacks on rather than needs.
+fn refactor_base_key(wanted: &Wanted) -> Option<&str> {
+    match &wanted.base {
+        BaseWanted::Workflow(_, key) if wanted.shape == "refactor" => Some(key.as_str()),
+        _ => None,
+    }
+}
+
+/// [`merged_keys`] without `except`.
+fn merged_keys_except(workflows: &[WorkflowRow], except: Option<&str>) -> Vec<String> {
+    let mut keys = merged_keys(workflows);
+    keys.retain(|k| Some(k.as_str()) != except);
+    keys
 }
 
 /// The keys of the `merged` Workflows, in key order (A3).
@@ -1162,10 +1344,10 @@ fn same(
 ) -> bool {
     let needs_match = match &wanted.needs {
         Some(needs) => &existing.needs == needs,
-        None => existing
-            .needs
-            .iter()
-            .all(|n| merged_keys(workflows).contains(n)),
+        None => {
+            let merged = merged_keys_except(workflows, refactor_base_key(wanted));
+            existing.needs.iter().all(|n| merged.contains(n))
+        }
     };
     (
         existing.repo.as_str(),

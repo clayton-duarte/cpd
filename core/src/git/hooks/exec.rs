@@ -43,6 +43,8 @@ pub struct Executed {
     pub failed_command: Option<String>,
     /// The last `tail_lines` lines of the output, one per element.
     pub tail: Vec<String>,
+    /// What the commands wrote to stdout alone (stderr is in the log and the tail, never here).
+    pub stdout: Vec<u8>,
     /// The I/O error that stopped the log being written, if any.
     pub log_error: Option<String>,
 }
@@ -129,6 +131,7 @@ pub fn run_on(
         .collect();
     let mut failure = None;
     let mut failed_command = None;
+    let mut stdout = Vec::new();
     for block in blocks.iter().filter(|b| !b.is_empty()) {
         let prefixed = block.len() > 1;
         // The first block has all of it: the clock starts with it.
@@ -136,7 +139,7 @@ pub fn run_on(
             timeout.saturating_sub(clock.now().saturating_duration_since(at))
         });
         started.get_or_insert_with(|| clock.now());
-        let ended: Vec<(Ended, Vec<u8>)> = std::thread::scope(|scope| {
+        let ended: Vec<(Ended, Vec<u8>, Vec<u8>)> = std::thread::scope(|scope| {
             let threads: Vec<_> = block
                 .iter()
                 .map(|hook| {
@@ -151,7 +154,9 @@ pub fn run_on(
         });
         failure = None;
         failed_command = None;
-        for (hook, (end, text)) in block.iter().zip(ended) {
+        for (hook, (end, out, err)) in block.iter().zip(ended) {
+            let text = [out.as_slice(), err.as_slice()].concat();
+            stdout.extend_from_slice(&out);
             let prefix = match (&hook.name, prefixed) {
                 (Some(name), true) => format!("{name} │ "),
                 _ => String::new(),
@@ -172,6 +177,7 @@ pub fn run_on(
         failure,
         failed_command,
         tail: output.tail.drain(..).collect(),
+        stdout,
         log_error: output.log_error.take(),
     }
 }
@@ -208,8 +214,8 @@ fn call_of(
     }
 }
 
-/// How a call ended and its output, stdout then stderr.
-fn ran(result: Result<std::process::Output, Failed>) -> (Ended, Vec<u8>) {
+/// How a call ended, its stdout and its stderr.
+fn ran(result: Result<std::process::Output, Failed>) -> (Ended, Vec<u8>, Vec<u8>) {
     match result {
         Ok(out) => {
             let ended = match (out.status.code(), out.status.signal()) {
@@ -217,11 +223,12 @@ fn ran(result: Result<std::process::Output, Failed>) -> (Ended, Vec<u8>) {
                 (None, Some(sig)) => Ended::Signal(sig),
                 (None, None) => Ended::Signal(0),
             };
-            (ended, [out.stdout, out.stderr].concat())
+            (ended, out.stdout, out.stderr)
         }
-        Err(Failed::Timeout(_)) => (Ended::TimedOut, Vec::new()),
+        Err(Failed::Timeout(_)) => (Ended::TimedOut, Vec::new(), Vec::new()),
         Err(Failed::Io(e)) => (
             Ended::NotStarted(format!("Cannot start sh: {e}.")),
+            Vec::new(),
             Vec::new(),
         ),
     }

@@ -87,8 +87,8 @@ fn a_clean_open_pull_request_is_queued_with_the_head_it_was_cached_at() {
             .iter()
             .map(|c| c.args.join(" "))
             .collect::<Vec<_>>(),
-        [format!("api repos/acme/api/compare/main...{SHA}")],
-        "the enqueue reads the containment, and never writes"
+        Vec::<String>::new(),
+        "the enqueue makes no gh call: behind main is not read (b79)"
     );
 }
 

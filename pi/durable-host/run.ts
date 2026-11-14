@@ -397,6 +397,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       }
       return name;
     };
+    let abortEpoch = 0;
     const submit = async (input: Input): Promise<Submission> => {
       // §6.16 the loop gate: every input that reaches the conversation — a client `submit` or a follower Event — is a
       // submission the host makes, so it counts here, at the one gate. A cpd-chat User prompt (`reply: true`)
@@ -425,6 +426,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       if (starts) resetTurn(loop as unknown as Run);
       if (input.reply) reply = true;
       pending++;
+      const epoch = abortEpoch;
       changed("working");
       try {
         // Only an input that starts a turn gets the first message and the context update; they are prepared one input at a time.
@@ -436,6 +438,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         const submission = await conversation.submit(input);
         void submission.wait().then(
           () => {
+            if (epoch !== abortEpoch) return; // an abort already returned the host to idle
             if (--pending === 0) {
               resetTurn(loop as unknown as Run);
               changed("idle");
@@ -596,7 +599,18 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
           held.resolveByHost(id, "aborted");
           server?.broadcast({ type: "ui_resolved", id, outcome: "aborted", by: "host" });
         }
-        return conversation.abort(opts);
+        const aborted = conversation.abort(opts);
+        void aborted.then(() => {
+          // b59: an aborted submission's wait() may never settle, so the served abort itself returns the host to idle.
+          abortEpoch++;
+          if (pending > 0) {
+            pending = 0;
+            resetTurn(loop as unknown as Run);
+            changed("idle");
+            reply = false;
+          }
+        }, () => {});
+        return aborted;
       },
       abortSubmission: (id) => conversation.abortSubmission(id),
       reload: () => reload.reload(),

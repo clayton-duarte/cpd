@@ -684,7 +684,8 @@ fn gh_poll_keeps_cached_data_when_the_call_fails() {
         .data_hash;
     rig.state().fail = Some(Reply::exit(1, "", "HTTP 502: Bad Gateway"));
     let _ = rig.pass(10);
-    assert_eq!(rig.graphql().len(), 2, "the failing call was made");
+    // The pass's document and, as it carries heavy aliases, the searches-only retry (b77); both fail here.
+    assert_eq!(rig.graphql().len(), 3, "the failing calls were made");
     assert_eq!(rig.pr_state(1).as_deref(), Some("open"), "the row is kept");
     assert_eq!(
         rig.text("SELECT title FROM pull_requests WHERE number = 1"),
@@ -804,74 +805,6 @@ fn gh_poll_keeps_excused_labels_reduction_of_checks() {
     );
 }
 
-/// `gh` of the merge drain: the compare read says the head is behind `main`; nothing else is expected.
-struct BehindGh;
-
-impl Handler for BehindGh {
-    fn handle(&self, call: &Call) -> Reply {
-        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
-        match args[..] {
-            ["api", _, ..] if args[1].starts_with("repos/acme/pay/compare/main...") => {
-                Reply::ok(r#"{"status":"behind"}"#)
-            }
-            _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
-        }
-    }
-}
-
-#[test]
-fn behind_head_rearm_success_raises_no_mutation_failed() {
-    use super::{ExecOutcome, Source};
-    const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
-    let mut rig = crate::janitor_tests::Rig::new();
-    rig.workflow("api", "open");
-    rig.sql(&format!(
-        "UPDATE pull_requests SET base_ref = 'main', default_branch = 'main', head_oid = '{HEAD}',
-                mergeable = 'mergeable', merge_state = 'clean', checks = 'passed' WHERE number = 801;
-         INSERT INTO swr_repos (repo, default_branch, is_archived, auto_merge_allowed, squash_merge_allowed,
-                                merge_commit_allowed, rebase_merge_allowed, delete_branch_on_merge, fetched_at)
-           VALUES ('acme/pay', 'main', 0, 1, 1, 0, 0, 1, 't');"
-    ));
-    let _ = (*rig.fakes.runner).clone().route("gh", Arc::new(BehindGh));
-    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
-    let mut store = Store::open(&rig.home, 5000).unwrap();
-    let now = rig.fakes.ports.clock.utc();
-    let id = super::github_write::enqueue(
-        &mut store,
-        now,
-        "github:pr:acme/pay#801",
-        "merge",
-        json!({"expected_head_oid": HEAD, "method": "squash"}),
-        Some(json!({"state": "merging"})),
-    )
-    .unwrap();
-    let config = Config::load(&rig.home).unwrap();
-    let m = crate::swr::outbox::get(&mut store, id).unwrap().unwrap();
-    let outcome = Ports::scope(&rig.fakes.ports, || {
-        let mut cx = Cx {
-            store: &mut store,
-            ports: &rig.fakes.ports,
-            home: &rig.home,
-            config: &config,
-        };
-        GithubSource::default().execute(&mut cx, &m)
-    });
-    let armed: i64 = store
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT merge_armed FROM pull_requests WHERE number = 801",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
-    assert_eq!(armed, 1, "the merge intent stays armed");
-    assert!(
-        !matches!(outcome, ExecOutcome::Failed { .. }),
-        "a handled re-arm raises no swr_mutation_failed: {outcome:?}"
-    );
-}
-
 #[test]
 fn non_empty_heavy_uses_reviewthreads_first_100_in_both_fragments() {
     let q = build_poll_query(&PollPlan {
@@ -965,7 +898,7 @@ fn gh_poll_failed_continuation_restarts_discovery_without_advancing() {
     rig.state().fail = None;
     rig.pass(120).unwrap();
     assert!(
-        !rig.graphql()[2].contains("authoredMore:"),
+        !rig.graphql().last().unwrap().contains("authoredMore:"),
         "failure resets an invalid cursor"
     );
     rig.pass(180).unwrap();
@@ -1039,7 +972,7 @@ fn gh_poll_invalid_discovery_page_does_not_commit_partial_rows() {
         (*rig.fakes.runner).clone().route("gh", rig.world.clone());
         rig.pass(120).unwrap();
         assert!(
-            !rig.graphql()[2].contains("authoredMore:"),
+            !rig.graphql().last().unwrap().contains("authoredMore:"),
             "restart after malformed cursor"
         );
         rig.pass(180).unwrap();
@@ -1190,6 +1123,102 @@ fn a_deploys_rate_limit_pauses_until_the_rest_reset_not_the_graphql_one() {
         row.paused_until,
         Some(rest_reset + time::Duration::seconds(3)),
         "the REST reset plus grace, earlier than the stored GraphQL reset"
+    );
+}
+
+/// `gh` whose GraphQL answers an empty body (exit 1) whenever the document asks for heavy fields, as a document GitHub cannot
+/// answer does; a light document goes to the [`World`].
+struct HeavyFails(Arc<World>);
+
+impl Handler for HeavyFails {
+    fn handle(&self, call: &Call) -> Reply {
+        let heavy = call
+            .args
+            .iter()
+            .any(|a| a.starts_with("query=") && a.contains("...Heavy"));
+        if heavy {
+            return Reply::exit(1, "", "");
+        }
+        self.0.handle(call)
+    }
+}
+
+#[test]
+fn a_failing_heavy_read_does_not_leave_the_other_rows_stale() {
+    let mut rig = Rig::new();
+    let (mut stored, mut moved) = (pr(1), pr(2));
+    rig.seed(&stored, true);
+    rig.seed(&moved, true);
+    // GitHub moved: PR 1's checks now fail, PR 2 has a new head. PR 2 has no detail, so the pass asks for it heavy.
+    stored.checks = vec![("build", "FAILURE")];
+    moved.oid = "b2";
+    moved.updated = "U2";
+    rig.state().authored = vec![stored, moved];
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(HeavyFails(rig.world.clone())));
+    assert!(
+        rig.pass(0).is_err(),
+        "the heavy read failure is still the endpoint's"
+    );
+    assert_eq!(
+        rig.text("SELECT checks FROM pull_requests WHERE number = 1")
+            .as_deref(),
+        Some("failed"),
+        "the light search still refreshed the rows"
+    );
+    assert_eq!(
+        rig.text("SELECT head_oid FROM pull_requests WHERE number = 2")
+            .as_deref(),
+        Some("b2"),
+        "the new head is stored"
+    );
+    let row = endpoint::get(&mut rig.store, "github")
+        .unwrap()
+        .expect("endpoint row");
+    assert_eq!(row.error_count, 1, "the failure is recorded");
+}
+
+/// `gh` whose heavy document fails without a rate limit and whose searches-only retry is rate limited.
+struct HeavyFailsThenLimited;
+
+impl Handler for HeavyFailsThenLimited {
+    fn handle(&self, call: &Call) -> Reply {
+        let heavy = call
+            .args
+            .iter()
+            .any(|a| a.starts_with("query=") && a.contains("...Heavy"));
+        if heavy {
+            Reply::exit(1, "", "")
+        } else {
+            Reply::exit(1, "", "API rate limit exceeded")
+        }
+    }
+}
+
+#[test]
+fn a_rate_limited_light_retry_pauses_the_endpoint() {
+    let mut rig = Rig::new();
+    let (mut stored, mut moved) = (pr(1), pr(2));
+    rig.seed(&stored, true);
+    rig.seed(&moved, true);
+    stored.checks = vec![("build", "FAILURE")];
+    moved.oid = "b2";
+    moved.updated = "U2";
+    rig.state().authored = vec![stored, moved];
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(HeavyFailsThenLimited));
+    let error = rig.pass(0).unwrap_err();
+    assert_eq!(
+        error.details()["rate_limited"],
+        true,
+        "the retry's rate limit is the pass's error"
+    );
+    let row = endpoint::get(&mut rig.store, "github").unwrap().unwrap();
+    assert!(
+        endpoint::is_paused(&row, rig.t0 + Duration::from_secs(1)),
+        "the endpoint is paused through the rate-limit path"
     );
 }
 

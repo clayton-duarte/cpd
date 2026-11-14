@@ -484,7 +484,8 @@ fn kinds_allowed(shape: &str) -> &'static [&'static str] {
     match shape {
         "tdd" => &["docs", "test", "impl", "verify"],
         "docs" => &["docs"],
-        "config" => &["work"],
+        "config" | "coverage" => &["work"],
+        "refactor" => &["impl"],
         _ => &["work", "docs", "test", "impl", "verify"],
     }
 }
