@@ -26,6 +26,11 @@ struct ContextCli {
     #[command(subcommand)]
     command: cpd_core::context::Command,
 }
+#[derive(Parser)]
+struct JobCli {
+    #[command(subcommand)]
+    command: cpd_core::job::Command,
+}
 
 struct Fixture {
     home: CpdHome,
@@ -106,6 +111,10 @@ impl Fixture {
     fn plan(&self, args: &[&str]) -> Result<Output, CpdError> {
         plan(&self.fakes.ports, args)
     }
+    fn job(&self, args: &[&str]) -> Result<Output, CpdError> {
+        let cmd = JobCli::parse_from(std::iter::once("cpd").chain(args.iter().copied())).command;
+        Ports::scope(&self.fakes.ports, || cpd_core::job::run(cmd))
+    }
     fn context_fixture(&self) {
         self.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx','Context','acme','t','m1');");
     }
@@ -159,12 +168,13 @@ fn paired_future_context_creation() {
     // A Manager insert failure rolls back the Context and both events.
     {
         let f = Fixture::new("durable");
-        f.sql("CREATE TRIGGER reject_manager BEFORE INSERT ON sessions WHEN NEW.role='manager' BEGIN SELECT RAISE(ABORT,'injected manager failure'); END;");
+        // Exhaust the history AUTOINCREMENT key: Context insertion cannot complete.
+        f.sql("UPDATE sqlite_sequence SET seq=9223372036854775807 WHERE name='history'");
         assert!(f.context(CONTEXT_ARGS).is_err(), "Manager insert must be in Context creation's transaction");
         assert_eq!(f.count("SELECT count(*) FROM contexts WHERE id='ctx'"), 0);
         assert_eq!(f.count("SELECT count(*) FROM sessions WHERE context='ctx'"), 0);
         assert_eq!(f.count("SELECT count(*) FROM events WHERE context='ctx'"), 0);
-        f.sql("DROP TRIGGER reject_manager");
+        f.sql("UPDATE sqlite_sequence SET seq=(SELECT max(id) FROM history) WHERE name='history'");
         assert_success(f.context(CONTEXT_ARGS));
         f.manager();
     }
@@ -258,12 +268,12 @@ fn paired_future_shaping_creation() {
         let args = ["new", "fresh", "--context", "ctx", "--title", "Fresh", "--shaping", "--runner", "durable"];
         assert!(f.plan(&args).is_err(), "a User is not the Context's Manager");
         unsafe { std::env::set_var("CPD_SESSION", manager) };
-        f.sql("CREATE TRIGGER reject_lead BEFORE INSERT ON sessions WHEN NEW.role='lead' BEGIN SELECT RAISE(ABORT,'injected lead failure'); END;");
+        f.sql("UPDATE sqlite_sequence SET seq=9223372036854775807 WHERE name='history'");
         assert!(f.plan(&args).is_err());
         assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh'"), 0);
         assert_eq!(f.count("SELECT count(*) FROM sessions WHERE plan='fresh'"), 0);
         assert_eq!(f.count("SELECT count(*) FROM events WHERE plan='fresh'"), 0);
-        f.sql("DROP TRIGGER reject_lead");
+        f.sql("UPDATE sqlite_sequence SET seq=(SELECT max(id) FROM history) WHERE name='history'");
         assert_success(f.plan(&args));
         assert_eq!(f.count("SELECT count(*) FROM plans p JOIN sessions s ON s.id=p.lead_session WHERE p.id='fresh' AND p.phase='shaping' AND s.role='lead' AND s.context=p.context AND s.plan=p.id"), 1);
         let pair = f.rows("SELECT p.id,p.lead_session,s.by_user FROM plans p JOIN sessions s ON s.id=p.lead_session WHERE p.id='fresh'");
@@ -272,5 +282,21 @@ fn paired_future_shaping_creation() {
         assert_eq!(f.rows("SELECT p.id,p.lead_session,s.by_user FROM plans p JOIN sessions s ON s.id=p.lead_session WHERE p.id='fresh'"), pair);
         assert_eq!(f.rows("SELECT * FROM events WHERE plan='fresh' ORDER BY id"), events);
         assert_eq!(f.count("SELECT count(*) FROM sessions WHERE role='lead' AND plan='fresh'"), 1);
+        // Rename is shaping work: allowed to the same Context's Manager only in shaping.
+        // tmux list-panes is mocked, never a real server.
+        (*f.fakes.runner).clone().on("tmux", |_| true, Reply::ok(""));
+        assert_success(f.plan(&["rename", "--plan", "fresh", "--title", "Shaped"]));
+        let err = f.job(&["list", "--plan", "fresh"]).unwrap_err();
+        assert_eq!(err.code(), cpd_core::error::ErrorCode::PlanHasLead);
+        let other = "00000000-0000-4000-8000-000000000002";
+        f.sql(&format!("INSERT INTO contexts (id,title,owner,created_at,created_on) VALUES ('other','Other','acme','t','m1'); INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at) VALUES ('{other}','manager','other',NULL,'other','/','O3','stopped','t','t');"));
+        unsafe { std::env::set_var("CPD_SESSION", other) };
+        let err = f.plan(&["rename", "--plan", "fresh", "--title", "Cross context"]).unwrap_err();
+        assert_eq!(err.code(), cpd_core::error::ErrorCode::PlanOtherContext);
+        assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND title='Shaped'"), 1);
+        unsafe { std::env::set_var("CPD_SESSION", manager) };
+        f.sql("UPDATE plans SET phase='grounding' WHERE id='fresh'");
+        assert!(f.plan(&["rename", "--plan", "fresh", "--title", "Too late"]).is_err(), "Manager shaping must stop after shaping phase");
+        assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND title='Shaped'"), 1);
     }
 }
