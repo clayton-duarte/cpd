@@ -18,6 +18,8 @@
 #[cfg(test)]
 mod agent_label_tests;
 mod archive;
+#[cfg(test)]
+mod cockpit_tests;
 pub mod delta;
 #[cfg(test)]
 mod delta_tests;
