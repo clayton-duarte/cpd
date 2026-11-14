@@ -253,6 +253,7 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261113T0801-bug-issue-backfill",
             "20261113T0802-refactor-shapes",
             "20261113T0803-coverage-baseline",
+            "20261113T0804-job-touches-waived",
             "20261113T0900-pr-rereview-asks",
             "20261113T1000-pr-open-threads",
         ]

@@ -362,4 +362,56 @@ archive_sleep_seconds = 86400
             "supervised server process should be alive"
         );
     }
+
+    /// pro-d592, bug b74: after an install the restarted engine has no pid of its own. The new WebUI the install
+    /// prepared already holds port 3333 (`node web/src/server/serve.ts`): the engine adopts it, as its own service,
+    /// and neither signals it nor spawns a second one.
+    #[test]
+    fn restarted_engine_adopts_prepared_webui() {
+        let mut fx = SupervisionFx::new();
+        let serve_ts = fx.home.root().join("web/src/server/serve.ts");
+        fs::create_dir_all(serve_ts.parent().unwrap()).expect("create web server dir");
+        fs::write(&serve_ts, "// mock server").expect("write serve.ts");
+
+        let prepared = fx.spawn.add_process(
+            cpd_core::host::spawn::Pid(1),
+            "node web/src/server/serve.ts",
+        );
+        let pid = prepared.0;
+        let lsof_out = format!("p{pid}\ncnode\nn*:3333\n");
+        fx.runner = fx.runner.on(
+            "lsof",
+            |call| call.args.iter().any(|a| a == "-iTCP:3333"),
+            Reply::exit(0, &lsof_out, ""),
+        );
+        fx.runner = fx.runner.on(
+            "ps",
+            move |call| call.args.iter().any(|a| a == &pid.to_string()),
+            Reply::exit(0, "node web/src/server/serve.ts\n", ""),
+        );
+
+        // The install's `cpd webui --prepare` recorded the prepared WebUI's pid: that marks the holder as prepared.
+        fs::create_dir_all(fx.home.run_dir()).expect("create run dir");
+        fs::write(fx.home.run_dir().join("webui.pid"), pid.to_string()).expect("write webui.pid");
+
+        let mut engine = fx.engine();
+        webui::run(&mut engine);
+
+        assert_eq!(
+            engine.webui.services[&ServiceKind::Prod].pid,
+            Some(prepared),
+            "the engine adopts the prepared WebUI as its prod service"
+        );
+        assert!(
+            fx.spawn.launches().is_empty(),
+            "no second WebUI is spawned: {:?}",
+            fx.spawn.launches()
+        );
+        assert!(
+            fx.spawn.signals().is_empty(),
+            "the prepared WebUI is not signalled: {:?}",
+            fx.spawn.signals()
+        );
+        assert!(fx.spawn.alive(prepared), "the prepared WebUI keeps serving");
+    }
 }

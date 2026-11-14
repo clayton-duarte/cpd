@@ -129,7 +129,10 @@ fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
                         .replace(" UNION ALL SELECT 'touches_approved', NEW.touches_approved WHERE OLD.touches_approved IS NOT NEW.touches_approved", "")
                         .replace(", 'waiting_on', OLD.waiting_on", "").replace(", 'waiting_on', NEW.waiting_on", "")
                         .replace(" UNION ALL SELECT 'waiting_on', OLD.waiting_on WHERE OLD.waiting_on IS NOT NEW.waiting_on", "")
-                        .replace(" UNION ALL SELECT 'waiting_on', NEW.waiting_on WHERE OLD.waiting_on IS NOT NEW.waiting_on", ""))
+                        .replace(" UNION ALL SELECT 'waiting_on', NEW.waiting_on WHERE OLD.waiting_on IS NOT NEW.waiting_on", "")
+                        .replace(", 'touches_waived', OLD.touches_waived", "").replace(", 'touches_waived', NEW.touches_waived", "")
+                        .replace(" UNION ALL SELECT 'touches_waived', OLD.touches_waived WHERE OLD.touches_waived IS NOT NEW.touches_waived", "")
+                        .replace(" UNION ALL SELECT 'touches_waived', NEW.touches_waived WHERE OLD.touches_waived IS NOT NEW.touches_waived", ""))
                 })
                 .collect())
         })
@@ -241,6 +244,8 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
                 assert_eq!(row.remove("touches_approved"), Some(Value::Null));
                 // `waiting_on` is the column of `draft-waiting-on`, later still: null in every row.
                 assert_eq!(row.remove("waiting_on"), Some(Value::Null));
+                // `touches_waived` is the column of `job-touches-waived`, later still: null in every row.
+                assert_eq!(row.remove("touches_waived"), Some(Value::Null));
             }
             // `runner` and `worker_pid` are the columns of `worker-runner`, which sorts after this migration: `pi` and null.
             if let Some(row) = row.as_object_mut().filter(|_| *table == "attempts") {

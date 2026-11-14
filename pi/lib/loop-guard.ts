@@ -74,7 +74,7 @@ export const TURN_REFUSAL_TRIP = 3;
 const STATE_TOOLS = new Set(["write", "edit", "cpd_plan_review", "ask_user_question"]);
 /** L8: the state-mutating `cpd` commands, `group -> subcommands`; the one list. */
 const STATE_COMMANDS: Record<string, readonly string[]> = {
-  job: ["add", "edit", "cancel", "retry", "steer", "addendum", "urgent", "approve-tests", "approve-touches"],
+  job: ["add", "edit", "cancel", "retry", "steer", "addendum", "urgent", "approve-tests", "approve-touches", "approve-untouched"],
   workflow: ["add", "edit", "describe", "cancel", "start"],
   plan: ["new", "phase", "outline", "lock", "review", "rename", "move", "done", "cancel", "archive"],
   pr: ["open", "merge", "post", "rebase", "push", "describe", "reply", "rerun"],

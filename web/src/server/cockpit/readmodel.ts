@@ -28,6 +28,8 @@ export interface RawPlanShow { plan: { id: string; context: string; title: strin
 export interface ParsedInbox {
   rows: RawInboxItem[];
   engineRunning: boolean;
+  engineDownSince: StrOrNull;
+  engineRestartReason: StrOrNull;
   hidden: { claimed: number; dismissed: number; snoozed: number };
   cursor: number;
 }
@@ -143,6 +145,7 @@ function workflowOf(data: unknown): StrOrNull {
 export function parseInboxList(reply: Reply): ParsedInbox {
   const c = "inbox list";
   const hidden = obj(reply["hidden"], c, "hidden");
+  const engine = obj(reply["engine"], c, "engine");
   const rows = arr(reply, "items", c).map((v) => {
     const o = obj(v, c, "items[]");
     const id = o["id"] === null ? null : num(o, "id", c);
@@ -156,7 +159,8 @@ export function parseInboxList(reply: Reply): ParsedInbox {
     };
   });
   return {
-    rows, engineRunning: bool(obj(reply["engine"], c, "engine"), "running", c),
+    rows, engineRunning: bool(engine, "running", c),
+    engineDownSince: optStr(engine, "down_since", c), engineRestartReason: optStr(engine, "restart_reason", c),
     hidden: { claimed: num(hidden, "claimed", c), dismissed: num(hidden, "dismissed", c), snoozed: num(hidden, "snoozed", c) },
     cursor: cursorOf(reply, c),
   };
@@ -409,7 +413,7 @@ export function buildInbox(
       ...(curation !== undefined ? { curation } : {}),
     };
   });
-  return { openCount: rows.length, engineRunning: parsed.engineRunning, hidden: parsed.hidden, rows, cursor: parsed.cursor };
+  return { openCount: rows.length, engineRunning: parsed.engineRunning, engineDownSince: parsed.engineDownSince, engineRestartReason: parsed.engineRestartReason, hidden: parsed.hidden, rows, cursor: parsed.cursor };
 }
 
 function parseCuration(reply: Reply): CurationRecord[] {

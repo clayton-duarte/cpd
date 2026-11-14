@@ -8,8 +8,8 @@ export interface Banner {
 export interface BannerInput {
   connection: ConnectionState;
   engineRunning: boolean;
-  engineDownSince?: string;
-  engineRestartReason?: "install";
+  engineDownSince?: string | null;
+  engineRestartReason?: string | null;
   lastSeenAt: string | null;
 }
 
