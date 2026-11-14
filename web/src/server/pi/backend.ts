@@ -219,8 +219,7 @@ export function createPiBackend(deps: {
           : `cpd session show failed: ${show.error}`,
       );
     };
-    const footer = (): FooterStats => {
-      const facts = tail.normalizer.facts;
+    const footer = (facts: JsonlFacts = tail.normalizer.facts): FooterStats => {
       const tier = show.tier ?? ref.tier;
       return {
         model: pick(facts.model, show.model, "model"),
@@ -264,9 +263,9 @@ export function createPiBackend(deps: {
     const committed = new Set<number>();
     const liveIds = new Set<string>();
     let turnsSeen = 0;
-    const syncTurns = (): number[] => {
-      const fresh = tail.normalizer.turns.slice(turnsSeen);
-      turnsSeen = tail.normalizer.turns.length;
+    const syncTurns = (turns: readonly number[] = tail.normalizer.turns): number[] => {
+      const fresh = turns.slice(turnsSeen);
+      turnsSeen = turns.length;
       for (const ts of fresh) committed.add(ts);
       return fresh;
     };
@@ -316,10 +315,12 @@ export function createPiBackend(deps: {
           } else {
             const result = e.result;
             const queuedIn = generation;
+            const facts = { ...normalizer.facts };
+            const turns = [...normalizer.turns];
             appends = appends
               .then(refreshState)
               .then(() => {
-                if (!disposed && queuedIn === generation) applyAppend(result);
+                if (!disposed && queuedIn === generation) applyAppend(result, facts, turns);
               })
               .catch((err: unknown) =>
                 out({
@@ -335,8 +336,8 @@ export function createPiBackend(deps: {
       });
     };
 
-    const applyAppend = (r: PushResult): void => {
-      for (const ts of syncTurns())
+    const applyAppend = (r: PushResult, facts: JsonlFacts, turns: readonly number[]): void => {
+      for (const ts of syncTurns(turns))
         if (liveIds.delete(`live:${ts}`))
           out({ type: "session.remove", sessionId, itemId: `live:${ts}` });
       if (r.added.length > 0)
@@ -356,8 +357,8 @@ export function createPiBackend(deps: {
           outcome: "answered",
         });
       if (r.factsChanged)
-        out({ type: "session.footer", sessionId, footer: footer() });
-      const now = isBusy(tail.normalizer.facts, engineState);
+        out({ type: "session.footer", sessionId, footer: footer(facts) });
+      const now = isBusy(facts, engineState);
       if (now !== busy) {
         busy = now;
         status();
@@ -427,6 +428,7 @@ export function createPiBackend(deps: {
         ticks += 1;
         const shown = await readShow();
         if (disposed) return;
+        if (shown.state !== undefined) engineState = shown.state;
         if (shown.file !== undefined) {
           currentFile = shown.file;
           poll = undefined;
