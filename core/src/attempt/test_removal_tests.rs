@@ -291,3 +291,31 @@ fn template_interpolations_keep_executable_assertions() {
     let nested = r#"test("a", () => { const msg = `outer ${`inner ${(() => { expect(1).toBe(1); return 1; })()}`}`; });"#;
     assert_eq!(test_cases(nested)[0].assertions, 1);
 }
+
+#[test]
+fn upstream_test_changes_brought_by_a_merge_need_no_removal_approval() {
+    let mut r = rig(Spec {
+        kind: "update",
+        touches: "[\"tests/lead.rs\"]",
+        lead_only: &[(
+            "tests/lead.rs",
+            "#[test]\nfn a() { assert!(true); assert!(true); }\n",
+        )],
+        base_ahead: &[("tests/lead.rs", "#[test]\nfn a() { assert!(true); }\n")],
+        brings_base: true,
+        ..Spec::default()
+    });
+    r.submit().expect("upstream test changes are exempt");
+}
+
+#[test]
+fn multiline_javascript_titles_preserve_case_identity_and_assertions() {
+    let compact = "describe('suite', () => {\ntest('a', () => { expect(1).toBe(1); });\n});";
+    let multiline =
+        "describe(\n 'suite', () => {\ntest(\n 'a',\n () => { expect(1).toBe(1); }\n);\n});";
+    assert_eq!(test_cases(multiline), test_cases(compact));
+    assert!(check_tests_kept(compact, multiline, &[]).is_ok());
+    assert!(
+        check_tests_kept(multiline, &multiline.replace("expect(1).toBe(1);", ""), &[]).is_err()
+    );
+}

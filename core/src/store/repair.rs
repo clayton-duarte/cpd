@@ -297,8 +297,11 @@ pub fn apply_repair_in_txn(
 }
 
 fn reconcile_jobs_table(conn: &Connection) -> Result<(), CpdError> {
-    conn.execute_batch(
-        "DROP VIEW IF EXISTS job_tenants;
+    let has_removal_approvals: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'test_removal_approved')",
+        [], |row| row.get(0),
+    ).map_err(CpdError::from)?;
+    let mut sql = "DROP VIEW IF EXISTS job_tenants;
 CREATE TABLE jobs__reconcile_new (
   seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
   plan                TEXT NOT NULL REFERENCES plans(id),
@@ -409,9 +412,12 @@ WHEN OLD.status <> 'draft'
           AND NOT EXISTS (SELECT 1 FROM attempts WHERE plan = OLD.plan AND job = OLD.key)
           AND NEW.title IS OLD.title AND NEW.tier IS OLD.tier AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key
           AND NEW.workflow IS OLD.workflow AND NEW.review IS OLD.review AND NEW.kind IS OLD.kind)
-BEGIN SELECT RAISE(ABORT, 'job_locked'); END;",
-    )
-    .map_err(CpdError::from)
+BEGIN SELECT RAISE(ABORT, 'job_locked'); END;".to_owned();
+    if !has_removal_approvals {
+        sql = sql.replace("  test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),\n", "")
+            .replace(", test_removal_approved", "");
+    }
+    conn.execute_batch(&sql).map_err(CpdError::from)
 }
 
 fn reconcile_incident_table(conn: &Connection) -> Result<(), CpdError> {
