@@ -12,6 +12,7 @@ import { formatPortInUseMessage } from './port-holder.ts';
 import { createServices, realBoundaries, cpdWebPlugin, type PluginBoundaries } from './plugin.ts';
 import { createWsServer, createUpgradeFactory, WS_PATH, type WebSocketUpgradeServer } from './ws.ts';
 import { writeWebuiToken } from './webui-token.ts';
+import { staticHeaders } from './static-headers.ts';
 
 export const PROD_PORT = 3333;
 export const PROD_HOST = '0.0.0.0';
@@ -25,6 +26,7 @@ const MIME_TYPES: Record<string, string> = {
   '.mjs': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -57,8 +59,8 @@ export function findStaticDir(): string {
   return distCandidate;
 }
 
-function sendStaticFile(req: http.IncomingMessage, res: http.ServerResponse, file: string, contentType: string, size?: number): void {
-  const headers = { 'Content-Type': contentType, ...(size === undefined ? {} : { 'Content-Length': size }) };
+function sendStaticFile(req: http.IncomingMessage, res: http.ServerResponse, file: string, contentType: string, urlPath: string, size?: number): void {
+  const headers = { 'Content-Type': contentType, ...staticHeaders(urlPath), ...(size === undefined ? {} : { 'Content-Length': size }) };
   if (req.method === 'HEAD') {
     res.writeHead(200, headers);
     res.end();
@@ -141,7 +143,7 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
         const indexPath = path.join(staticDir, 'index.html');
         fs.stat(indexPath, (indexErr, indexStats) => {
           if (!indexErr && indexStats.isFile()) {
-            sendStaticFile(req, res, indexPath, 'text/html; charset=utf-8');
+            sendStaticFile(req, res, indexPath, 'text/html; charset=utf-8', '/index.html');
           } else {
             res.writeHead(404, { 'Content-Type': 'text/plain' });
             res.end('Not Found');
@@ -152,7 +154,7 @@ export async function createProdServer(options?: ServeOptions): Promise<http.Ser
 
       const ext = path.extname(filePath).toLowerCase();
       const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
-      sendStaticFile(req, res, filePath, contentType, stats.size);
+      sendStaticFile(req, res, filePath, contentType, urlPath, stats.size);
     });
   });
 

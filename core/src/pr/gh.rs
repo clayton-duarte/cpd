@@ -105,6 +105,7 @@ fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
         None,
         stderr,
     )
+    .with("transient", true)
 }
 
 /// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
@@ -1331,6 +1332,87 @@ pub fn pull_request_id(
         "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ id }} }} }}"
     );
     posted(runner, cwd, &query, &[], "/repository/pullRequest/id")
+}
+
+/// Resolve an uncached review target, verify its pull request, then deliver its reply.
+pub fn reply_to_uncached(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+    node: &str,
+    body: &str,
+) -> Result<(), CpdError> {
+    let query = "query($node: ID!) { node(id: $node) { __typename ... on PullRequestReviewComment { fullDatabaseId replyTo { fullDatabaseId } url pullRequest { number repository { nameWithOwner } } } ... on PullRequestReviewThread { id comments(last: 1) { nodes { body } } pullRequest { number repository { nameWithOwner } } } ... on PullRequestReview { url pullRequest { number repository { nameWithOwner } } } } }";
+    let (args, out) = graphql_with(runner, cwd, query, &[("node", node)])?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let reply = Reply {
+        args: &refs,
+        out: &out,
+    };
+    if out.exit != Some(0) {
+        return Err(reply.fail(format!("Cannot look up reply target {node}.")));
+    }
+    let (data, errors): (Value, _) = reply.envelope()?;
+    if !errors.is_empty() {
+        return Err(reply.fail(format!(
+            "Cannot look up reply target {node}: GitHub returned errors."
+        )));
+    }
+    let target = &data["node"];
+    let pull = &target["pullRequest"];
+    if pull["number"].as_i64() != Some(number)
+        || pull["repository"]["nameWithOwner"].as_str() != Some(repo)
+    {
+        return Err(reply.fail(format!(
+            "Reply target {node} does not belong to {repo}#{number}."
+        )));
+    }
+    match target["__typename"].as_str() {
+        Some("PullRequestReviewThread") => {
+            if target["comments"]["nodes"]
+                .as_array()
+                .and_then(|nodes| nodes.last())
+                .and_then(|comment| comment["body"].as_str())
+                .is_some_and(|body| body.contains(comments::MARKER))
+            {
+                return Ok(());
+            }
+            reply_to_thread(runner, cwd, node, body).map(drop)
+        }
+        Some("PullRequestReviewComment") => {
+            // databaseId is a deprecated 32-bit Int. GitHub's BigInt may be encoded as a decimal string.
+            let comment = target
+                .get("replyTo")
+                .filter(|v| !v.is_null())
+                .unwrap_or(target);
+            let id = comment["fullDatabaseId"]
+                .as_i64()
+                .or_else(|| {
+                    comment["fullDatabaseId"]
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                })
+                .filter(|id| *id > 0)
+                .ok_or_else(|| reply.fail("Review comment has no fullDatabaseId.".into()))?;
+            let endpoint = format!("repos/{repo}/pulls/{number}/comments/{id}/replies");
+            let field = format!("body={body}");
+            run_on(runner, cwd, &["api", "-X", "POST", &endpoint, "-f", &field]).map(drop)
+        }
+        Some("PullRequestReview") => {
+            let url = target["url"]
+                .as_str()
+                .ok_or_else(|| reply.fail("Review has no URL.".into()))?;
+            pull_request_id(runner, cwd, repo, number)
+                .and_then(|pull| {
+                    reply_to_comment(runner, cwd, &pull, &format!("Re: {url}\n\n{body}"))
+                })
+                .map(drop)
+        }
+        _ => Err(reply.fail(format!(
+            "Reply target {node} is not a review, comment or thread."
+        ))),
+    }
 }
 
 /// Replies in the review thread `thread` (never resolves it); the new comment's url.

@@ -45,9 +45,17 @@ pub fn enqueue(
     now: OffsetDateTime,
     target: &str,
     op_kind: &str,
-    vars: Value,
+    mut vars: Value,
     patch: Option<Value>,
 ) -> Result<i64, CpdError> {
+    // Execution metadata survives polling, but does not change the logical reply identity.
+    let context = if op_kind == "reply" {
+        vars.as_object_mut()
+            .and_then(|v| v.remove("resolve_uncached"))
+            .map(|resolve| json!({"resolve_uncached": resolve}))
+    } else {
+        None
+    };
     let coalesce = match coalesce_of(op_kind) {
         Coalesce::Dedupe(_) => Coalesce::Dedupe(vars.to_string()),
         other => other,
@@ -61,7 +69,7 @@ pub fn enqueue(
             op_kind: op_kind.into(),
             vars,
             patch,
-            context: None,
+            context,
         },
         coalesce,
     )
@@ -274,10 +282,19 @@ impl GithubSource {
         let Some((kind, repo, number)) = target(&m.target_key) else {
             return failed(format!("{:?} is not a github target.", m.target_key));
         };
-        let vars: Value = match serde_json::from_str(&m.vars_json) {
+        let mut vars: Value = match serde_json::from_str(&m.vars_json) {
             Ok(v) => v,
             Err(e) => return failed(format!("The vars of mutation {} are not JSON: {e}.", m.id)),
         };
+        if m.op_kind == "reply"
+            && let Some(context) = m
+                .context_json
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            && let Some(resolve) = context.get("resolve_uncached")
+        {
+            vars["resolve_uncached"] = resolve.clone();
+        }
         let ports = cx.ports.clone();
         let runner = &*ports.runner;
         let cwd = cx.home.root().to_path_buf();
@@ -513,6 +530,17 @@ impl GithubSource {
             vars["to"].as_str().unwrap_or_default(),
             vars["body"].as_str().unwrap_or_default(),
         );
+        if vars["resolve_uncached"] == true {
+            return gh::reply_to_uncached(
+                runner,
+                cwd,
+                repo,
+                number,
+                to,
+                &format!("{body}\n\n{MARKER}"),
+            )
+            .map_or_else(|e| retry(&e), |()| ExecOutcome::Done);
+        }
         let feedback: Result<Option<String>, CpdError> = cx.store.read(|c| {
             Ok(c.query_row(
                 "SELECT feedback FROM pull_requests WHERE repo = ?1 AND number = ?2",
@@ -524,7 +552,17 @@ impl GithubSource {
         });
         let items: Vec<crate::pr::comments::Item> = match feedback {
             Ok(Some(text)) => serde_json::from_str(&text).unwrap_or_default(),
-            Ok(None) => Vec::new(),
+            Ok(None) => {
+                return gh::reply_to_uncached(
+                    runner,
+                    cwd,
+                    repo,
+                    number,
+                    to,
+                    &format!("{body}\n\n{MARKER}"),
+                )
+                .map_or_else(|e| retry(&e), |()| ExecOutcome::Done);
+            }
             Err(e) => return failed(e.message()),
         };
         // The item is gone from the raw feedback: someone answered it already.

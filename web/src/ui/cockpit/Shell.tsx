@@ -19,6 +19,8 @@ export function Shell(props: {
   chat: ReactNode;
   inbox: ReactNode;
   status?: ReactNode;
+  /** Rendered above the columns: the engine banner and the outbox. */
+  banner?: ReactNode;
   /** Filled with the resizable panels, for `resetLayout`. */
   panelsRef?: MutableRefObject<LayoutPanels | null>;
 }): ReactElement {
@@ -48,6 +50,7 @@ export function Shell(props: {
   const zoomed = mode === "zoomed";
   return (
     <div data-shell className="bg-background font-sans text-body text-foreground">
+      {props.banner}
       <ResizablePanelGroup
         id="cpd-columns"
         data-part="columns-group"

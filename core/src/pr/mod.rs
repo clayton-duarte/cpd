@@ -53,6 +53,8 @@ mod query_tests;
 #[cfg(test)]
 mod rate_limit_tests;
 #[cfg(test)]
+mod reply_tests;
+#[cfg(test)]
 mod rereview_tests;
 #[cfg(test)]
 mod settings_cache_tests;
