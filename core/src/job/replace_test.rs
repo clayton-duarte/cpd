@@ -41,6 +41,116 @@ pub(super) trait Boundary {
     ) -> Result<String, CpdError>;
 }
 
+/// True when the Job's Attempt was stopped for a test replacement (a pending or
+/// complete intent exists): the driver's A9 cleanup must then keep the Lead
+/// Branch on the Worker's commit instead of resetting it to `base_sha` (b63).
+pub(crate) fn stopped_for_replacement(
+    conn: &Connection,
+    plan: &PlanId,
+    job: &str,
+) -> Result<bool, CpdError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM test_replacements WHERE plan = ?1 AND source = ?2 AND state IN ('pending', 'complete'))",
+        params![plan.as_str(), job],
+        |r| r.get(0),
+    )?)
+}
+
+/// Re-seal a Job's fingerprint when only recorded replace-test redirects of
+/// its needs explain the drift; refuse otherwise (`reseal_unexplained`).
+pub(super) fn reseal(
+    env: &mut Env,
+    plan: &PlanId,
+    key: &str,
+    requester: &str,
+) -> Result<(), CpdError> {
+    env.store.write("job reseal", |tx| {
+        let lead: Option<String> = tx.query_row(
+            "SELECT lead_session FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )?;
+        if lead.as_deref() != Some(requester) {
+            return Err(CpdError::new(
+                ErrorCode::NotALead,
+                "Only the Plan's Lead can reseal a Job.",
+            ));
+        }
+        let all = jobs::load(tx, plan)?;
+        let job = all
+            .iter()
+            .find(|j| j.key == key)
+            .ok_or_else(|| refused("Job does not exist."))?;
+        let Some(stored) = job.fingerprint.clone() else {
+            return Err(refused("Job is not locked."));
+        };
+        let found = jobs::locked_fingerprint(job);
+        if stored == found {
+            return Ok(());
+        }
+        // The Job may have been sealed at any point along each need's redirect
+        // chain: try every combination of rewinds and accept one that
+        // reproduces the sealed value.
+        let mut sources: Vec<(String, String)> = Vec::new();
+        {
+            let mut s = tx.prepare("SELECT new_key, source FROM test_replacements WHERE plan = ?1 AND state = 'complete'")?;
+            let rows = s.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            for row in rows {
+                sources.push(row?);
+            }
+        }
+        let chains: Vec<Vec<String>> = job
+            .needs
+            .iter()
+            .map(|need| {
+                let mut chain = vec![need.clone()];
+                while let Some((_, source)) = sources.iter().find(|(n, _)| Some(n) == chain.last()) {
+                    if chain.contains(source) {
+                        break;
+                    }
+                    chain.push(source.clone());
+                }
+                chain
+            })
+            .collect();
+        let mut candidates: Vec<Vec<String>> = vec![Vec::new()];
+        for chain in &chains {
+            candidates = candidates
+                .iter()
+                .flat_map(|c| chain.iter().map(move |n| [c.clone(), vec![n.clone()]].concat()))
+                .collect();
+        }
+        let explained = candidates.into_iter().any(|needs| {
+            let mut before = job.clone();
+            before.needs = needs;
+            before.needs != job.needs && jobs::locked_fingerprint(&before) == stored
+        });
+        if !explained {
+            return Err(CpdError::new(
+                ErrorCode::LockedJobTampered,
+                format!("Job {key} fingerprint drift is not explained by a recorded replace-test redirect (reseal_unexplained)."),
+            ));
+        }
+        tx.execute(
+            "UPDATE jobs SET fingerprint = ?3 WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), key, found],
+        )?;
+        let text = format!("Resealed {key} fingerprint after recorded replace-test redirects of its needs.");
+        append(tx, NewEvent::job_edited(text, ["fingerprint"]).plan(plan.clone()).job(JobKey::parse(key)?))?;
+        Ok(())
+    })
+}
+
+pub(super) fn reseal_command(args: super::ResealArgs) -> Result<crate::output::Output, CpdError> {
+    let plan = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+    let requester = caller(&mut env, &plan)?;
+    reseal(&mut env, &plan, args.key.as_str(), &requester)?;
+    Ok(crate::output::Output::success(
+        json!({"key": args.key, "fields": ["fingerprint"]}),
+    ))
+}
+
 fn refused(text: impl Into<String>) -> CpdError {
     CpdError::new(ErrorCode::CasLost, text)
 }
@@ -208,6 +318,9 @@ pub(super) fn replace(
         })?;
     }
     boundary.stop(env, plan, request)?;
+    // b63: the stop keeps the Worker's commit on the Lead Branch (the driver's A9
+    // cleanup skips the reset for a replaced Job), so selectors validated above
+    // already read the Worker's commit.
     let sha = boundary.start(env, plan, request)?;
     env.store.write("job replace-test", |tx| {
         if intent(tx, plan, request)?.as_deref() == Some("complete") { return Ok(()); }
@@ -227,6 +340,20 @@ pub(super) fn replace(
             tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", params![plan.as_str(), dependent, request.new_key])?;
         }
         // Redirecting is only valid while the complete graph still satisfies TDD.
+        let graph = jobs::load(tx, plan)?;
+        // A redirect changes the dependents' needs, an input of their
+        // fingerprint: refresh those that were sealed and unchanged.
+        for dependent in graph.iter().filter(|j| j.needs.contains(&request.new_key)) {
+            let mut prior = dependent.clone();
+            for need in &mut prior.needs {
+                if *need == request.new_key {
+                    *need = request.source.clone();
+                }
+            }
+            if dependent.fingerprint.as_deref() == Some(jobs::locked_fingerprint(&prior).as_str()) {
+                tx.execute("UPDATE jobs SET fingerprint = ?3 WHERE plan = ?1 AND key = ?2", params![plan.as_str(), dependent.key, jobs::locked_fingerprint(dependent)])?;
+            }
+        }
         let graph = jobs::load(tx, plan)?;
         for dependent in graph.iter().filter(|j| j.needs.contains(&request.new_key)) {
             super::check_test_job_required(&graph, plan, dependent)?;
