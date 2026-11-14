@@ -407,3 +407,46 @@ fn gh_poll_hydrates_an_excused_label_pr_whose_rollup_failed_once_per_head() {
     );
     assert_eq!(rig.graphql().len(), 3, "one graphql call per pass");
 }
+
+/// Stored `checks` of PR 1 after a hydrating pass, then a Light-only pass, of a held own PR whose failing checks are `checks`.
+fn held_after_light(checks: Vec<(&'static str, &'static str)>) -> Option<String> {
+    let mut rig = PollRig::new();
+    rig.source.excused_labels = vec!["danger-freeze".into()];
+    let mut p = gh_pr(1);
+    p.labels = vec!["danger-freeze"];
+    p.checks = checks;
+    rig.state().authored = vec![p.clone()];
+    rig.state().world.insert(("acme/pay".into(), 1), p);
+    rig.pass(0).unwrap();
+    rig.state().light_only = true;
+    rig.pass(10).unwrap();
+    rig.text("SELECT checks FROM pull_requests WHERE number = 1")
+}
+
+#[test]
+fn a_light_read_of_a_held_failed_rollup_uses_the_cached_contexts_of_the_head() {
+    assert_eq!(
+        held_after_light(vec![("danger", "FAILURE"), ("build", "SUCCESS")]).as_deref(),
+        Some("passed"),
+        "Danger only stays excused, not regressed to pending"
+    );
+    assert_eq!(
+        held_after_light(vec![("danger", "FAILURE"), ("build", "FAILURE")]).as_deref(),
+        Some("failed"),
+        "a seen non-Danger failure stays failed"
+    );
+}
+
+#[test]
+fn a_held_peer_pr_with_a_failed_rollup_is_planned_for_a_heavy_read() {
+    let mut rig = PollRig::new();
+    rig.source.excused_labels = vec!["danger-freeze".into()];
+    let mut p = danger(1, true);
+    p.labels = vec!["danger-freeze"];
+    rig.state().light_only = true;
+    rig.state().reviews = vec![p.clone()];
+    rig.state().world.insert(("acme/pay".into(), 1), p);
+    rig.pass(0).unwrap();
+    rig.pass(10).unwrap();
+    assert!(heavy_in(&rig.graphql()[1], 1), "{}", rig.graphql()[1]);
+}

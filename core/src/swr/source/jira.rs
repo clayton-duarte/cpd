@@ -398,6 +398,24 @@ pub fn park_refused(
     })
 }
 
+/// Marks `failed` (`workflow_ended_no_ticket`, never retried) each `pending` ticketless row whose Workflow (of
+/// `context_json` `plan` and `workflow`) is `merged`, `cancelled` or gone and has no ticket: it can never get one that
+/// matters. Rows of other Workflows keep waiting (swr-jira.md §7). Returns the number discarded.
+pub fn discard_ended_ticketless(store: &mut Store, now: OffsetDateTime) -> Result<usize, CpdError> {
+    store.write("swr jira discard ended ticketless", |tx| {
+        Ok::<usize, CpdError>(tx.execute(
+            "UPDATE swr_mutations SET status = 'failed', completed_at = ?1,
+               error = 'workflow_ended_no_ticket: the Workflow ended with no ticket'
+             WHERE system = 'jira' AND status = 'pending' AND target_key IS NULL
+               AND NOT EXISTS (SELECT 1 FROM workflows w
+                 WHERE w.plan = json_extract(swr_mutations.context_json, '$.plan')
+                   AND w.key = json_extract(swr_mutations.context_json, '$.workflow')
+                   AND (w.jira IS NOT NULL OR w.status NOT IN ('merged', 'cancelled')))",
+            [timestamp(now)],
+        )?)
+    })
+}
+
 /// Enqueue again each parked (refused) transition whose ticket or status name now differs from what was refused
 /// (swr-jira.md §9), once: the parked row's `refused_with` moves to `reopened_with`. Returns the number enqueued.
 pub fn reopen_refused(

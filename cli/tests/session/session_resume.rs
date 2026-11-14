@@ -92,30 +92,17 @@ fn resume_a_loop_guarded_manager_writes_one_session_resumed_event() {
 fn resume_refuses_a_session_that_is_not_loop_guarded_and_writes_nothing() {
     let fx = Fx::new();
     setup_with_fork(&fx.env);
-    let events = |fx: &Fx| count(fx, "SELECT count(*) FROM events");
-    let before = events(&fx);
 
-    // Idle and stopped Sessions.
-    for (id, state) in [("lead1", "idle"), ("lead2", "stopped")] {
-        let error = refused(&fx.cpd(&["session", "resume", id]), "not_loop_guarded", 3);
-        assert_eq!(
-            error["details"],
-            json!({"state": state, "label": null}),
-            "{error}"
-        );
+    let total = |fx: &Fx| count(fx, "SELECT count(*) FROM events");
+    // An idle or working Session is already running: a no-op (a stopped one is restarted, in the core tests).
+    for state in ["idle", "working"] {
+        fx.env.sql(&format!(
+            "UPDATE sessions SET state = '{state}' WHERE id = 'lead1'"
+        ));
+        let out = fx.cpd(&["session", "resume", "lead1"]).ok();
+        assert_eq!(out["already"], json!(true), "{out}");
     }
-    fx.env
-        .sql("UPDATE sessions SET state = 'working' WHERE id = 'lead1'");
-    let error = refused(
-        &fx.cpd(&["session", "resume", "lead1"]),
-        "not_loop_guarded",
-        3,
-    );
-    assert_eq!(
-        error["details"],
-        json!({"state": "working", "label": null}),
-        "{error}"
-    );
+    let before = total(&fx);
 
     // Blocked with another label.
     blocked(&fx, "lead1", "cpd: plan review");
@@ -141,21 +128,6 @@ fn resume_refuses_a_session_that_is_not_loop_guarded_and_writes_nothing() {
         "{error}"
     );
 
-    // The label with another state.
-    fx.env.sql(&format!(
-        "UPDATE sessions SET state = 'waiting', state_label = '{GUARD}' WHERE id = 'lead1'"
-    ));
-    let error = refused(
-        &fx.cpd(&["session", "resume", "lead1"]),
-        "not_loop_guarded",
-        3,
-    );
-    assert_eq!(
-        error["details"],
-        json!({"state": "waiting", "label": GUARD}),
-        "{error}"
-    );
-
     assert!(resumed(&fx).is_empty());
     assert_eq!(
         count(
@@ -165,7 +137,7 @@ fn resume_refuses_a_session_that_is_not_loop_guarded_and_writes_nothing() {
         0
     );
     // The refusals wrote no Event (the fixture's own updates are direct SQL).
-    assert_eq!(events(&fx), before);
+    assert_eq!(total(&fx), before);
 }
 
 #[test]

@@ -167,7 +167,7 @@ When the pull request is already merged, `record` enqueues `in_review` and then 
 
 `context_json` carries `plan` and `workflow`, which the event scope and the reopen need. An enqueue writes nothing else: it never calls Jira and never calls the helper.
 
-**Ticketless Workflows.** When the Workflow's `jira` is NULL, the row is enqueued with `target_key` NULL, which `claim_next` never takes (§8). When `workflow add --jira` or `workflow edit --jira` sets the ticket, the same transaction enqueues each of the Workflow's ticketless `pending` rows again under `jira:issue:<KEY>`, in rank order, with the same Forward rule, and sets the ticketless rows `superseded`. This keeps today's behaviour, where rows of a Workflow with no ticket wait and run once it has one ([commands.md §21.11](../commands.md)).
+**Ticketless Workflows.** When the Workflow's `jira` is NULL, the row is enqueued with `target_key` NULL. `claim_next` never takes a ticketless row, so it waits. Once per pass `jira_drain` calls `discard_ended_ticketless`, which marks `failed` with error `workflow_ended_no_ticket` (never retried) each ticketless `pending` row whose Workflow (`context_json` `plan` and `workflow`) is `merged`, `cancelled` or gone and has no ticket, so it leaves the backlog through code (§8). Rows of `waiting`, `open` and `dispatch` Workflows stay pending. When `workflow add --jira` or `workflow edit --jira` sets the ticket, the same transaction enqueues each of the Workflow's ticketless `pending` rows again under `jira:issue:<KEY>`, in rank order, with the same Forward rule, and sets the ticketless rows `superseded`. This ensures that a later ticket assignment re-enqueues the work ([commands.md §21.11](../commands.md)); a ticketless row of an ended Workflow is discarded as above.
 
 **`adopt_ticket`** (pro-d454). Setting a ticket on a Workflow (`workflow add --jira`, `workflow edit --jira`) calls `adopt_ticket`, which, besides the re-enqueue above, also enqueues the target of the Workflow's current status under `jira:issue:<KEY>`: `merged` → `done`, `open` → `in_review`, `dispatch` with a started Job → `in_progress`. `waiting` (and `cancelled`) map to no target and enqueue nothing. A target already covered is not enqueued again: a `pending` or `in_flight` row of the key with rank ≥ the target's, or one the ticketless re-enqueue just wrote, covers it (the Forward rule of §4 would supersede it anyway). A Workflow made by `workflow add` is always `waiting`, so only `workflow edit --jira` reaches a non-empty target in practice.
 
@@ -179,7 +179,7 @@ Today's code, which this replaces (origin/main): `engine/src/watch/jira.rs` `run
 
 `swr` ([swr.md §12](swr.md)) runs the `jira` source. For each claimed mutation:
 
-1. `claim_next(system = jira)` takes the oldest `pending` row whose `target_key` is not NULL and whose `next_attempt_at` is due.
+1. `claim_next(system = jira)` takes the oldest `pending` row whose `next_attempt_at` is due. A row with `target_key` not NULL is processed normally. A keyless row (`target_key` NULL) is never taken: it waits for its ticket or for the discard of an ended Workflow (§7).
 2. The Workflow of `context_json` is looked up. If it is `cancelled` or gone: `skip`.
 3. The target name and `later_names` are read from the policy now, when the row runs, as `jira-transitions` reads them today. An empty target name: `skip`.
 4. The cache test of §5. Behind or no row: continue.
@@ -268,7 +268,7 @@ SELECT 'jira',
 FROM jira_transitions t JOIN workflows p ON p.plan = t.plan AND p.key = t.pr
 WHERE t.settled_at IS NULL AND p.jira IS NOT NULL;
 
--- Open rows of a Workflow with no ticket: they wait, as today (§7).
+-- Ticketless rows of a Workflow with no ticket: wait for a ticket, and are marked failed with error workflow_ended_no_ticket once their Workflow ends (§7).
 INSERT INTO swr_mutations (system, target_key, op_kind, vars_json, status, submitted_at, context_json)
 SELECT 'jira', NULL, 'transition',
        json_object('target', t.target,
@@ -286,7 +286,7 @@ WHERE system = 'jira' AND status = 'pending' AND target_key IS NOT NULL
 DROP TABLE jira_transitions;
 ```
 
-Rows that settled (`moved`, `unchanged`, `skipped`) are not copied: a finished move has no work left. A ticketless `pending` row is copied with `target_key` NULL, which `claim_next` never takes, so it waits for its ticket (§7).
+Rows that settled (`moved`, `unchanged`, `skipped`) are not copied: a finished move has no work left. A ticketless `pending` row is copied with `target_key` NULL, and waits for a ticket, and is marked failed with error `workflow_ended_no_ticket` once its Workflow ends (§7).
 
 ## 13. Decisions this page makes
 

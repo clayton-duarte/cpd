@@ -458,6 +458,19 @@ test("a delivery gated to nextTurn does not reset the loop guard counters", asyn
   assert.ok((await readCall(f))?.block, "the streak kept its value");
 });
 
+test("a WebUI User message sent during a running turn steers it and starts no queued turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await guarded(f);
+  await readsPass(f, 12, "before");
+  for (let i = 0; i < 3; i++) assert.ok((await readCall(f))?.block); // three refusals trip the breaker mid-turn
+  await f.quiet();
+  f.emit(message(101, null, { data: { from: null, text: "ship it", wake: false, origin: "webui" } }));
+  await f.drain();
+  assert.equal(f.pi.delivered().length, 1);
+  assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: true, deliverAs: "steer" });
+});
+
 /** A live view marker in the fixture's `$CPD_HOME` (never the real User's), read by the tag. */
 const markView = (f: Fixture, view: "tui" | "webui" | "webui-preview"): void => {
   mkdirSync(join(f.cpdHome, "run"), { recursive: true });

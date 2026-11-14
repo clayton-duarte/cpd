@@ -317,17 +317,17 @@ invalidate(store, key)
 is_fresh(row, now) -> bool
 mark_inactive(store, key, now)
 touch(store, key)
-settle(store, key, now, poll_started_at)
+settle(store, poll_started_at)
 ```
 
 - **`commit`** compares `new_hash` with `swr_queries.data_hash`.
-  - **Unchanged** (equal): no write transaction is opened (D5), and no `data_version` moves. Two exceptions write, and neither changes data. **Recovery:** when `status` is `error`, a write sets it `success` and clears `last_error`, so a query never stays in `error` after a good fetch. **Settling:** when a `revalidating` mutation of the key has `completed_at <= poll_started_at` (§10), a write sets it `done`.
-  - **Changed** (different): one `Store::write` runs `apply`, stores `data_hash`, sets `fetched_at` = `now`, `status` = `success`, `stale_after` from the key's staleTime, clears `last_error`, and settles every `revalidating` mutation of the key whose `completed_at <= poll_started_at` (§10). `apply` writes the datasource's own rows (for example `pull_requests`).
+  - **Unchanged** (equal): no write transaction is opened (D5), and no `data_version` moves. Two exceptions write, and neither changes data. **Recovery:** when `status` is `error`, a write sets it `success` and clears `last_error`, so a query never stays in `error` after a good fetch. **Settling:** every `revalidating` mutation of *this key* whose `completed_at <= poll_started_at` is settled to `done` (§10). A mutation of another key is never settled by this commit.
+  - **Changed** (different): one `Store::write` runs `apply`, stores `data_hash`, sets `fetched_at` = `now`, `status` = `success`, `stale_after` from the key's staleTime, clears `last_error`, and settles every `revalidating` mutation of this key whose `completed_at <= poll_started_at` (§10). `apply` writes the datasource's own rows (for example `pull_requests`).
 - **`fail`** sets `status` = `error`, `last_error` and `error_count` + 1 **only when the error text or the state differs** from the stored one. A repeated identical failure opens no write. It never touches the data.
 - **`invalidate`** sets `invalidated` = 1. It is a write. The engine wakes (`engine/src/watch/wake.rs`) so the next pass fetches the key (§16).
 - **`is_fresh(row, now)`** is `stale_after` is NULL, or `now < stale_after`.
 - **`mark_inactive`** sets `inactive_at` = `now`; **`touch`** sets it NULL.
-- **`settle`** sets the `revalidating` mutations of the key whose `completed_at <= poll_started_at` to `done` (overlay dropped). It is the write Unchanged uses (above) and is also called by a Changed commit through `commit`.
+- **`settle`** is called with `poll_started_at` and settles the key's `revalidating` mutations whose `completed_at <= poll_started_at` to `done` (overlay dropped). It runs during each commit (Changed and Unchanged) of that key. `unsettled_targets(system)` lists the target keys still owed that commit; a Source reads them (below).
 
 `poll_started_at` is an argument of `commit`, `settle` and `Source::fetch`. It is the instant the poll recorded **before** it read upstream (§10).
 
@@ -394,8 +394,8 @@ A poll answers "is upstream's state at least as new as this write?" only if it k
 
 1. A poll records `poll_started_at` **before** it reads upstream.
 2. It passes `poll_started_at` to `Source::fetch`, and from there to `cache::commit` and `cache::settle`.
-3. A `revalidating` mutation becomes `done` (its overlay is dropped) **only** by a fetch of its target whose `poll_started_at >= completed_at`.
-4. A poll that started earlier can never settle it. The mutation waits for the next poll that started after `completed_at`.
+3. A `revalidating` mutation becomes `done` (its overlay is dropped) only when its **own target key** commits in a poll whose `poll_started_at >= completed_at`. A poll of other keys proves nothing about the target: a merged pull request is omitted from open searches, so dropping its overlay would show the stale raw `open` row. A Source therefore reads every key of `unsettled_targets` each poll (subject to its own caps) until that commit settles it.
+4. A poll that started earlier can never settle a mutation. The mutation waits for the next poll that started after `completed_at`.
 5. Settling happens on a Changed commit, and also when the fetched data is Unchanged (the status-only write of §6).
 6. A failed or paused fetch settles nothing.
 7. **The exception of a write answer** ([swr-jira.md §10](swr-jira.md), J5): a datasource with no poll (Jira) may settle a mutation with the answer to its own write, which reports the state after the write. Its `poll_started_at` is then the instant of that answer, and the settle runs in the same transaction as `complete`. No other source may do this.
@@ -420,10 +420,10 @@ sequenceDiagram
   Note over SWR: a poll records P before it reads
   SWR->>SWR: P = now (before any read)
   SWR->>SRC: fetch(keys, P)
-  SRC->>UP: read
+  SRC->>UP: read (any key; target key may not be included)
   UP-->>SRC: data
   alt P >= C
-    SRC->>DB: commit / settle: revalidating -> done, overlay dropped
+    SRC->>DB: commit / settle: the committed key's revalidating mutations with completed_at <= P become done
   else P < C
     SRC->>DB: commit writes data, mutation stays revalidating
   end
