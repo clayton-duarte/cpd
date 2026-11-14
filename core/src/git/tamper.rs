@@ -175,7 +175,8 @@ pub fn changed_paths(dir: &Path, diff_base: &str, branch: &str) -> Result<Vec<St
 }
 
 /// The paths `diff_base...sha` changes that differ from EVERY ref of `compare_with` (contract §7.3, "The written files"), in
-/// the range diff's order: one range diff, then two tree diffs and one merge-base lookup per ref.
+/// the range diff's order: one range diff, then one tree diff and one merge-base lookup per ref (one more tree diff only
+/// when a ref forks from `diff_base` elsewhere than `sha` does).
 /// A path that equals a ref's version still counts when that ref left it unchanged since its merge base with
 /// `diff_base`: the Job itself reverted it, a base merge did not bring it.
 pub fn written_paths(
@@ -185,6 +186,7 @@ pub fn written_paths(
     compare_with: &[&str],
 ) -> Result<Vec<String>, CpdError> {
     let mut paths = changed_paths(dir, diff_base, sha)?;
+    let sha_fork = ok(dir, &["merge-base", diff_base, sha])?.trim().to_owned();
     for rev in compare_with {
         let out = ok(
             dir,
@@ -192,12 +194,19 @@ pub fn written_paths(
         )?;
         let differs: HashSet<&str> = out.split('\0').filter(|p| !p.is_empty()).collect();
         let fork = ok(dir, &["merge-base", diff_base, rev])?.trim().to_owned();
-        let ref_diff = ok(
+        // `rev` equals `sha` on a path outside `differs`, so "rev left it unchanged since `fork`" is "sha on it equals
+        // `fork`'s": a path of the range diff differs from the range's own merge base, so when `fork` is that merge base
+        // (the usual case) no path qualifies and no further diff runs.
+        if fork == sha_fork {
+            paths.retain(|p| differs.contains(p.as_str()));
+            continue;
+        }
+        let fork_diff = ok(
             dir,
-            &["diff", "--name-only", "--no-renames", "-z", &fork, rev],
+            &["diff", "--name-only", "--no-renames", "-z", &fork, sha],
         )?;
-        let ref_changed: HashSet<&str> = ref_diff.split('\0').filter(|p| !p.is_empty()).collect();
-        paths.retain(|p| differs.contains(p.as_str()) || !ref_changed.contains(p.as_str()));
+        let sha_moved: HashSet<&str> = fork_diff.split('\0').filter(|p| !p.is_empty()).collect();
+        paths.retain(|p| differs.contains(p.as_str()) || !sha_moved.contains(p.as_str()));
     }
     Ok(paths)
 }
