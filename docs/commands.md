@@ -3472,12 +3472,12 @@ cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 | the source's `runner` is `pi`; a `durable` source has no pane (contract §3.6), refused before any write or tmux call (§1.3) | `durable_session` | 3 |
 | a Plan is known: `--plan`, else the source's Plan (a Manager has none) | `plan_required` | 2 |
 | the source is not archived; `details.next` = `cpd session unarchive <source>` | `archived` | 3 |
-| the cockpit's tmux session (`tmux.cockpit_session`) exists, checked before anything is written; `details.next` = `cpd tui` | `no_cockpit` | 3 |
+| the cockpit's tmux session (`tmux.cockpit_session`) exists or can be created, checked before anything is written; if creation fails or is refused, `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects:
 - **Rows**, one transaction: `sessions` (new UUID v4, `role = lead`, the Plan's Context, `forked_from = <source>`, `cwd` = the source's, `tier = lead_tier`, `stopped`). **Event** `session-registered`.
-- **tmux:** `new-window -d -t =cpd: -n park-<label> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<id> -e CPD_PLAN=<plan> -- cpd session run <id>`; `@cpd_session`. One transaction: `tmux_pane`, **Event** `session-moved` `{place: "parked"}`.
-- If the cockpit disappears between that check and `new-window`, the command fails with `tmux_failed` after the Session is registered (Escalation `rs-session-a1-q2`). If a later step fails (`@cpd_session`, the row or the `session-moved` write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
+- **tmux:** it first ensures the cockpit tmux session exists, creating it if missing, or refuses with typed error `no_cockpit` (exit 3); then `new-window -d -t =cpd: -n park-<label> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<id> -e CPD_PLAN=<plan> -- cpd session run <id>`; `@cpd_session`. One transaction: `tmux_pane`, **Event** `session-moved` `{place: "parked"}`.
+- If a later step fails (`@cpd_session`, the row or the `session-moved` write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
 
 ```json
 {"ok": true, "session": {"id": "a41b…", "name": "cpd rust lead (fork)", "plan": "cpd2", "forked_from": "596d007f-…", "pane": "%52", "window": "@23"}}
