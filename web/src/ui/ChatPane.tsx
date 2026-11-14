@@ -36,8 +36,8 @@ function useChatToggles(): {
 
 const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes("Files");
 
-export function ChatPane(props: { view: SessionView; connection: Connection; reader: FileReaderBoundary }): ReactElement {
-  const { view, connection, reader } = props;
+export function ChatPane(props: { view: SessionView; connection: Connection; reader: FileReaderBoundary; stopped?: boolean }): ReactElement {
+  const { view, connection, reader, stopped = view.ref?.state === "stopped" } = props;
   const composer = useRef<ComposerHandle>(null);
   const { dialog } = view;
   const toggles = useChatToggles();
@@ -67,7 +67,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         completion={view.completion ?? null}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
       />
-      {view.ref?.state === "stopped" ? (
+      {stopped ? (
         <Button type="button" data-action="resume" onClick={() => {
           try { connection.action({ kind: "session.resume", sessionId: view.id }); } catch { /* The connection reports transport errors to the toast. */ }
         }}>Resume</Button>
