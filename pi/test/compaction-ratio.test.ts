@@ -24,6 +24,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { AgentSession, SettingsManager, shouldCompact } from "@earendil-works/pi-coding-agent";
 import { hookIdleCompaction, registerCompactionRatio } from "../lib/compaction-ratio.ts";
+import { compactionPolicy } from "../durable-host/compaction.ts";
 
 // The user's own settings.json must not decide what these tests derive: an empty agent directory of their own.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "compaction-ratio-agent-"));
@@ -253,4 +254,44 @@ test("registerCompactionRatio hooks the AgentSession prototype once and a second
 	});
 	registerCompactionRatio();
 	IDLE_METHODS.forEach((name, i) => assert.equal(piProto[name], hooked[i]));
+});
+
+// Exercise the installed production hook with a fake Pi settings receiver, and the durable
+// host's live policy with fake model metadata. Neither test starts Pi or a session.
+test("Manager compaction threshold follows the model input cap", async (t) => {
+	const cases = [
+		{ window: 250_000, threshold: 200_000, reserve: 50_000 },
+		{ window: 1_000_000, threshold: 200_000, reserve: 800_000 },
+		{ window: 123_457, threshold: 98_765, reserve: 24_692 },
+	];
+	await t.test("installed settings hook uses the current model", async (t) => {
+		const fakePi = { getSettings: () => ({ compaction: {} }) };
+		const hooked = SettingsManager.prototype.getCompactionReserveTokens as unknown as (
+			this: typeof fakePi, m: ReturnType<typeof model>,
+		) => number;
+		for (const c of cases) {
+			await t.test(`window ${c.window}`, () => {
+				const reserve = hooked.call(fakePi, model(c.window));
+				assert.equal(reserve, c.reserve);
+				assert.equal(c.window - reserve, c.threshold);
+			});
+		}
+	});
+	await t.test("durable policy follows active model changes", async (t) => {
+		let active = { provider: "mock", modelId: "initial" };
+		const windows = new Map(cases.map((c, i) => [`mock/model-${i}`, c.window]));
+		const source = {
+			settings: () => ({}),
+			agent: () => active,
+			windowOf: (provider: string, modelId: string) => windows.get(`${provider}/${modelId}`),
+		};
+		for (const [i, c] of cases.entries()) {
+			active = { provider: "mock", modelId: `model-${i}` };
+			await t.test(`active model ${i}`, () => {
+				const reserve = compactionPolicy(source).reserveTokens;
+				assert.equal(reserve, c.reserve);
+				assert.equal(c.window - reserve!, c.threshold);
+			});
+		}
+	});
 });
