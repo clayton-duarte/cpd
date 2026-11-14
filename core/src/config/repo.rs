@@ -17,7 +17,7 @@ pub struct RepoTests {
     /// Zero when the one named test `{{ test }}` exists, non-zero when no test has that name.
     #[serde(default)]
     pub list: Option<String>,
-    /// Optional: tests related to the changed files (`{{ files }}`), one name per line; the Gate unions them with the changed tests.
+    /// Optional: tests related to the changed files (`{{ files }}`), a JSON array of test names; the Gate unions them with the changed tests.
     #[serde(default)]
     pub related: Option<String>,
 }

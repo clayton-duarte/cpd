@@ -958,7 +958,7 @@ fn test_commands(command: &str, cwd: &Path) -> Reply {
         ("run", _) => Reply::exit(i32::from(!cwd.join("GREEN").exists()), "running\n", ""),
         ("related", _) => Reply::exit(
             i32::from(cwd.join("RELATED_BROKEN").exists()),
-            "t::three\n",
+            "[\"t::three\"]",
             "",
         ),
         ("list", name) => Reply::exit(i32::from(!["t::one", "t::two"].contains(&name)), "", ""),
