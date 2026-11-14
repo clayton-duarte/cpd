@@ -86,6 +86,7 @@ const agentOf = (a: { model?: { provider: string; modelId: string }; thinkingLev
 });
 
 export type Deps = {
+  compactionSettings?(): CompactionSettings;
   /** The one-owner check: rejects with `HostRunning` when a host already owns the socket. */
   guard(path: string): Promise<void>;
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
@@ -271,7 +272,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const settings = {
       get compaction() {
         return compactionPolicy({
-          settings: () => ({}),
+          settings: () => deps.compactionSettings?.() ?? {},
           agent: () => liveModel,
           windowOf: (provider, modelId) => windows.get(`${provider}/${modelId}`),
         });

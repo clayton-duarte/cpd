@@ -201,6 +201,7 @@ function parseEntry(rawEntry: unknown): { id: number; parsed: Parsed } {
     const message = messageOf();
     return { id, parsed: { kind: "item", item: { kind: "compaction", id: `c:${id}`, ...isoOf(message), summary: textOf(message.content) } } };
   }
+  if (kind === "cpd-skills" && Array.isArray(entry.model) && entry.model.length === 0) return { id, parsed: { kind: "none" } };
   if ((FOLD_KINDS as readonly string[]).includes(kind)) {
     const message = messageOf();
     const body = textOf(message.content);
@@ -761,6 +762,8 @@ function createEventsDialect(): Dialect {
     } else if (kind === "pi.compaction") {
       const message = obj(arr(entry.model, "compaction model")[0], "compaction model[0]");
       put({ kind: "compaction", id: `c:${entryId}`, ...isoOf(message), summary: textOf(message.content) }, out);
+    } else if (kind === "cpd-skills" && Array.isArray(entry.model) && entry.model.length === 0) {
+      // The initial skill digest is bookkeeping with no display message.
     } else if ((FOLD_KINDS as readonly string[]).includes(kind)) {
       const message = obj(arr(entry.model, "fold model")[0], "fold model[0]");
       const body = textOf(message.content);
