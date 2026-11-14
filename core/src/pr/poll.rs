@@ -1403,7 +1403,6 @@ pub(super) enum Trigger {
     /// GitHub repointed the Workflow from a base Workflow's Lead Branch to the default branch, and the default
     /// branch holds commits the Lead Branch lacks without a conflict.
     BaseMerged,
-
 }
 
 /// Queues Workflow `key`'s `update` Job for `trigger` (§3.7 E5, hs-d794, hs-n617), unless the Workflow already has one `queued`
