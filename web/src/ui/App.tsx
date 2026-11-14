@@ -76,6 +76,13 @@ export function App(props: AppProps): ReactElement {
   });
   const session = useStore(store, (s) => s.session);
   const selectedSessionId = useStore(store, (s) => s.selectedSessionId);
+  const selectedTreeSession = useMemo(() => {
+    for (const context of cockpit.tree?.contexts ?? []) {
+      const found = [...context.sessions, ...context.plans.flatMap((plan) => plan.sessions)].find((node) => node.ref.id === selectedSessionId);
+      if (found !== undefined) return found;
+    }
+    return null;
+  }, [cockpit.tree, selectedSessionId]);
   const lastError = useStore(store, (s) => s.lastError);
   const pendingActionIds = useStore(store, (s) => s.pendingActionIds);
   const completedActionIds = useStore(store, (s) => s.completedActionIds);
@@ -345,7 +352,7 @@ export function App(props: AppProps): ReactElement {
         session === null ? (
           <Empty className="h-full text-muted-foreground">Select a session</Empty>
         ) : (
-          <ErrorBoundary name="ChatPane" {...crash}><ChatPane view={session} connection={connection} reader={reader} /></ErrorBoundary>
+          <ErrorBoundary name="ChatPane" {...crash}><ChatPane view={session} connection={connection} reader={reader} stopped={session.attached ? session.ref?.state === "stopped" : selectedTreeSession?.ref.state === "stopped"} /></ErrorBoundary>
         )
       }
       inbox={

@@ -225,3 +225,14 @@ describe("tree menu actions", () => {
     ]);
   });
 });
+it("session.resume maps the requested session and propagates refusal", async () => {
+  const action = { kind: "session.resume", sessionId: "selected-id" };
+  const success = fakeCpd(async () => ({ ok: true, done: true }));
+  expect(await runAction(success.cpd, action)).toEqual({ ok: true, done: true });
+  expect(success.calls).toEqual([["session", "resume", "selected-id"]]);
+
+  const refusal = new WebError("cpd_failed", "resume refused", { cpdCode: "in_chat_slot", exitCode: 1 });
+  const failure = fakeCpd(async () => { throw refusal; });
+  await expect(runAction(failure.cpd, action)).rejects.toBe(refusal);
+  expect(failure.calls).toEqual([["session", "resume", "selected-id"]]);
+});

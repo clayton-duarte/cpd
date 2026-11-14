@@ -1,43 +1,29 @@
-# WebUI Session Busy State and Resume Action Display
+# WebUI Session Busy State and Resume
 
-## Contract: Stopped Sessions Never Show as Thinking
+## Stopped state is not busy
 
-The WebUI busy indicator follows session state: busy requires the session not be stopped. A stopped session never shows as thinking, even when its transcript ends on a toolResult or assistant message with a toolUse stop reason; instead, a stopped session with such a transcript is displayed as stopped and awaiting resume.
+The WebUI busy indicator must respect session state. A stopped Session is never shown as thinking or waiting for a tool result, even when its transcript ends with a tool result or an assistant tool-use stop reason. It is shown as stopped and awaiting an explicit user action.
 
-### Rationale
+The engine does not automatically restart a Session when its pi process exits, whether cleanly or unexpectedly. The Session remains stopped until the user explicitly resumes it.
 
-When a pi Session running in tmux stops (the pi process exits and the pane dies), the session's state is recorded as `stopped` in the database. When the engine's liveness check detects that a pi process's pane is dead or gone, it marks the dead pane state as stopped via `pane_gone()` (`core/src/session/state.rs:129-152`). If the session's last message was an assistant message that called a tool (with stop reason `toolUse`), or if the last message role was `toolResult`, the session is awaiting the tool's result to be processed.
+## Explicit Resume for the selected stopped Session
 
-The WebUI backend's `isBusy()` function (`web/src/server/pi/backend.ts`) determines whether to show a busy indicator based on the transcript's last role and stop reason. However, the display must also respect the session's state: a stopped session should always show as stopped and awaiting user action (resume), never as actively thinking or waiting for a tool result.
+The chat pane offers Resume only for the selected Session when its state is `stopped`. The action is sent through the cockpit action protocol as `session.resume` with the selected Session's canonical ID (`view.id`); it must not identify the target by a display name, tree position, or a potentially stale selection key. Tree updates synchronize the attached Session's state, so the stopped-only action disappears when that Session is no longer stopped.
 
-This contract ensures the WebUI accurately represents session state to the user: stopped is a distinct, visible state separate from the busy/thinking indicator, giving the user clear context for why they cannot interact with the session (it is not running) versus why they cannot interrupt it (it is busy).
+A successful action reports its result. A refusal or failure is shown to the user rather than swallowed. In particular, if a live pi pane is still tagged with the stopped Session, Resume refuses with the running-session error; it must not kill or replace that pane. A stopped marker alone does not prove that the tagged pi wrapper has exited.
 
-## Contract: Resume Action for Stopped Sessions
+### Durable Sessions
 
-In the WebUI chat pane, a stopped pi Session displays its state as 'stopped' and renders a Resume button (`ResumeButton`). The Resume button is displayed only when the session's state is `stopped`.
+Explicitly resuming an eligible stopped durable Session wakes that existing durable host for supervision. Wake clears its sleep state; when the host-crash-loop latch is set, the existing durable wake policy also clears that latch and resets its restart bound. Resume does not start a pane, socket, host, or `session run`, and does not directly change the Session's stopped state. The successful result therefore remains `stopped` with no pane: being awake makes the durable Session eligible for engine supervision, but is not proof that its host is already running. An eligible already-awake durable Session needs no wake write.
 
-Clicking the Resume button triggers a server action that invokes `cpd session resume <key>` for the target session key:
-- **Execution:** The server action executes `cpd session resume <key>` against the core CLI. The command restarts the stopped pi Session in the tmux cockpit (creating the cockpit session if absent, and preserving the session id and transcript).
-- **Result and Error Display:** The outcome of the resume action is displayed directly in the WebUI:
-  - On success, the result is reported and the session resumes execution, clearing the stopped display once running.
-  - On refusal or failure (e.g., non-zero exit code or CLI error), the resulting error message is displayed to the user.
+### Loop-guard blocks
 
-### Accepted Decision: Stopped State + Resume Action (No Auto-Restart)
+A blocked durable Session stopped by the loop guard is not the stopped-session wake case. Explicit loop-guard resume retains its existing guarded transaction and emits its scoped `session-resumed` signal, while preserving the blocked state and `φ: loop guard` label; if the durable Session is asleep, it may be woken in that same transaction. It does not start a pane or process. Other blocked durable Sessions remain refused. Do not emit `session-resumed` for a stopped Session resume: that signal denotes an explicit loop-guard resume.
 
-Per User decision on bug b65 (issue #1207):
-- **No auto-restart:** When a pi process terminates (clean exit or unexpected termination), the engine detects the dead pane and sets state `stopped` via `pane_gone()` (`core/src/session/state.rs:129-152`). The engine does not automatically restart the process.
-- **Stopped state + Resume action:** The session remains stopped until the User explicitly clicks the Resume button in the chat pane (or runs `cpd session resume <key>`).
-- **Upstream boundary:** pi 1.5.2 crashing on a codemode `AbortError` is an upstream concern and out of scope.
+## References
 
-### References
-
-- GitHub issue: #1207 (Fixes #1207, bug b65)
-- Evidence: scouts at `$CPD_HOME/run/manager-death/explore/scout-{1,2,3}.md`
-- CLI command: `cpd session resume <key>` (`docs/commands.md` §10.17)
-- Engine state transition: `core/src/session/state.rs:129-152` (`pane_gone()`)
-- Implementation:
-  - Backend busy check: `web/src/server/pi/backend.ts` lines 68-70 (`isBusy` function)
-  - UI component: `web/src/ui/chat/ResumeButton.tsx`
-  - Tests: `web/src/ui/chat/ResumeButton.test.tsx`
-- WebUI contract: `web/CONTRACT.md` section 6.5 (backend.ts busy documentation)
-
+- Cockpit action protocol: `session.resume`, carrying the canonical selected Session ID.
+- CLI command: `cpd session resume <key>` (`docs/commands.md` §10.17).
+- Busy-state implementation: `web/src/server/pi/backend.ts` (`isBusy`).
+- Durable wake policy: `core/src/session/moves.rs` (`wake_durable`); host supervision eligibility: `engine/src/watch/hosts.rs`.
+- Resume safety and state transitions: `core/src/session/resume.rs`; pane-gone state transition: `core/src/session/state.rs` (`pane_gone`).

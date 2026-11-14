@@ -297,6 +297,14 @@ export function createConnection(options: ConnectionOptions): OutboxConnection {
     if (message.type === "cockpit.error" && message.error.code === "internal" && message.error.message === "cockpit not ready") scheduleResubscribe();
     if (message.type === "cockpit.snapshot" || (message.type === "cockpit.patch" && message.pane === "tree")) {
       const st = store.getState();
+      const session = st.session;
+      if (session?.ref !== null && session?.ref !== undefined && session.capabilities !== null && session.footer !== null && st.cockpit.tree !== null) {
+        const nodes = st.cockpit.tree.contexts.flatMap((context) => [...context.sessions, ...context.plans.flatMap((plan) => plan.sessions)]);
+        const node = nodes.find((candidate) => candidate.ref.id === session.id);
+        if (node !== undefined && node.ref.state !== session.ref.state) {
+          store.dispatch({ type: "server", message: { type: "session.attached", sessionId: session.id, capabilities: session.capabilities, title: session.title, meta: { ref: { ...session.ref, state: node.ref.state }, footer: session.footer } } });
+        }
+      }
       if (st.connection === "open" && st.selectedSessionId !== null && st.session?.attached !== true && st.session?.error?.code === "session_not_found") {
         send({ type: "session.attach", sessionId: st.selectedSessionId });
       }
