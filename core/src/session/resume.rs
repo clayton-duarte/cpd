@@ -70,7 +70,7 @@ fn restart(env: &mut Env, target: &row::Row) -> Result<Output, CpdError> {
             format!("Session {} already has a live pane.", target.id),
         ));
     }
-    let pane = start_parked(env, &target, "session resume")?;
+    let pane = start_parked(env, target, "session resume")?;
     Ok(Output::success(json!({
         "session": target.id,
         "pane": pane.as_ref().map(|p| p.as_str()),
