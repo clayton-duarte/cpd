@@ -223,35 +223,54 @@ fn run_tests(
     // related (an `impl` Job): the tests of the changed files join the named ones, before `list` checks the union; a discovery failure is the Gate's.
     let all = if job.kind == "impl" {
         let context = command_variables(root, &operation)?;
+        let mut diagnostics = (None, String::new(), None);
         gate_tests(
             commands.related.as_deref(),
             changed,
             tests,
             &context,
             &mut |command| {
-                // The command is already rendered: `raw` keeps `go` from rendering it again.
                 let raw = format!("{{% raw %}}{command}{{% endraw %}}");
                 match go("related", &raw, &[], Log::Truncate) {
-                    Ok(Ran {
-                        outcome: HookOutcome::Passed,
-                        stdout,
-                        ..
-                    }) => RelatedRun { exit: 0, stdout },
-                    Ok(Ran {
-                        outcome: HookOutcome::Failed { exit, .. },
-                        ..
-                    }) => RelatedRun {
-                        exit,
-                        stdout: String::new(),
-                    },
-                    // Could not run (signal, timeout, I/O): not a pass.
-                    _ => RelatedRun {
-                        exit: -1,
-                        stdout: String::new(),
-                    },
+                    Ok(ran) => {
+                        diagnostics.0 = ran.tail;
+                        diagnostics.1 = ran.log;
+                        let exit = match ran.outcome {
+                            HookOutcome::Passed => 0,
+                            HookOutcome::Failed { exit, .. } => exit,
+                            HookOutcome::Error(why) => {
+                                diagnostics.2 = Some(why.to_string());
+                                -1
+                            }
+                        };
+                        RelatedRun {
+                            exit,
+                            stdout: ran.stdout,
+                        }
+                    }
+                    Err(e) => {
+                        diagnostics.2 = Some(e.to_string());
+                        RelatedRun {
+                            exit: -1,
+                            stdout: String::new(),
+                        }
+                    }
                 }
             },
-        )?
+        )
+        .map_err(|e| {
+            e.with("job", job.key.as_str())
+                .with("tail", diagnostics.0)
+                .with(
+                    "log",
+                    if diagnostics.1.is_empty() {
+                        Value::Null
+                    } else {
+                        json!(diagnostics.1)
+                    },
+                )
+                .with("reason", diagnostics.2)
+        })?
     } else {
         tests.to_vec()
     };
