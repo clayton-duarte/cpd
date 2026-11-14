@@ -25,6 +25,9 @@ mod cancel_tests;
 mod footprint_tests;
 
 #[cfg(test)]
+mod gate_related_tests;
+
+#[cfg(test)]
 mod incident_tests;
 
 #[cfg(test)]

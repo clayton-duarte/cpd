@@ -404,6 +404,7 @@ pub struct TestCommandsSet {
     pub build: Option<String>,
     pub run: Option<String>,
     pub list: Option<String>,
+    pub related: Option<String>,
 }
 
 impl TestCommandsSet {
@@ -411,7 +412,7 @@ impl TestCommandsSet {
     /// [`RepoTests::validate`] holds. The error is a sentence.
     pub fn commands(&self) -> Result<Option<RepoTests>, String> {
         let (build, run) = match (&self.build, &self.run) {
-            (None, None) if self.list.is_none() => return Ok(None),
+            (None, None) if self.list.is_none() && self.related.is_none() => return Ok(None),
             (Some(build), Some(run)) => (build, run),
             (None, _) => return Err("[test-commands] has no `build`".to_owned()),
             (_, None) => return Err("[test-commands] has no `run`".to_owned()),
@@ -420,6 +421,7 @@ impl TestCommandsSet {
             build: build.clone(),
             run: run.clone(),
             list: self.list.clone(),
+            related: self.related.clone(),
         };
         tests
             .validate()
