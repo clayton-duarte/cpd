@@ -332,6 +332,7 @@ CREATE TABLE jobs__reconcile_new (
   summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),
   touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),
   waiting_on          TEXT,
+  test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),
   UNIQUE (plan, key),
   FOREIGN KEY (plan, workflow) REFERENCES \"workflows\"(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
@@ -350,14 +351,14 @@ INSERT INTO jobs__reconcile_new (
   acceptance, out_of_scope, status, appended, fingerprint, created_txn,
   retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha,
   created_at, urgent, kind, tests, test_files, resources, test_approved,
-  touches_approved, skipped_n, summary, waiting_on
+  touches_approved, skipped_n, summary, waiting_on, test_removal_approved
 )
 SELECT
   seq, plan, workflow, review, key, title, tier, goal, context, touches,
   acceptance, out_of_scope, status, appended, fingerprint, created_txn,
   retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha,
   created_at, urgent, kind, tests, test_files, resources, test_approved,
-  touches_approved, skipped_n, summary, waiting_on
+  touches_approved, skipped_n, summary, waiting_on, test_removal_approved
 FROM jobs;
 DROP TABLE jobs;
 ALTER TABLE jobs__reconcile_new RENAME TO jobs;
