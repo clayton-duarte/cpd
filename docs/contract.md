@@ -433,6 +433,7 @@ A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `to
 | `test_approved` | json [text]? | `impl` only: the paths of the red tests the Lead approved this Job to change ("Job kinds" below); null until `job approve-tests`. **Not a Locked field** and in no fingerprint: it changes after the lock |
 | `touches_approved` | json [text]? | the paths the Lead approved this Job to change beyond its Spec `touches` (hs-n641; "Job kinds" below, §7.5); null until `job approve-touches`. **Not a Locked field** and in no fingerprint: it changes after the lock. Not an `impl`-only field: it applies whatever the Job's kind (the touches check itself skips `open`, `update` and explore kinds, so an approval there is unused) |
 | `touches_waived` | json [text]? | the declared `touches` paths the Lead waived as unchanged (b69; `job approve-untouched`); read only by the `touches_unchanged` check, never by the outside-the-touches check. **Not a Locked field**, in no fingerprint. |
+| `test_removal_approved` | json [text]? | the test case names the Lead approved this Job to remove or weaken (b70; §7.5); null until `job approve-test-removal`. **Not a Locked field** and in no fingerprint. A submit that removes a test case, or lowers its assertion count, in a test file it wrote is refused `tests_removed` unless the case is listed here; a case is matched by scoped identity (Rust module path, JS describe suite) |
 | `title` | text | |
 | `tier` | text? | Tier (§9); null only while `draft` or `cancelled` (a stub draft) |
 | `goal`, `context` | text? | Spec; null only while `draft` or `cancelled` |
@@ -2090,6 +2091,7 @@ CREATE TABLE jobs (
   touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),  -- the paths the Lead approved a Job to change beyond its Spec `touches` (§2.2, §7.5); NOT Locked, in no fingerprint; added by the migration job-touches-approved
   waiting_on          TEXT,
   touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),  -- the declared `touches` the Lead waived as unchanged (b69); read only by the unchanged check
+  test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),  -- the test case names the Lead approved a Job to remove or weaken (§2.2, §7.5); NOT Locked, in no fingerprint; added by the migration job-test-removal-approved
   UNIQUE (plan, key),
   FOREIGN KEY (plan, workflow) REFERENCES "workflows"(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),

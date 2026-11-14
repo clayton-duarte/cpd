@@ -4310,3 +4310,84 @@ fn a_stub_draft_and_a_stored_job_are_not_checked_for_a_primary_checkout() {
     .ok();
     assert_eq!(job_row(&fx.env, "pl", "stored", "status"), "cancelled");
 }
+
+// ---------- `job approve-test-removal` (b70) ----------
+
+fn approve_removal(fx: &Fx, args: &[&str]) -> Run {
+    let mut all = vec!["job", "approve-test-removal"];
+    all.extend(args);
+    all.extend(["--plan", "pl"]);
+    fx.cpd(&all)
+}
+
+#[test]
+fn approve_test_removal_records_the_names_and_tells_the_event() {
+    let fx = Fx::new();
+    locked_tdd(&fx);
+    // A draft is not a Job that can be checked yet.
+    refused(
+        &approve_removal(&fx, &["i", "--test", "b", "--reason", "Obsolete."]),
+        "illegal_transition",
+        3,
+    );
+    lock(&fx.env, "pl");
+    let out = approve_removal(
+        &fx,
+        &[
+            "i",
+            "--test",
+            "b",
+            "--test",
+            "m::c",
+            "--reason",
+            "Obsolete after the merge.",
+        ],
+    )
+    .ok();
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": {"key": "i", "status": "queued", "kind": "impl"}, "approved": ["b", "m::c"], "fields": ["test_removal_approved"]})
+    );
+    assert_eq!(
+        job_row(&fx.env, "pl", "i", "test_removal_approved"),
+        json!("[\"b\",\"m::c\"]")
+    );
+    let edited = events(&fx, "job-edited");
+    let text = edited.last().unwrap()["text"].as_str().unwrap().to_owned();
+    assert!(
+        text.contains("Obsolete after the merge.") && text.contains("m::c"),
+        "{text}"
+    );
+    // A rerun writes nothing.
+    let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
+    let again = approve_removal(&fx, &["i", "--test", "b", "--reason", "Obsolete."]).ok();
+    assert_eq!(again["already"], json!(true));
+    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
+}
+
+#[test]
+fn approve_test_removal_is_the_leads_and_not_a_workers() {
+    let fx = Fx::new();
+    locked_tdd(&fx);
+    lock(&fx.env, "pl");
+    let args = [
+        "job",
+        "approve-test-removal",
+        "i",
+        "--test",
+        "b",
+        "--reason",
+        "Obsolete.",
+        "--plan",
+        "pl",
+    ];
+    refused(
+        &fx.cpd_with(fx.env.root(), &args, &[("CPD_ATTEMPT", "i-a1")]),
+        "not_a_lead",
+        3,
+    );
+    assert_eq!(
+        job_row(&fx.env, "pl", "i", "test_removal_approved"),
+        Value::Null
+    );
+}

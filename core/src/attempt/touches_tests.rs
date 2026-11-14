@@ -26,9 +26,13 @@ use crate::output::Output;
 use crate::ports::{Fakes, Ports};
 
 /// The files every fixture's base commit holds: the Job's one `touches` entry and a source file.
-const BASE: &[(&str, &str)] = &[
+pub(super) const BASE: &[(&str, &str)] = &[
     ("docs/research/x.md", "# Findings\n"),
     ("src/app.rs", "// app\n"),
+    (
+        "tests/t.rs",
+        "#[test]\nfn a() {\n    assert!(true);\n}\n\n#[test]\nfn b() {\n    assert!(true);\n}\n",
+    ),
 ];
 
 /// The `touches` of the regression Job: one research note, no source file.
@@ -67,7 +71,7 @@ text = \"\"
 ";
 
 /// A commit of exactly `files` over `parents`.
-fn commit(
+pub(super) fn commit(
     u: &mut Universe,
     repo: RepoId,
     parents: &[Oid],
@@ -83,8 +87,20 @@ fn commit(
     u.commit(repo, &tree, parents, message)
 }
 
+/// `files` with a path that appears twice kept once, at its last text: a changed file replaces the base's.
+fn overlay<'a>(files: Vec<(&'a str, &'a str)>) -> Vec<(&'a str, &'a str)> {
+    let mut out: Vec<(&str, &str)> = Vec::new();
+    for (path, text) in files {
+        match out.iter_mut().find(|(p, _)| *p == path) {
+            Some(slot) => slot.1 = text,
+            None => out.push((path, text)),
+        }
+    }
+    out
+}
+
 /// Writes `files` into the worktree `root`, exactly: a file the previous tree held and this one does not is removed.
-fn materialize(root: &Path, files: &[(&str, &str)]) {
+pub(super) fn materialize(root: &Path, files: &[(&str, &str)]) {
     for entry in std::fs::read_dir(root).unwrap().flatten() {
         if entry.file_name() == ".git" {
             continue;
@@ -141,15 +157,15 @@ impl<'a> Default for Spec<'a> {
 /// A PR `pay/api` on its Lead Branch `cpd/pay/api`, one Job `a` of the Spec's kind whose Attempt `a-a1` is `running` on
 /// `cpd/pay/a` in a worktree of the fake git, and a `$CPD_HOME` whose owner and repo policy files are written.
 pub(super) struct Rig {
-    _tmp: TempDir,
-    fakes: Fakes,
+    pub(super) _tmp: TempDir,
+    pub(super) fakes: Fakes,
     pub(super) env: Env,
-    universe: Arc<Mutex<Universe>>,
-    repo: RepoId,
+    pub(super) universe: Arc<Mutex<Universe>>,
+    pub(super) repo: RepoId,
     /// The branch point of the Attempt: the Lead Branch tip, and the merge base of the base branch.
-    base: Oid,
+    pub(super) base: Oid,
     /// The Attempt's worktree, a real temp directory of the fake git.
-    root: PathBuf,
+    pub(super) root: PathBuf,
     pub(super) plan: PlanId,
     pub(super) id: AttemptId,
 }
@@ -210,6 +226,7 @@ pub(super) fn rig(spec: Spec<'_>) -> Rig {
     }
     tree.extend(spec.changed.iter().copied());
     tree.retain(|(path, _)| !spec.deleted.contains(path));
+    let tree = overlay(tree);
     {
         let mut u = universe.lock().unwrap();
         let parents = if spec.brings_base {
@@ -310,9 +327,10 @@ impl Rig {
     }
 
     /// The Attempt's tree becomes `files` over the base's: the Worker reverted the stray file and committed again.
-    fn recommit(&mut self, files: &[(&str, &str)]) {
+    pub(super) fn recommit(&mut self, files: &[(&str, &str)]) {
         let mut tree = BASE.to_vec();
         tree.extend(files.iter().copied());
+        let tree = overlay(tree);
         let mut u = self.universe.lock().unwrap();
         let attempt = commit(
             &mut u,
@@ -340,7 +358,7 @@ impl Rig {
         ))
     }
 
-    fn one(&mut self, sql: &str) -> Option<String> {
+    pub(super) fn one(&mut self, sql: &str) -> Option<String> {
         self.env
             .store
             .read(|conn| Ok(conn.query_row(sql, [], |r| r.get::<_, Option<String>>(0))?))

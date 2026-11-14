@@ -130,11 +130,11 @@ fn a_database_before_job_addenda_migrates_to_an_empty_table_and_accepts_the_new_
         dump(&mut old, "events"),
         dump(&mut old, "sessions"),
     );
-    // Later migration `draft-waiting-on` adds `waiting_on` to `jobs` (null in every row).
+    // Later migration `draft-waiting-on` adds `waiting_on` to `jobs`, then `job-test-removal-approved` `test_removal_approved` (null in every row).
     for row in &mut jobs {
         assert!(row.ends_with(']'));
         row.truncate(row.len() - 1);
-        row.push_str(",null,null]"); // `waiting_on`, then `touches_waived` of `job-touches-waived`
+        row.push_str(",null,null,null]"); // `waiting_on`, `touches_waived` of `job-touches-waived`, `test_removal_approved`
     }
     // The later migration `agent-key-backfill` rewrites the names of the Lead and the Worker to their keys.
     let sessions: Vec<String> = sessions
