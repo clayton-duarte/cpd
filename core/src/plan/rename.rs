@@ -14,6 +14,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let title = args.title.as_str();
     let mut env = Env::open()?;
+    env.store.read(|conn| super::shaping::guard_rename(conn, &id))?;
     let (context, old, lead) = env
         .store
         .read(|conn| {
