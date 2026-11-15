@@ -1,4 +1,4 @@
-# Spec files, sizing, Tiers and Dependencies
+# Spec files, sizing, model selection and Dependencies
 
 A Worker is a fresh session that sees only its Spec. Whatever it needs must be in the spec file.
 
@@ -55,15 +55,12 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 - Jobs with disjoint `touches` and no data flow between them need no Dependency. Shared files such as lockfiles, `package.json`, config and index or route registries count as shared.
 - Dependencies cannot form a cycle (`dependency_cycle`), cannot name an unknown Job (`needs_unknown`) and cannot name a cancelled or failed Job (`needs_unavailable`).
 
-## Tiers
+## Model selection
 
-Format `<letter><effort>`: letters `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini), ranked G < H < S < O; effort `0`–`4` (a digit only where the model offers that effort; digits may skip), or `X` for any model (the effort order is 0 < 1 < X < 2 < 3 < 4, so X sends no effort; air-d16, air-d17, air-d21); effort 5 is never valid. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is inside the worker range**, from `worker_tier` through the highest valid rung at or below `lead_tier` (contract §9 "Roles and ranges"). Read that range from `cpd tiers` and the config, never from a fixed list; the explore kinds have their own ranges ([Explore Jobs](#explore-jobs)). A Worker's ladder climbs to the next valid effort inside the letter (contract §9 'Next rung') and stops at the range's ceiling. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. A Lead's Tier is in the lead range (`lead_tier` through the highest valid rung at or below `manager_tier`), a Manager's in the manager range (`manager_tier` up to the top valid rung); both are set by the config, not by you. `GX` is the auxiliar's Tier (the distiller, `context_distill_tier`, default `GX`); G is a letter like the others, and a Job's Tier of letter G is refused unless the worker range holds it.
-
-| Work | Tier | Why |
-|---|---|---|
-| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`no_submit`) raises effort by one on the next Attempt, and a `crashed` or `merge_conflict` Attempt is retried at the same Tier, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. A `gate_failed` is retried once at the same Tier and uses a try. |
-| Docs, config, mechanical edits | `H3` | Cheap and enough. |
-| A Workflow's open and update Jobs | `worker_tier` (default `H3`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
+Before selecting a model or effort for a Job, read the
+[selection contract](../../../../docs/contract.md#9-model-selection). Use the
+role's resolved selection or an explicitly authorized selection; letter tiers
+are not a substitute for an exact model and effort.
 
 ## A feedback fix Job
 

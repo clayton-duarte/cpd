@@ -17,7 +17,7 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 7. [git and the Gate](#7-git-and-the-gate)
 8. [Configuration](#8-configuration)
    - [8.3 Policies](#83-policies)
-9. [Tiers](#9-tiers)
+9. [Model selection](#9-model-selection)
 10. [Traceability](#10-traceability)
 
 ## 1. Principles
@@ -1320,42 +1320,6 @@ A Worker that holds a resource while it waits on an Escalation holds it for the 
 If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor and no Attempt exists. If the spawn fails, the starter ends the Attempt `failed` / `crashed` itself, as `liveness` would, with `driver_pid` still null (the marker of a driver that never started; §3.4 "Ladder causes"), and then closes the descriptor. `liveness` probes a lock by opening the file afresh and trying `flock(LOCK_EX | LOCK_NB)`. The lock file is removed when the Attempt ends: by the driver at A9, and by `liveness` when it ends a dead driver's Attempt. `liveness`'s probe never creates the file (it opens without `O_CREAT`): a missing file means no driver.
 
 The concurrency slot is implicit: a Job holds one from its first Attempt until it ends ("Tenancy"). `scheduling` and `job dispatch` insert the first Attempt of a Job only inside a write transaction that counts the tenant Jobs of `workers` on the machine and refuses at `concurrency` (`no_slot`, exit 3; a Job that is already a tenant takes no slot); an urgent Job is refused only at `concurrency + 1` (§3.7 `scheduling`; `job dispatch` applies the same rule to an urgent Job). This replaces cpd 1's slot files (§9).
-
-### 3.4a Display Tier derivation (pro-d81)
-
-A Job's **displayed Tier** is what users and tools see in the Plan view, the plan render and `context pending`: the Tier is derived from the Job's Attempts and `retry_tier` by this rule, in order:
-
-1. The Tier of the Job's active Attempt (status not `ended`), if one exists.
-2. Else, the `retry_tier` value, **while** a `job retry` has no Attempt since: the Job is `queued` at this Tier (the latest `job-retried` Event of the Job is newer than its latest `attempt-started` Event).
-3. Else, the Tier of the latest (most recent) Attempt of the Job, if one exists.
-4. Else, the Job's `tier` field.
-
-A Job with no Attempts and no `tier` has no displayed Tier (shown as `—` in displays).
-
-**Readers of the displayed Tier:** the Plan view (tui/src/read/flow.rs `job_nodes` calls `core/src/plan/display.rs` `Display::load`), `plan render` (§4.5), and `context pending` (§3.11). The JSON output of `plan show` and `job show` (§4.3, §5.7) remains unchanged: they print `tier` and `retry_tier` as raw field values, not derived.
-
-### 3.4b Tier advice (pro-d278, pro-d292)
-
-The **Tier advice** names, for each Job kind, the Worker Tier whose history says that a Job of the kind merges at the lowest expected cost. It exists to avoid over-tiering: starting code Jobs at S2 instead of S1 costs more than all the waste before success (pro-n253). Its design and figures are in `docs/research/rfm-planning-ladder.md`, "Priority 3: tier-advice"; this section is the one statement of the rule. Its two constants are `FLOOR = 30` and `MIN_LOWER = 0.70`; the rules below refer to them by name.
-
-1. **Rows.** A row is the first Attempt (`number = 1`) of a Job whose status is `merged` or `failed` and whose cause is not `provider_error` (§3.4). A first Attempt that was cancelled, still running, or ended `provider_error` is not judged. The rows are grouped by the Job's kind and the Attempt's Tier, one cell `(kind, tier)` each, with: `n`, the number of rows; `passed`, the rows whose outcome is `merged`; `avg_cost`, the average of `metrics.cost_usd` over the rows that have one, NULL when none has. A row with no cost counts in `n` and not in the average.
-2. **Qualifying.** A cell qualifies when all of these hold:
-   - `n >= FLOOR`;
-   - the Wilson 95% lower bound of `passed / n` is at least `MIN_LOWER`. With `p = passed / n` and `z = 1.96`, the bound is `(p + z²/(2n) − z·√(p(1−p)/n + z²/(4n²))) / (1 + z²/n)`, clamped to [0, 1], and 0 when `n = 0`. For `n = 30`, 26 passes qualify and 25 do not;
-   - the Tier is in the worker range (from `worker_tier` through the ceiling at or below `lead_tier`, §9 "Roles and ranges"); a cell on any other Tier is never advised;
-   - the cell has an expected cost (rule 3).
-3. **Expected cost.** Let `next(t)` be the next rung of the ladder (§9 "Next rung"). The expected cost of cell `(kind, t)` is `avg_cost(t) + (1 − passed/n) × avg_cost(next(t))`, where:
-   - `avg_cost(next(t))` is taken from the cell `(kind, next(t))` whatever its `n`;
-   - when `next(t)` is none (the top rung of the worker range), the failure term is 0;
-   - when the cell `(kind, next(t))` does not exist or its `avg_cost` is NULL, or the cell's own `avg_cost` is NULL, the cell has no expected cost and does not qualify.
-4. **Choice.** The advice for a kind is the qualifying cell with the lowest expected cost. Scan the cells in ladder order (§9 "Ladder order") and replace the choice only on a strictly lower cost, so a tie goes to the lower Tier.
-5. **No silent default.** A kind with no qualifying cell has no advice: no entry, and no fallback Tier. Nothing is substituted for a missing or unqualified cell.
-
-**Where it lives.** The computation is pure and lives in cpd-core, `core/src/plan/tier_advice.rs`. Its items are `Row` (one `(kind, tier)` cell as read from the store), `Advice` (the chosen cell of one kind), `FLOOR`, `MIN_LOWER`, `wilson_lower` (rule 2), `qualifying` (rules 2 and 3), `recommend` (rules 4 and 5), and `first_attempts`, the one function that holds the SQL of rule 1. The ladder is passed in as a function, so the module needs no pi catalog; apart from `first_attempts`, it reads nothing.
-
-**The limit.** The advice is history, never cause. The Lead chooses harder Jobs for higher Tiers (selection), so a cell's pass rate says what happened to the Jobs that ran on that Tier, not what the Tier does to a Job. The cells are also small: the floor and the lower bound are guards against small samples, not proof that a Tier is the cheapest one that works.
-
-**Readers:** the lint rule tier_advice (§2.7). The computation is specified here; no command reads it.
 
 ### 3.5 Escalation states
 
@@ -7197,53 +7161,43 @@ Also: `allow` needs the Attempt to belong to the Lead's own Plan (else `attempt_
 
 The commands write nothing to the store: no row, no Event, no history. They only read Sessions and Attempts. Their only files are the grants above. A value is never stored, and cpd is honest: the code refuses it and the files hold only names.
 
-## 9. Tiers
+## 9. Model selection
 
-Kept from cpd 1 §7, with one change in how pi's catalog is read. The Tier model is v2 (User decisions pro-d328 to pro-d332; assumptions A1–A7 and A13–A17 accepted). It replaces the fixed ranges of the earlier model, each superseded and listed under "Superseded" below; nothing here rewrites those records.
+User decision, 2026-11-14: select model and effort directly per role. Letter tiers
+such as `H3` and `S1`, their ranks, rungs, role ranges, and presets no longer
+define model selection for new work.
 
-- **Syntax** `^(G|H|S|O)([0-4]|X)$`: one letter, then one effort digit `0`–`4`, or `X`. Every letter is read alike: `G0`–`G4` parse, as do `H0`–`H4`, `S0`–`S4` and `O0`–`O4`; nothing is special to `G`.
-  - A digit is valid only when the letter's model offers that effort (the catalog, below). Digits may skip: O's efforts may be 0, 2, 3, 4, so `O1` is `tier_invalid`.
-  - `X` is valid on EVERY model, including one that offers efforts (air-d16, air-d17, air-d21).
-  - **Effort 5 is never valid for any letter** (`tier_invalid`, exit 2).
-  - Effort to pi level: `0` off, `1` low, `2` medium, `3` high, `4` xhigh. `X` means send no effort: pi gets `--model <provider>/<model>` with no `:<level>` suffix, so the model or pi default applies (air-d16, air-d17, air-d21). `minimal` and `max` are never used.
-- **Valid efforts per model** come from pi's own catalog, never from a table kept by hand (requirements §3; pi silently clamps unsupported levels, so cpd rejects invalid Tiers itself):
-  - locate pi as cpd 1 does: realpath of `pi` on `PATH`, then `<agentDir>/install/current-version`, then `<agentDir>/install/releases/<version>/node_modules/@earendil-works/{pi-coding-agent,pi-ai}/dist/index.js`;
-  - **change:** cpd 2 has no Node of its own, so it runs a small embedded ES module with **pi's Node**, the one pi's launcher uses: `${XDG_DATA_HOME:-~/.local/share}/pi-node/current/bin/node` when it exists, else `node` on `PATH` (verified in the launcher script of pi 1.2.0). The module calls `ModelRuntime.create({allowModelNetwork: false})`, `getModel(provider, id)` and pi-ai's `getSupportedThinkingLevels`, and prints JSON;
-  - the `node` call has a deadline of 30 s (§1.2 `tool_timeout`, `details.tool` = `node`);
-  - **Levels to efforts** (pro-d328 to pro-d332; air-d16, air-d17, air-d21): pi's levels map to efforts `off` 0, `low` 1, `medium` 2, `high` 3, `xhigh` 4. `minimal` and `max` are dropped and are no effort. Gaps are kept, not filled. **A model whose levels are only `off`, or that has none, has efforts `[]`**: `<letter>X` is valid for it and for every model with efforts (air-d16, air-d17, air-d21);
-  - the result is cached in `tier_catalog`, keyed by `(pi_version, models_sha, letter, model)` (pro-d26, Plan bifrost, PR catfp): `pi_version` is `install/current-version`, and `models_sha` is the lowercase hex SHA-256 of the bytes of `<agentDir>/models.json`, the file pi reads custom models and their `thinkingLevelMap` from, computed once per catalog load; it is the empty string `""` when the file does not exist (a valid state), and any other read error is `catalog_failed` with the path in `details` (no fallback). The cache is refreshed when either part changes; the table stays append-only (a changed `models.json` adds rows, old rows stay). `tier_catalog` keeps the rows of the active letters, `G` included. Its storage CHECK is `letter IN ('O', 'S', 'H', 'G', 'J')`, set by `tier-letter-j` (§4.5); J remains deactivated and unused (air-d130). The earlier `tier-syntax-g-x` migration rebuilt the table empty, so no row computed under the old level table survives and the next `cpd tiers` recomputes them. An unknown model is `tier_model_unknown`. The model's existence is checked when pi is read (every cache miss) and by `cpd doctor`'s `tiers` check.
-- **Ladder order** (pro-d328 to pro-d332; air-d16, air-d17, air-d21): the letters rank **G < H < S < O**. Within every letter the effort order is **0 < 1 < X < 2 < 3 < 4**; for example `S0 < S1 < SX < S2`. Effort 5 is never valid. A Tier's place in the ladder is its letter's rank, then its effort. Tier ordering follows it everywhere a Tier is compared.
-- **Next rung** `next(t)` (A13, hs-d791; air-d16, air-d17, air-d21; ordering clarified by air-d140): inside the role's range (below), to the next valid rung above `t`: within the letter, the smallest valid effort strictly greater than t's, including `X` in its ladder position. Leaving a letter it lands on that letter's lowest valid effort **≥ 1** (or its `X` if the model has no efforts), never effort 0. The top rung of a range has no next rung inside it. Example on this machine (H and S efforts 0–4, O efforts 0, 2, 3, 4, G has no efforts so `X` only): `GX→H1`, `H3→H4`, `H4→S1`, `S1→SX`, `SX→S2`, `S4→O2`, `O3→O4`. When H and S have efforts, `HX→H2` and `SX→S2`; from `G0`→`G1` when G gains efforts. A role default itself may be effort 0 (for example `O0`); `next` never lands on it.
-- **Roles and ranges** (pro-d328 to pro-d332; A16). The roles, from the lowest to the highest:
-  - **auxiliar**, the config key `context_distill_tier`: the distiller (§4.6). The distiller is the one auxiliary run; its Tier is its default, with no ladder (one step only, hs-d560);
-  - **worker**, `worker_tier`: the Tier of the `open` and `update` Jobs (§2.2 "Job kinds") and the default for a Worker's Tier;
-  - **lead**, `lead_tier`: every Lead, whatever its Plan's Context (`review_lead_tier` is gone);
-  - **manager**, `manager_tier`: a Context's Manager (§3.1).
+### Selection
 
-  The defaults must **strictly ascend** on the ladder, `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier`; a config that does not is `config_invalid`, with `details.key` the key that breaks the order. The **range** of a role is the set of valid rungs from its floor to its ceiling:
-  - **floor**: the lowest valid rung at or above its default;
-  - **ceiling**: the highest valid rung at or below the next role's default; for the manager, the top valid rung; for the auxiliar, its default only (no ladder). The next role's default is included when it is a valid rung, so adjacent role ranges may share that boundary.
+A selection names an exact model and a supported effort setting. A model that
+offers no effort setting records that fact rather than receiving a fabricated
+level. Validate the pair against the selected model's capabilities; reject an
+unknown model or unsupported effort rather than clamping or substituting it.
 
-  A default that is not a valid rung is an error only where it is checked or saved (`cpd doctor`'s `tiers` check, commands.md §14.1; `cpd tiers`, §14.3; and the saving commands of the Workflow `tier-write`, not yet documented here), never at config parse or at `scheduling`.
+Manager, Lead, and Worker defaults are independent selections. Auxiliary work
+also has a named selection. Role authority and responsibility are independent
+of model choice: choosing a model does not grant another role's permissions.
+There is no built-in strength ordering between different models.
 
-  Worked boundary example (air-d140): with `worker_tier = HX`, `lead_tier = SX` and `manager_tier = O3`, the worker ceiling is the Lead default `SX`, inclusive. Thus `S1` and `SX` are within the worker range, while `S2` is beyond its ceiling; whether any numeric effort is a valid rung still comes from the current model catalog. This reported configuration and its installed catalog are not asserted as repo-wide facts. For a role with no next role, the manager ceiling remains the top valid rung; the auxiliar range remains its default only.
+Existing policy precedence (§8.3) still applies. Resolve and retain the selection
+and its source for each Job and Attempt. A policy change alone must not silently
+change a running Attempt. Report configured selection separately from observed
+runtime selection; when the latter is unknown, say so.
 
-  - **Scout and research** (A17; air-d16, air-d17, air-d21): an explore Job's Tier is letter `H` for `scout` and letter `S` for `research`, effort ≥ 1 or `X` (air-d16, air-d17, air-d21). Its ceiling is the worker range's, and its ladder stays inside its letter. `scout` remains H-only even when the worker range includes S rungs; `research` remains S-only. The ordered `X` rung is available on both, and the catalog determines which numeric efforts exist.
-- **Defaults** (pro-d328 to pro-d332): `context_distill_tier` `GX`, `worker_tier` `H3`, `lead_tier` `O2`, `manager_tier` `O4`. The distiller's Tier is `context_distill_tier` (§4.6); the title writer (§3.7 `session-titles`) runs `--model <model>` with no `:<level>` suffix where `<model>` is the policy's `[model]` table's `G` key, since its Tier is `GX` which sends no effort (§8.3, air-d16, air-d17, air-d21), with no config key; the team-review reader (§3.7 `team-review`, commands.md §21.6) runs no model and has no Tier; the contract Jobs ran at `O3` (R13). There is no Reviewer Tier (R19), and a Plan's Lead uses `lead_tier`, whatever its Context (pro-d139 and pro-d140 are superseded).
-- **Attempt Tier.** Attempt 1 uses the Job's Tier. The Attempt after a `no_submit` uses `next` of the previous Attempt's Tier; the Attempt after a `crashed` or `merge_conflict` uses that Attempt's own Tier. Automatic Attempts are capped at `1 + retry_cap`, and a `no_submit` stops early when `next` is none; `next` is taken inside the Job's range (above), so the ladder never climbs past the range's ceiling. An Attempt that ended `gate_failed` is retried at the same Tier at most once since the last `job retry`, is counted in the cap and does not advance the Tier (§3.4 "A Gate retry"). An Attempt whose driver never started (`driver_pid` null, §3.4) is not counted in the cap and does not advance the Tier. Attempts that ended `provider_error` (§3.4 A5) are not counted in the cap and do not advance the Tier: at most 3 per Job since its last `job retry`; the 4th fails the Job. An Attempt that ended `quota` (§3.4 **`quota`**) is never retried: no Attempt follows it, at its Tier or a higher one. `job retry --tier <T>` sets an explicit Tier for the next Attempt (`origin = retry`), and the ladder continues from it, with a fresh cap. It is also allowed on a **queued** Job whose effective Tier (the Tier `scheduling` would start its next Attempt at) fails the range check, the `tier_not_allowed` that `scheduling` raises after the clamp above (pro-d484): the Job stays `queued`, `retry_tier` is set to the new Tier, which must be in range, and `scheduling` starts it there. A queued Job whose effective Tier is in range is still refused `job_not_failed` (commands.md §5.4). A rate-limited wait for the reset inside a merge (§7.4) ends no Attempt and consumes no try; only the bound-exceeded `crashed` that ends such a wait (detail `gh_failed: rate_limited: <message>` with the stderr tail, §7.4) is an ordinary `crashed` and is counted in the cap. The ladder (`liveness`) re-reads the role tiers and `retry_cap` from the config file on each `liveness` pass (air-d146), so a `cpd config` tier change applies on the next pass, without a restart of `cpd watch`.
-- **Where the ranges are enforced** (Workflow `tier-enforce`, pro-d328 to pro-d332). The ranges are not in the schema: the `jobs.tier` CHECK of §4.4 is syntax only. The commands and the engine check the range of each role:
-  - a Job's Tier (`job add`, `job edit` and `job retry` with `--tier`, and the Jobs a Workflow template adds), and the Attempt ladder (`liveness`) and `scheduling`, use the **worker** range: from `worker_tier` (floor) through the highest valid rung at or below `lead_tier` (ceiling). A `scout` or `research` Job is checked against its explore range instead: letter `H` or `S`, effort ≥ 1 or `X`, up to the worker ceiling, its ladder inside its letter (§2.2 "Explore Jobs", A17);
-  - `plan new --tier` and `session retier <lead> --tier` use the **lead** range: from `lead_tier` through the highest valid rung at or below `manager_tier`; `session retier <manager> --tier` uses the **manager** range: from `manager_tier` up to the top valid rung. A Worker is never retiered; the **auxiliar** runs at its default only;
-  - the `open` and `update` Jobs run at `worker_tier`, floored to a valid rung (its floor) when it is not one;
-  - **the clamp** (pro-d484): when `worker_tier` is raised above the Tier an `open` or `update` Job, or a same-tier retry (§9 "Attempt Tier"), would start at (the Job was created or its previous Attempt was made before the raise), `scheduling` starts it at `range.floor` instead of refusing it. It applies to (a) an `open` or `update` Job whose start Tier is below the floor, and (b) a same-tier retry whose previous Attempt's Tier is below the floor. The Attempt is created at the floor, the Job's stored `tier` is left as it is, and no `tier_not_allowed` `error` Event is written. Apart from (b), the clamp does not apply: a stored Tier or a ladder step below the floor stays `tier_not_allowed` for a work, `scout` or `research` Job, and so does an explicit `job retry --tier` (the Lead's Tier, checked as below);
-  - `session retier --all` (no `--tier`) moves every Lead to `lead_tier` and every Manager to `manager_tier`;
-  - a refusal is `tier_not_allowed` (exit 2) with `details` `{tier, role, floor, ceiling, allowed, key}`: `role` the role whose range was checked, `floor` and `ceiling` its ends, `allowed` the text `<floor>-<ceiling>`, `key` the config key that sets the floor (`worker_tier`, `lead_tier` or `manager_tier`); its message names the range and the config keys. `tier_invalid` (syntax and the model's efforts) is checked first, as today;
-  - a stored Job Tier outside its range is never started by `scheduling`: one `error` Event per Job, as today (§3.7 `scheduling`). A default that is not a rung is an error only where it is saved or checked, never at config parse or at `scheduling`; `cpd doctor`'s `tiers` check (commands.md §14.1) fails when a role default is not a rung of the catalog or when a role's span holds no valid rung, and names the key.
+### Boundaries
 
-  **No migration rewrites a stored Job or Attempt** whose Tier falls outside its range.
-- **Superseded** (not rewritten; they stay in §10): pro-d84 (the fixed Worker list), pro-d82 and hs-d554 (the fixed Worker range H0–H3, S0–S3 and its ladder), pro-d53 and pro-d83 (earlier Worker ranges), hs-d506 (the fixed Lead and Manager list), hs-d562 (every auxiliary `GX` only), pro-d139 and pro-d140 (the review Lead Tier `review_lead_tier`). Their ladder rule (hs-d791) carries over as the next rung above. The `open_tier` key is renamed `worker_tier`, and the Lead-of-review key is dropped (§8.1, §8.2).
-- `cpd tiers` prints `{ok, pi_version, tiers: {O: {model, efforts: [..]}, S: …, H: …, G: {model, efforts: [..]}}}`, with `efforts` `[]` for a model with no efforts (for example `G` on a model whose levels are only `off`); `GX` is then the one valid Tier of `G`.
-- `cpd config tiers list` (commands.md §14.2a): prints the valid ladder Tiers (`tiers`) with their letter, effort and model, and each role's allowed range (`ranges`) with floor, ceiling and allowed rungs. Core is the single source of truth for the tier catalog, ladder order and role ranges; the WebUI queries this command and maintains no local copy of tier grammar or ladder constants (pro-d513, pro-d514).
+This decision does not select providers, model IDs, machine-specific defaults,
+command flags, or configuration key names. Those belong to the implementation
+profile and must implement this selection contract without reintroducing a
+letter-to-model mapping.
+
+Historical tier values remain evidence of the selection recorded at that time;
+they are not valid new selections. Do not guess their original model from a
+current mapping or rewrite history to make it appear explicitly selected.
+
+Retry selection behavior is awaiting a separate User decision. Existing retry
+eligibility, limits, timeout rules, and feedback retention are unchanged by the
+choice of direct selection.
 
 ## 10. Traceability
 

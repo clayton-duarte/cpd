@@ -301,9 +301,11 @@ _Avoid_: engine, backend
 A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager or the User asks of one Plan's Lead. Not a Spec, which describes a Job.
 _Avoid_: ticket, prompt
 
-**Tier** (other, pro-d146; Tier model v2, pro-d328 to pro-d332; air-d16, air-d17, air-d21):
-A code naming the model and effort an agent runs at: a letter (`G`, `H`, `S` or `O`, ranked G < H < S < O), then an effort digit `0`–`4` that the model offers, or `X` for any model; the effort order is 0 < X < 1 < 2 < 3 < 4, so X sends no effort and sits between 0 and 1 (air-d16, air-d17, air-d21); e.g. `O3` for a Lead, `S1` for a coding Worker, `GX` for any model, `HX` on a model with efforts 1,3. Effort 5 is never valid. Each role (auxiliar, worker, lead, manager) has a default Tier and a range of Tiers (contract §9). The model table is the policy's `[model]` domain. It means this only: the Inbox colours are called urgency.
-_Avoid_: level, profile; tier (for a colour)
+**Model selection**:
+The model and effort chosen for an agent role or a particular assignment. The
+[selection contract](docs/contract.md#9-model-selection) defines validation and
+provenance; selection does not grant role authority.
+_Avoid_: Tier, rung, model letter
 
 **Context update** (mechanism):
 The message the pi adapter adds at the start of a Manager's turn only (never a Lead's), listing the Context records other Sessions wrote since its last one and the Plan Events since then (created, phase, pull request opened or merged, Job failed, done) (commands.md §15.7).
