@@ -60,14 +60,13 @@ impl Fixture {
                 std::env::remove_var(key);
             }
         }
-        let f = Self {
+        Self {
             home,
             fakes: Fakes::new(),
             saved,
             _dir: dir,
             _lock: lock,
-        };
-        f
+        }
     }
     fn store(&self) -> Store {
         Store::open(&self.home, 5000).unwrap()
