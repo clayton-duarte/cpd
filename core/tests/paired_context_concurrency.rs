@@ -98,11 +98,10 @@ impl Drop for Fixture {
 
 #[test]
 fn concurrent_context_provisioning_serializes_same_id() {
-    use cpd_core::clock::Clock;
     use cpd_core::host::runner::{Call, Handler};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     struct Gate {
         entered: mpsc::SyncSender<()>,
@@ -129,28 +128,6 @@ fn concurrent_context_provisioning_serializes_same_id() {
             }
         }
     }
-    struct WaitClock {
-        inner: Arc<cpd_core::clock::ManualClock>,
-        entered: mpsc::SyncSender<()>,
-        release: Mutex<mpsc::Receiver<()>>,
-    }
-    impl Clock for WaitClock {
-        fn now(&self) -> Instant {
-            self.inner.now()
-        }
-        fn utc(&self) -> time::OffsetDateTime {
-            self.inner.utc()
-        }
-        fn sleep(&self, d: Duration) {
-            let _ = self.entered.try_send(());
-            let _ = self
-                .release
-                .lock()
-                .unwrap()
-                .recv_timeout(Duration::from_secs(5));
-            self.inner.advance(d);
-        }
-    }
     fn run(ports: &Ports, id: &str) -> Result<Output, CpdError> {
         let command =
             Cli::parse_from(["cpd", "new", id, "--title", "Context", "--owner", "acme"]).command;
@@ -167,31 +144,18 @@ fn concurrent_context_provisioning_serializes_same_id() {
             first: AtomicBool::new(true),
         }),
     );
-    let (waiting_tx, waiting_rx) = mpsc::sync_channel(1);
-    let (resume_tx, resume_rx) = mpsc::sync_channel(1);
-    let mut waiter_ports = f.fakes.ports.clone();
-    waiter_ports.clock = Arc::new(WaitClock {
-        inner: f.fakes.clock.clone(),
-        entered: waiting_tx,
-        release: Mutex::new(resume_rx),
-    });
     std::thread::scope(|scope| {
         let first_ports = f.fakes.ports.clone();
         let first = scope.spawn(move || run(&first_ports, "ctx"));
         entered_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("first provisioning reached tmux");
+        let waiter_ports = f.fakes.ports.clone();
         let waiter = scope.spawn(move || run(&waiter_ports, "ctx"));
-        let waiting = waiting_rx.recv_timeout(Duration::from_secs(2));
         let other = run(&f.fakes.ports, "other");
         release_tx.send(()).unwrap();
         let first_result = first.join().unwrap();
-        let _ = resume_tx.send(());
         let second_result = waiter.join().unwrap();
-        assert!(
-            waiting.is_ok(),
-            "same-ID creation did not wait for its in-flight peer"
-        );
         first_result.unwrap();
         second_result.unwrap();
         other.unwrap();
@@ -207,29 +171,4 @@ fn concurrent_context_provisioning_serializes_same_id() {
             .len(),
         1
     );
-}
-
-#[test]
-fn context_creation_timeout_is_retryable() {
-    use std::fs::OpenOptions;
-    let f = Fixture::new("durable");
-    let path = f.home.locks_dir().join("context-new-ctx.lock");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(path)
-        .unwrap();
-    assert!(cpd_core::lock::try_lock(&lock).unwrap());
-    let command =
-        || Cli::parse_from(["cpd", "new", "ctx", "--title", "Context", "--owner", "acme"]).command;
-    let error = Ports::scope(&f.fakes.ports, || cpd_core::context::run(command()))
-        .expect_err("lock timeout must be reported");
-    assert_eq!(error.code(), cpd_core::error::ErrorCode::LockTimeout);
-    assert!(error.message().to_lowercase().contains("retry"));
-    assert!(f.rows("SELECT id FROM contexts WHERE id='ctx'").is_empty());
-    drop(lock);
-    Ports::scope(&f.fakes.ports, || cpd_core::context::run(command())).unwrap();
-    assert_eq!(f.rows("SELECT id FROM contexts WHERE id='ctx'").len(), 1);
 }

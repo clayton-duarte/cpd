@@ -3,7 +3,6 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -23,9 +22,63 @@ use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind, Sessi
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
 
+/// A local lease also wakes same-process waiters when the file lock is released.
+struct LocalLease {
+    path: std::path::PathBuf,
+}
+
+fn local_registry() -> &'static (
+    std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    std::sync::Condvar,
+) {
+    static REGISTRY: std::sync::OnceLock<(
+        std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+        std::sync::Condvar,
+    )> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        (
+            std::sync::Mutex::new(std::collections::HashSet::new()),
+            std::sync::Condvar::new(),
+        )
+    })
+}
+
+impl Drop for LocalLease {
+    fn drop(&mut self) {
+        let (mutex, wake) = local_registry();
+        let mut held = mutex.lock().unwrap_or_else(|e| e.into_inner());
+        held.remove(&self.path);
+        wake.notify_all();
+    }
+}
+
+/// File drops before the local lease wakes its waiters.
+pub(crate) struct CreationLock {
+    _file: File,
+    _local: LocalLease,
+}
+
 /// Serialize one creation and its external provisioning without holding a store transaction.
 /// Lock files are persistent: unlinking a held inode would allow a second holder.
-pub(crate) fn creation_lock(home: &CpdHome, kind: &str, id: &str) -> Result<File, CpdError> {
+pub(crate) fn creation_lock(
+    home: &CpdHome,
+    kind: &str,
+    id: &str,
+) -> Result<CreationLock, CpdError> {
+    creation_lock_until(
+        home,
+        kind,
+        id,
+        std::time::Instant::now() + Duration::from_secs(60),
+    )
+}
+
+fn creation_lock_until(
+    home: &CpdHome,
+    kind: &str,
+    id: &str,
+    deadline: std::time::Instant,
+) -> Result<CreationLock, CpdError> {
     let dir = home.locks_dir();
     let path = dir.join(format!("{kind}-new-{id}.lock"));
     let failed = |e: &dyn std::fmt::Display| {
@@ -34,6 +87,17 @@ pub(crate) fn creation_lock(home: &CpdHome, kind: &str, id: &str) -> Result<File
             format!("Cannot use creation lock {}: {e}.", path.display()),
         )
         .with("lock", path.display().to_string())
+    };
+    let timed_out = || {
+        CpdError::new(
+            ErrorCode::LockTimeout,
+            format!(
+                "Another creation held {} for 60 seconds. Retry with the same flags.",
+                path.display()
+            ),
+        )
+        .with("lock", path.display().to_string())
+        .with("waited_seconds", 60)
     };
     fs::create_dir_all(&dir).map_err(|e| failed(&e))?;
     let file = OpenOptions::new()
@@ -47,25 +111,37 @@ pub(crate) fn creation_lock(home: &CpdHome, kind: &str, id: &str) -> Result<File
     if !file.metadata().map_err(|e| failed(&e))?.is_file() {
         return Err(failed(&"not a regular file"));
     }
-    let clock = crate::ports::Ports::current().clock;
-    let wait = Duration::from_secs(60);
-    let deadline = clock.now() + wait;
+    let (mutex, wake) = local_registry();
+    let mut held = mutex.lock().unwrap_or_else(|e| e.into_inner());
+    while held.contains(&path) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(timed_out());
+        }
+        held = wake
+            .wait_timeout(held, remaining)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
+    }
+    held.insert(path.clone());
+    drop(held);
+    let local = LocalLease { path: path.clone() };
     loop {
         if crate::lock::try_lock(&file).map_err(|e| failed(&e))? {
-            return Ok(file);
+            return Ok(CreationLock {
+                _file: file,
+                _local: local,
+            });
         }
-        if clock.now() >= deadline {
-            return Err(CpdError::new(
-                ErrorCode::LockTimeout,
-                format!(
-                    "Another creation held {} for 60 seconds. Retry with the same flags.",
-                    Path::new(&path).display()
-                ),
-            )
-            .with("lock", path.display().to_string())
-            .with("waited_seconds", wait.as_secs()));
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(timed_out());
         }
-        clock.sleep(Duration::from_millis(100));
+        let held = mutex.lock().unwrap_or_else(|e| e.into_inner());
+        drop(
+            wake.wait_timeout(held, remaining.min(Duration::from_millis(100)))
+                .unwrap_or_else(|e| e.into_inner()),
+        );
     }
 }
 
@@ -572,4 +648,68 @@ fn record_event(context: &ContextId, record: &Record, seq: i64, verb: &str) -> N
         seq,
     )
     .context(context.clone())
+}
+
+#[cfg(test)]
+mod creation_lock_tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::time::Instant;
+
+    fn home(dir: &tempfile::TempDir) -> CpdHome {
+        CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap()
+    }
+
+    #[test]
+    fn local_and_file_contention_use_the_same_deadline_and_release() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let home = home(&dir);
+        let held = creation_lock_until(&home, "context", "ctx", Instant::now()).unwrap();
+        let error = match creation_lock_until(&home, "context", "ctx", Instant::now()) {
+            Err(error) => error,
+            Ok(_) => panic!("local contention must time out"),
+        };
+        assert_eq!(error.code(), ErrorCode::LockTimeout);
+        let unrelated = creation_lock_until(&home, "context", "other", Instant::now()).unwrap();
+        drop(unrelated);
+        drop(held);
+        let path = home.locks_dir().join("context-new-ctx.lock");
+        let external = OpenOptions::new().write(true).open(path).unwrap();
+        assert!(crate::lock::try_lock(&external).unwrap());
+        let error = match creation_lock_until(&home, "context", "ctx", Instant::now()) {
+            Err(error) => error,
+            Ok(_) => panic!("file contention must time out"),
+        };
+        assert_eq!(error.code(), ErrorCode::LockTimeout);
+        assert!(error.message().contains("Retry"));
+        drop(external);
+        drop(creation_lock_until(&home, "context", "ctx", Instant::now()).unwrap());
+    }
+
+    #[test]
+    fn panic_releases_both_creation_guards() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let home = home(&dir);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _held = creation_lock_until(&home, "plan", "fresh", Instant::now()).unwrap();
+            panic!("injected failure");
+        }));
+        assert!(result.is_err());
+        drop(creation_lock_until(&home, "plan", "fresh", Instant::now()).unwrap());
+    }
+
+    #[test]
+    fn lock_file_symlink_is_refused_without_leaving_a_lease() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let home = home(&dir);
+        fs::create_dir_all(home.locks_dir()).unwrap();
+        let path = home.locks_dir().join("context-new-ctx.lock");
+        let target = dir.path().join("target");
+        fs::write(&target, "unchanged").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(creation_lock_until(&home, "context", "ctx", Instant::now()).is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "unchanged");
+        fs::remove_file(path).unwrap();
+        drop(creation_lock_until(&home, "context", "ctx", Instant::now()).unwrap());
+    }
 }

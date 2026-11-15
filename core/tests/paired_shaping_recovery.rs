@@ -220,11 +220,10 @@ fn shaping_by_user_mode_is_stored_and_conflicts_are_refused() {
 
 #[test]
 fn concurrent_shaping_provisioning_serializes_same_id() {
-    use cpd_core::clock::Clock;
     use cpd_core::host::runner::{Call, Handler};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     struct Gate {
         entered: mpsc::SyncSender<()>,
@@ -249,28 +248,6 @@ fn concurrent_shaping_provisioning_serializes_same_id() {
             } else {
                 Reply::ok("")
             }
-        }
-    }
-    struct WaitClock {
-        inner: Arc<cpd_core::clock::ManualClock>,
-        entered: mpsc::SyncSender<()>,
-        release: Mutex<mpsc::Receiver<()>>,
-    }
-    impl Clock for WaitClock {
-        fn now(&self) -> Instant {
-            self.inner.now()
-        }
-        fn utc(&self) -> time::OffsetDateTime {
-            self.inner.utc()
-        }
-        fn sleep(&self, d: Duration) {
-            let _ = self.entered.try_send(());
-            let _ = self
-                .release
-                .lock()
-                .unwrap()
-                .recv_timeout(Duration::from_secs(5));
-            self.inner.advance(d);
         }
     }
     fn run(ports: &Ports, id: &str) -> Result<Output, CpdError> {
@@ -298,32 +275,18 @@ fn concurrent_shaping_provisioning_serializes_same_id() {
             first: AtomicBool::new(true),
         }),
     );
-    let (waiting_tx, waiting_rx) = mpsc::sync_channel(1);
-    let (resume_tx, resume_rx) = mpsc::sync_channel(1);
-    let mut waiter_ports = f.fakes.ports.clone();
-    waiter_ports.clock = Arc::new(WaitClock {
-        inner: f.fakes.clock.clone(),
-        entered: waiting_tx,
-        release: Mutex::new(resume_rx),
-    });
     std::thread::scope(|scope| {
         let first_ports = f.fakes.ports.clone();
         let first = scope.spawn(move || run(&first_ports, "fresh"));
         entered_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("first provisioning reached tmux");
+        let waiter_ports = f.fakes.ports.clone();
         let waiter = scope.spawn(move || run(&waiter_ports, "fresh"));
-        // A correct lock sends this before either same-ID caller can create a second window.
-        let waiting = waiting_rx.recv_timeout(Duration::from_secs(2));
         let other = run(&f.fakes.ports, "other");
         release_tx.send(()).unwrap();
         let first_result = first.join().unwrap();
-        let _ = resume_tx.send(());
         let second_result = waiter.join().unwrap();
-        assert!(
-            waiting.is_ok(),
-            "same-ID creation did not wait for its in-flight peer"
-        );
         first_result.unwrap();
         second_result.unwrap();
         other.unwrap();
