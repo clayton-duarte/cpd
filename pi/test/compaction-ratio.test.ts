@@ -240,3 +240,38 @@ test("disabled automatic compaction is respected by the idle fallback", async ()
 	assert.equal(await session._checkCompaction(msg("stop")), false);
 	assert.equal(run.calls.length, 0);
 });
+
+// Pi's comparison is mocked at its observed strict `>` boundary; this tests our hooks,
+// not Pi's token estimation or comparison implementation.
+test("idle production hooks use the active model reserve at both threshold boundaries", async () => {
+	let tokens = 0;
+	let active = model(123_457);
+	const fakePi = { getSettings: () => ({ compaction: {} }) };
+	const reserveFor = SettingsManager.prototype.getCompactionReserveTokens as unknown as (
+		this: typeof fakePi, m: ReturnType<typeof model>,
+	) => number;
+	const run = spy(Promise.resolve(true));
+	const proto = {
+		_compactBeforeNextAssistantResponse: spy(undefined),
+		_exceedsCompactionThreshold: (m: ReturnType<typeof model>) =>
+			tokens > m.contextWindow! - reserveFor.call(fakePi, m),
+		_checkCompaction: spy(false),
+		_runAutoCompaction: run,
+	};
+	hookIdleCompaction(proto);
+	const session = Object.create(proto, {
+		autoCompactionEnabled: { value: true },
+		agent: { value: { state: { isStreaming: false }, hasQueuedMessages: () => false } },
+		sessionManager: { value: { buildSessionProjection: () => ({ messages: [] }) } },
+		model: { get: () => active },
+	});
+	for (const [window, threshold] of [[123_457, 98_765], [1_000_000, 200_000], [123_457, 98_765]]) {
+		active = model(window);
+		for (const [offset, expected] of [[-1, false], [0, false], [1, true]] as const) {
+			tokens = threshold + offset;
+			run.calls.length = 0;
+			assert.equal(await session._checkCompaction(msg("stop")), expected, `window ${window}, tokens ${tokens}`);
+			assert.deepEqual(run.calls, expected ? [["threshold", false]] : []);
+		}
+	}
+});
