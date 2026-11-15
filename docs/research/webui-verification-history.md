@@ -1,8 +1,14 @@
+Historical phase checklists and unmeasured performance targets. These are not
+current startup instructions or proof of runtime conformance. Retained because
+measurement/results remain unresolved. Current manual verification follows
+[the browser guide](../../web/README.md#manual-verification); current behavior
+comes from the WebUI and core contracts.
+
 # Manual verification, phases 1 to 4 (pro-d15, pro-d20, Phase 3/4)
 
 The Phase 1 checklist (sections 0 to 4) is kept; the Phase 2 checklist is section 5; the Phase 3/4 checklist (high-fidelity Dango v3 UI) is section 6; the Electron app checklist (Dock, Tray, native shell, live TUI and WebUI switch) is section 7.
 
-Dev bench only: no auth beyond Vite's localhost bind. The UI is the high-fidelity Dango v3 + shadcn/ui design ([`src/ui/DESIGN.md`](./src/ui/DESIGN.md) and its sibling `DESIGN-*.md` files). Contract: [`CONTRACT.md`](./CONTRACT.md). Tick the results table at the end.
+Dev bench only: no auth beyond Vite's localhost bind. The UI is the high-fidelity Dango v3 + shadcn/ui design ([`src/ui/DESIGN.md`](../../web/src/ui/DESIGN.md) and its sibling `DESIGN-*.md` files). Contract: [`CONTRACT.md`](../../web/CONTRACT.md). Tick the results table at the end.
 
 ## 0. Prerequisites
 
@@ -178,7 +184,7 @@ Covered by Phase 2: C1 to C7. Measure in Chrome DevTools Performance on the larg
 
 ## 6. Phase 3/4 checklist (high-fidelity Dango v3)
 
-Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide and 800 px high; DevTools open for the steps that name it. Have a Plan in phase `dispatch` with at least two Workflows (one with a failed Job, one with a queued Job), a Lead session on the durable runner, an inbox with items of several urgencies, and (steps 19 and 20) the ability to make a durable agent call `ask_user_question` and `cpd_plan_review`. Specification: [`src/ui/DESIGN.md`](./src/ui/DESIGN.md) (foundation and shell), `src/ui/DESIGN-panes.md`, `src/ui/DESIGN-chat.md`, `src/ui/DESIGN-compose.md`. Measure sizes with DevTools (Elements, computed style). Record results in 6.2.
+Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide and 800 px high; DevTools open for the steps that name it. Have a Plan in phase `dispatch` with at least two Workflows (one with a failed Job, one with a queued Job), a Lead session on the durable runner, an inbox with items of several urgencies, and (steps 19 and 20) the ability to make a durable agent call `ask_user_question` and `cpd_plan_review`. Specification: [`src/ui/DESIGN.md`](../../web/src/ui/DESIGN.md) (foundation and shell), `src/ui/DESIGN-panes.md`, `src/ui/DESIGN-chat.md`, `src/ui/DESIGN-compose.md`. Measure sizes with DevTools (Elements, computed style). Record results in 6.2.
 
 ### 6.1 Steps
 
@@ -230,7 +236,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 
 ## 7. Electron app checklist (pro-d21, pro-d23, pro-d24)
 
-Specification: [`ELECTRON.md`](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision). The Dock and Tray visuals are checked by hand here and never in tests. Steps 7.2 to 7.5 are macOS only; Linux and Windows have no Dock and no Tray.
+Specification: [`ELECTRON.md`](../contract.md#37b-the-serve-process-runtime-and-port-supervision). The Dock and Tray visuals are checked by hand here and never in tests. Steps 7.2 to 7.5 are macOS only; Linux and Windows have no Dock and no Tray.
 
 Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH`; a running engine (`cpd watch --check`); Maple Mono installed (ELECTRON.md, Run). For the attention steps, the Inbox must hold at least one `red` row (blocking) and one `magenta` row (decision): a failing Job and a pending question or plan review will do. Start the app with `pnpm --filter cpd-web-client run electron`, and quit it with Cmd-Q or the Tray's `Quit cpd` item.
 
@@ -291,7 +297,7 @@ Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH
 
 ## 8. Auto-update and CLI bootstrap
 
-Specification: [`ELECTRON.md`](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision), section "Auto-update and CLI bootstrap". Run these on the app launched from the cpd checkout (macOS), with the checkout on branch `main`, clean, and `origin` reachable. `cpd` is on `PATH` and an engine is running. Steps (a), (b) and (d) need a merged PR: merge only the change the step names, into `main`.
+Specification: [`ELECTRON.md`](../contract.md#37b-the-serve-process-runtime-and-port-supervision), section "Auto-update and CLI bootstrap". Run these on the app launched from the cpd checkout (macOS), with the checkout on branch `main`, clean, and `origin` reachable. `cpd` is on `PATH` and an engine is running. Steps (a), (b) and (d) need a merged PR: merge only the change the step names, into `main`.
 
 ### 8.1 Steps
 

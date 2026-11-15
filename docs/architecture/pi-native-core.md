@@ -90,7 +90,7 @@ Currently implemented as a polling loop over SQLite `PRAGMA data_version` every 
 ### 3.1 IPC Mechanism: Unix Domain Socket vs NAPI (Decision pro-d526)
 - **Trade-off Analysis**:
   - *NAPI (in-process library)*: Zero serialization cost, but fatal Rust panics take down pi; Node ABI version coupling; prevents hot binary reload without restarting pi; cannot serve WebUI or external clients.
-  - *Unix Domain Socket (Selected - pro-d526)*: Dedicated local socket at `$CPD_HOME/run/core.sock`. Uses JSON-RPC 2.0 / length-delimited NDJSON. Strict process isolation: core reloads and crashes do not crash pi sessions. Supports multiple simultaneous clients (pi extension, WebUI, recovery tools).
+  - *Unix Domain Socket (Selected - pro-d526)*: Dedicated local socket at `$CPD_HOME/run/core.sock`. Uses JSON request/reply objects / length-delimited NDJSON. Strict process isolation: core reloads and crashes do not crash pi sessions. Supports multiple simultaneous clients (pi extension, WebUI, recovery tools).
 - **Protocol**:
   - Request/Response: `{ "id": 1, "method": "domain.verb", "params": { ... } }` -> `{ "id": 1, "result": { ... }, "error": null }`.
   - Notification/Subscription: `{ "method": "events.subscribe", "params": { "cursor": 157200, "filter": { "session": "..." } } }`.
@@ -161,7 +161,7 @@ CLI subcommands map directly to typed tool namespaces:
 ## 5. WebUI & Incident Recovery Mode
 
 ### 5.1 WebUI as Primary Client (pro-d522, pro-d527)
-- WebUI connects directly to core's WebSocket server (`ws://127.0.0.1:<port>/cpd-ws` or local IPC).
+- WebUI connects directly to core's WebSocket server (same-origin `/cpd-ws` under the runtime/access profile).
 - Replaces `cpd cockpit serve`, `toArgv`, and all Node `execFile` shell-outs.
 - Initial connection fetches snapshot of active contexts, plans, and jobs; streams subsequent ledger events via cursor.
 - All User actions (plan reviews, decision logging, prompt composer, PR review, bug tracking) execute through WebSocket commands.

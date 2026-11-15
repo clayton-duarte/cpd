@@ -19,7 +19,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | pro-d12 | Both backends: the durable-host unix socket (`$CPD_HOME/run/host/<id>.sock`) and pi-runner sessions (session JSONL + `cpd session send` + `cpd session retier`). |
 | pro-d13 | The legacy `web/` is deleted; Phase 1 starts clean. |
 | pro-d14 | Phase 1 is "make it work": correctness first; no visual design. (Recorded by the Plan; no further rule is derived from it here.) |
-| pro-d15 | Proof is manual in a browser, recorded in `web/VERIFY.md` (a later Job writes it; not this file). |
+| pro-d15 | Proof is manual in a browser, recorded in `web/README.md#manual-verification` (a later Job writes it; not this file). |
 | pro-d16 | Minimal functional visuals only: unstyled semantic HTML plus one small plain CSS file; the Figma design comes in Phase 3. |
 | pro-d17 | `web/package.json` gains exactly one dependency, `"@earendil-works/chord": "1.5.0"` (exact, no range), and `pnpm-lock.yaml` changes only for that line (pro-d377, User, 2026-11-03 EST: the freeze of this row is lifted for that one line and its lockfile change). Every other line of `web/package.json` and `pnpm-lock.yaml` is frozen: no other dependency is added or removed. The transport is Vite `server.ws` custom events, dev bench only. | **Superseded by 15.1:** the transport is the one WebSocket endpoint of §15 (ADR 0015 option B, air-d46), which adds the pinned `ws` dependency; the custom-events transport is gone. |
 | pro-d18 | (User, 2026-11-03 EST, chose in this Plan: add header and status bar slots, minimal.) The cockpit is a 5-zone frame: full-width Top Header, left full-height Context tree, centre-top Plan view, centre-bottom Chat (Chat Title on its top border, composer and chat footer at its bottom), right full-height Attention Inbox, full-width Bottom Status Bar. Phase 1 adds ONLY a Top Header with the plain text `C-P-D` (no emblem art) and a Bottom Status Bar showing the selected session's runner and state and `cpd` version (or an explicit `unknown`); the Chat Title is the `ChatHeader` already built, placed at the top of the chat zone. Pill styling, emblem art, host stats, workers summary and balloons are not Phase 1 (pro-d16: Figma in Phase 3, visuals in Phase 4). No new data source and no `wire.ts` field. **Amended by 21 (Plan `status-workers`):** the Bottom Status Bar gains the Workers segment in the TUI's exact long text, fed by the serve status pane (§20), and the workers and incident pills are clickable (§21). |
@@ -2122,6 +2122,20 @@ It starts no agent or engine and opens no store. Access follows the same
 [policy](../docs/architecture/webui-access.md) as production.
 
 
+### 15.6 WebUI version skew
+
+Compare the backend’s reported integer protocol with the protocol the WebUI was
+built for whenever backend version information is refreshed (pro-d556). A
+mismatch in either direction marks the version badge `data-alert="true"` and
+shows one actionable cockpit error toast naming both protocols. Offer the
+manual install or upgrade path that aligns the backend and browser build; do
+not upgrade automatically.
+
+A failed version read or a non-integer/missing protocol is unknown, not a match.
+Show the version as unknown and explain that protocol compatibility could not
+be verified. The version badge remains `data-part="version"`. Obtain this
+metadata through the core interface; the browser does not spawn a CLI process.
+
 ## 16. Amendments air-d44, air-d43: the error toast standard and the image-only message (Plan `toast-fix`)
 
 Normative. Plan `toast-fix` decides the two points below after the WebUI bugs air-d44 (errors rendered inline in the chat) and air-d43 (an image-only chat message was refused). Where a statement of 3.9, 4.3, 6.2, 6.5, 6.8 or 11.3 is marked "Amended by 16.x", section 16 wins and the older statement is void.
@@ -2376,21 +2390,28 @@ Normative. The status line of §23 ("not built") is superseded: the generator ex
 
 Normative. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-d522, pro-d527 (WebUI connects to core directly), pro-d528, pro-d541 (port 3333); docs/contract.md §5.8 (core's `/cpd-ws` and `run/core.sock`) and §6.21 (the pi live-stream socket). The Lead's answer to escalation `webui-core-ws-docs-a1-q1` decides §26.1. Where this section and §5, §13, §18 of this file, or docs/contract.md §5.5 and §5.6 disagree, this section wins (recency; those sections are superseded at §26.3 and their text is not edited).
 
-### 26.1 The data connection: direct to core `/cpd-ws`
+### 26.1 The core data connection
 
-- **The endpoint.** The WebUI opens one WebSocket to core, `ws://127.0.0.1:<port>/cpd-ws`, the endpoint of docs/contract.md §5.8. Core binds `127.0.0.1` only, on a port the OS chooses. There is no proxy on the data path: the WebUI does not connect to port 3333 for data.
-- **Where the port comes from.** The Lead's answer (escalation `webui-core-ws-docs-a1-q1`): the engine records the bound port in `$CPD_HOME/run/core.port`, and the WebUI reads it from there. The answer also allows an environment variable; this section defines one source only, `run/core.port`. **Open, flagged:** docs/contract.md §5.8 open point 2 ("How a client learns the WebSocket port") is still open there, and does not name `run/core.port`. The core-ws-engine Job must write the file and §5.8 must be amended to say so; this section does not amend §5.8.
-- **Production connection.** The production server and core WebSocket use the runtime contract and [access policy](../docs/architecture/webui-access.md). The browser connects same-origin to `/cpd-ws`; the preview proxies to that endpoint on the same host.
-- **Who hands over the URL.** The page cannot read a file, so the process that serves the page reads `run/core.port` and gives the renderer the `ws://127.0.0.1:<port>/cpd-ws` URL on load. The Lead's answer does not name the hand-over; this is an **inference** that the implementation Job must confirm. In Electron the preload `contextBridge` carries the URL (§15.1, one read-only member, no IPC data channel), as before.
-- **Origin.** The Origin rule of ADR 0015 point 1 applies unchanged (docs/contract.md §5.8): an absent, `null`, `file://` or loopback Origin is accepted; any other is refused before a connection's state is created. Consequence: the page loaded from `http://127.0.0.1:3333` or `http://localhost:3333` is accepted; a page loaded from another machine's address (for example `http://<host>:3333` over the LAN) is refused. This is a fact of the rule, not a new rule.
-- **Framing.** One JSON text frame per message, as §5.8. The renderer speaks core's two requests, with a `{"id", "method", "params"}` request and an `{"id", "result", "error"}` reply: `snapshot` and `events.subscribe`. Core then sends one `{"method": "event", "params": {"event": <Event>}}` notification per Event.
-- **The handshake and the reconnect** are §5.8's: the client sends `snapshot`, renders it, keeps the returned `cursor`, and sends `events.subscribe` with that cursor. On every reconnect it does the same with the last cursor it processed. This replaces §15.1's "every reconnect resyncs by full `cockpit.snapshot`" for the core connection, because §5.8 is the later record (pro-d527). The transport still carries no reconnect logic of its own (§15.1); the renderer's existing backoff runs.
-- **Events into the store.** Each `event` notification is an Event row (the shape of `cpd events follow`, docs/contract.md §5.2). The renderer's store applies it through the reducer, as it applies a `cockpit.patch` today (§4).
-
-**Open, not fixed by this section:**
-1. The content of `snapshot` (docs/contract.md §5.8 leaves it to this Plan).
-2. The mapping of core's `snapshot` and `event` messages onto the renderer's `cockpit.snapshot` and `cockpit.patch` wire messages (§4). Until the implementation Job fixes it, the store's shapes are unchanged.
-3. Whether core's `/cpd-ws` answers the `ping` and `pong` heartbeat of §15.2. docs/contract.md §5.8 defines no heartbeat.
+- **Endpoint and access.** The browser uses same-origin `/cpd-ws` under the
+  [runtime contract](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision)
+  and [access policy](../docs/architecture/webui-access.md). Production uses
+  3333; the preview forwards to production on the same host. A browser is never
+  given a server-local filesystem path or a loopback URL naming another machine.
+- **One authority.** Read models and actions use the core domain rules. The web
+  does not spawn CLI processes or own a competing store. A private core socket
+  or discovery file is an implementation boundary, not a second public origin.
+- **Snapshot and replay.** On connection, obtain the current cockpit read models
+  (§5) and their event cursor, render them, then subscribe from that cursor.
+  Reconnect from the last processed cursor under the core replay rules (§5.8 of
+  the core contract); a gap requires a fresh snapshot, never silent lost state.
+- **Framing.** The core event profile uses JSON request/reply frames and `event`
+  notifications. The renderer maps those to its read models through its reducer.
+  These read/subscription messages are not a complete inventory of domain
+  actions: authenticated actions follow the same core command authority.
+- **Liveness.** The profile must satisfy the heartbeat, disconnect and reconnect
+  behavior of §15.2 and the banner/outbox rules of §34. It must publish the codec
+  mapping for core frames and renderer models before implementation, rather than
+  depending on a retired child stream or Electron bridge.
 
 ### 26.2 pi session transcript streaming into the WebUI reactive store
 
@@ -2808,6 +2829,16 @@ Four dialogs stop a session until the User answers: `cpd_secret_approve`, `cpd_e
 - **The Inbox item.** While a session waits on one of the four dialogs, the engine opens one `dialog` item for it at engine step `inbox` (contract §2.2 "Inbox item"), labelled `<agent> waits for your approval: <what>`. `<agent>` is the waiting session and `<what>` is what the dialog asks the User to decide. The item closes when the session stops waiting on that dialog, by an answer or by the dialog ending.
 - **Dual resolution (assumption A2).** An answer in the Inbox and an answer in the WebUI reach the same held dialog. The host holds one request per dialog (`pi/durable-host/held.ts`), and the first answer wins; the other surface then sees the dialog resolved and its item closes.
 - **The WebUI composer (assumption A3).** While a session waits on a dialog, the WebUI replaces the message composer with the dialog card, and restores the composer when the dialog resolves. The swap is already in `web/src/ui/ChatPane.tsx`, which draws the card in place of the composer whenever a dialog is open.
+
+**Approval response contract.** Requests with purpose `secret_approve`,
+`host_approve` or `external_approve` use the normal interactive question card
+with the explicit options `Allow once` and `Deny`. Identify an approval from
+its typed purpose, never from its title. Preserve that purpose by dialog ID.
+The response to the host is `ui_response {id, value: "Allow once" | "Deny"}`,
+rather than the ordinary question's `answer` payload. Only selection of the
+actual `Allow once` option authorizes the action; denial, custom text, no answer
+or cancellation yields `Deny`. An ordinary product question does not gain
+approval semantics by containing those words.
 
 ## 34. PWA shell: service worker, offline cache, engine banner, outbox, dedup, and HTTPS (Plan `pwa-shell`; Job `pwa-docs`)
 

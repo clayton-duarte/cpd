@@ -3860,9 +3860,9 @@ The **refusal miner** is the read-only TypeScript tool that mines guard refusals
 #### The two endpoints
 
 - **The Unix socket** is `$CPD_HOME/run/core.sock`. Its file mode is `0600`. Its path must fit the socket path limit of §6.14 (`SOCKET_PATH_MAX`, 107 bytes); a longer path is refused at start with `socket_path_too_long` (exit 2, as §6.13). At start, after taking the lock, the engine removes a file already at that path: no live engine can hold the lock, so the file is stale.
-- **The WebSocket** is path `/cpd-ws` on `127.0.0.1` only. The Origin rule of [ADR 0015](adr/0015-webui-data-transport.md) (its settled point 1, air-d46) applies unchanged: an absent, `null` or loopback Origin is accepted, any other Origin is refused before a connection's state is created. The port is chosen by the OS. How a client learns it is open (below).
+- **The WebSocket** is the browser’s same-origin `/cpd-ws` endpoint under [runtime supervision](#37b-the-serve-process-runtime-and-port-supervision) and [WebUI access](architecture/webui-access.md). Production uses port 3333; the preview forwards from 33333 to production on the same host. Binding and authentication are not determined by the historical loopback-only ADR.
 
-**Framing.** A WebSocket message is one JSON text frame. Framing on `core.sock` is **open**: [pi-native-core.md §3.1](architecture/pi-native-core.md) names both "JSON-RPC 2.0" and "length-delimited NDJSON". Both endpoints carry the same messages, whatever framing is chosen.
+**Framing.** A WebSocket message is one JSON text frame. `core.sock` uses NDJSON: one JSON object per line (§5.9). The event/read messages below are a protocol profile, not the complete inventory of authenticated domain actions; the browser contract also requires actions using the same core authority.
 
 #### Messages
 
@@ -3913,12 +3913,12 @@ When the engine stops, or re-execs after an install (§5.4, §3.7 "The engine is
 
 Each is one behaviour, with the contract as its assertion: the WebSocket connects and the Origin rule refuses a foreign Origin; `snapshot` returns the cursor of its own read transaction; a subscription with cursor C sends exactly the Events with id greater than C, in id order, and no Event twice; a committed Event reaches a live subscriber in id order after a wake-up; a lagging subscriber recovers from the store with no gap; a stale socket file is removed at start and a live engine's socket is not; a path over 107 bytes is refused with `socket_path_too_long`. The tests use no real tmux, no real pi and no real model (only authored code is tested).
 
-#### Open points
+#### Profile bindings
 
-1. **Framing on `core.sock`** (JSON-RPC 2.0 or length-delimited NDJSON; §3.1 names both). Decided in §5.9 "The transport": NDJSON, one JSON object per line, for every client.
-2. **How a client learns the WebSocket port**, since the OS chooses it.
-3. **The snapshot's content**, which Plan 4 fixes.
-4. **Whether `cpd events follow` moves onto the socket.**
+The WebUI read models define snapshot behavior; its profile documents the
+codec mapping and authenticated action bindings. Public endpoint discovery
+follows the fixed-port, same-origin runtime contract. A private socket or
+implementation discovery file does not change that browser access model.
 
 ### 5.9 Typed pi tools, context curation and the message bus (Plan `pi-extension-tools`)
 
@@ -6655,9 +6655,10 @@ profile. No provider or machine-specific default is selected by this contract.
 
 #### Models
 
-The **`[model]`** domain (pro-d27, Plan policy-scopes, PR `tiers`) replaces the config file's `[tiers]` section (§8.2 "Removed keys"). It sets the model for each Tier letter, per consumer role. It has five typed keys (cpd's defaults): `O` `github-copilot/claude-opus-5.5`, `S` `github-copilot/claude-sonnet-5.5`, `H` `github-copilot/claude-haiku-4.5`, `G` `github-copilot/gemini-3.8-flash`, and `J` (the decide role's letter), which has **no default of its own**: when no policy layer sets `J`, it takes the resolved `G`. So a table that sets `O`, `S`, `H` and `G` on one provider without `J` stays valid, and an explicit `J` always wins. Each value is a model ref `^[^/\s]+/\S+$` (§9 "Syntax"), `<provider>/<model-id>`. No `text` (empty audience), and exposure `machine, owner, repo`, so the resolved model of a Tier may differ by machine, owner, or repo.
-
-**One provider per table** (the invariant of pro-d7, moved here by pro-d27): when the five resolved refs (`O`, `S`, `H`, `G`, `J`) have the same provider (the text before its first `/`), the model table is valid. The check runs after the `J` default above, so an unset `J` is checked as the resolved `G`. If the keys' providers differ, the table is refused `policy_invalid` (exit 1, `details.file` and `details.key`, the message names the keys and their providers, for example `O is github-copilot but S is bifrost: a model table has one provider`). When a consumer resolves a key, it gets the model from the row's `[model]` table, or cpd's default when the table leaves the key out (key default; for `J`, the resolved `G`). See `cpd tiers` (§3.7, §9, commands.md §14).
+Model configuration resolves direct role selections under [§9](#9-model-selection).
+The catalog supplies supported efforts and context windows for validation.
+Legacy policy letter maps and their one-provider constraint are retired; no
+provider, model ID or machine-specific default is selected by this cleanup.
 
 **Deprecated `[pr] gate` alias.** Policy files created before hs-d679 may have `[pr] gate = "local" | "ci"` instead of the new `[gate]` domain. For compatibility, cpd still parses `[pr] gate` with a deprecation warning logged (internally; not surfaced to the User): `local` maps to both `[gate] merge = "local"` and `[gate] pr = "local"`, and `ci` or `none` to both `none`. An explicit `[gate]` table in the same file takes precedence over the deprecated alias. The hs policy files are updated outside this PR.
 
