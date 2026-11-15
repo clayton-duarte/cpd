@@ -953,7 +953,10 @@ pub fn resolve_owner_role_selection(
     _key: &PolicyKey,
     _capabilities: &dyn SelectionCapabilities,
 ) -> Result<RoleSelections, CpdError> {
-    Err(CpdError::new(ErrorCode::Internal, "NotImplemented: owner role selection"))
+    Err(CpdError::new(
+        ErrorCode::Internal,
+        "NotImplemented: owner role selection",
+    ))
 }
 
 #[cfg(test)]
