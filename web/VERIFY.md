@@ -39,7 +39,7 @@ Vite prints `Local: http://localhost:5173/` (`web/vite.config.ts`: `port: 5173`,
 | Narrow the tree, the Plan pane or the Inbox | nothing scrolls sideways; a DAG wider than its Workflow card scrolls inside that card (pro-d72) | left, centre, right |
 | Read the Inbox | heading `INBOX`, the seven tier filters at its right, one row per item with its actions; `Nothing needs you` when empty; `Engine is not running` appears if the engine is stopped (check with `cpd watch --check`) | right |
 | Click an Inbox row's session button | that session is selected | right then centre |
-| Select a session, read the status bar | `Runner: pi` or `Runner: durable` matches `cpd session list`; `State: …` matches the tree dot; the version as a bare badge, with no `cpd: ` prefix (docs/ui-preview.md, Production and preview modes, item 6) | bottom |
+| Select a session, read the status bar | `Runner: pi` or `Runner: durable` matches `cpd session list`; `State: …` matches the tree dot; the version as a bare badge, with no `cpd: ` prefix (docs/contract.md#37b-the-serve-process-runtime-and-port-supervision, Production and preview modes, item 6) | bottom |
 | Select nothing (reload) | `Runner: none`, `State: none`, plan pane shows the Plan flowchart (`[data-part="flow-canvas"]`, with an `Expand all` button; pro-d68) | bottom, centre |
 
 The Phase 3/4 look of the frame is checked in section 6.
@@ -193,7 +193,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 | **Cockpit shell** | | |
 | 6 | Measure a column header, the status bar, the Context tree column and the Inbox column. | Column headers 44px high with a 1px bottom border `#2e2a33`; status bar 30px high, background `#19171c`, 1px top border; tree column 272px wide with a right border; inbox column 340px wide with a left border. The page has no outer scrollbar. |
 | 7 | Read the top row. | The three column headers form the top row, with no full-width header bar (pro-d87). The Context tree header shows the φ mark. No breadcrumb and no engine pill are shown (a known loss, not rebuilt: DESIGN.md 3a). No search box is shown (command palette not wired). |
-| 8 | Read the status bar. | Right side: `Runner: pi`/`durable`/`none`, `State: <state>` with a glyph, the version as a bare badge with no `cpd: ` prefix (docs/ui-preview.md item 6), all matching Phase 1 step 1. No Legend, Logs, Tiers, Workers, CPU/RAM or incident element appears. |
+| 8 | Read the status bar. | Right side: `Runner: pi`/`durable`/`none`, `State: <state>` with a glyph, the version as a bare badge with no `cpd: ` prefix (docs/contract.md#37b-the-serve-process-runtime-and-port-supervision item 6), all matching Phase 1 step 1. No Legend, Logs, Tiers, Workers, CPU/RAM or incident element appears. |
 | 9 | Read the Context tree: its header row shows the φ mark, with no collapse control (the Contexts list is always open; the header is the shared `TopPaneHeader`, DESIGN 3i). One row per Context, its Manager chat (id, Manager dot, counters). Under it one row per Plan (Lead dot, plan id, counters `planned`, `active`, `failed`, `done`). Forks are extra rows under their Context. The standing Contexts `cpd`, `host` and `codereview` are rows in the same list, each with a φ after its name. Hover a row. | Each Plan row shows its Lead's dot and the four counters; each fork row shows its own dot. Standing Contexts sit among the Contexts by dot tier, then newest first; there is no separate Standing group. No Worker appears as a row. Archived items sit under `Archived (<n>)`. |
 | 10 | Click a Plan row, then a fork row. | The Plan row gets a blue tint (`rgba(122,162,206,.16)`) and brighter text; the Plan pane and its Lead chat open as in Phase 1 step 1. The fork row opens its chat. |
 | 11 | Plan/chat split: drag the thin bar between the Plan pane and the chat (`Resize plan view and chat`) up and down. Focus it with Tab and press ArrowUp / ArrowDown. | The plan gets taller or shorter, never below 20% or above 80% of the column; each pane scrolls on its own; with the keyboard the bar moves (step size is the library's). Double-click on the bar restores the default 40/60 split. |
@@ -230,7 +230,7 @@ Prerequisites: sections 0 and 1 above; a browser window at least 1280 px wide an
 
 ## 7. Electron app checklist (pro-d21, pro-d23, pro-d24)
 
-Specification: [`ELECTRON.md`](./ELECTRON.md). The Dock and Tray visuals are checked by hand here and never in tests. Steps 7.2 to 7.5 are macOS only; Linux and Windows have no Dock and no Tray.
+Specification: [`ELECTRON.md`](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision). The Dock and Tray visuals are checked by hand here and never in tests. Steps 7.2 to 7.5 are macOS only; Linux and Windows have no Dock and no Tray.
 
 Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH`; a running engine (`cpd watch --check`); Maple Mono installed (ELECTRON.md, Run). For the attention steps, the Inbox must hold at least one `red` row (blocking) and one `magenta` row (decision): a failing Job and a pending question or plan review will do. Start the app with `pnpm --filter cpd-web-client run electron`, and quit it with Cmd-Q or the Tray's `Quit cpd` item.
 
@@ -291,7 +291,7 @@ Prerequisites: `pnpm install --frozen-lockfile` at the repo root; `cpd` on `PATH
 
 ## 8. Auto-update and CLI bootstrap
 
-Specification: [`ELECTRON.md`](./ELECTRON.md), section "Auto-update and CLI bootstrap". Run these on the app launched from the cpd checkout (macOS), with the checkout on branch `main`, clean, and `origin` reachable. `cpd` is on `PATH` and an engine is running. Steps (a), (b) and (d) need a merged PR: merge only the change the step names, into `main`.
+Specification: [`ELECTRON.md`](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision), section "Auto-update and CLI bootstrap". Run these on the app launched from the cpd checkout (macOS), with the checkout on branch `main`, clean, and `origin` reachable. `cpd` is on `PATH` and an engine is running. Steps (a), (b) and (d) need a merged PR: merge only the change the step names, into `main`.
 
 ### 8.1 Steps
 

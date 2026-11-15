@@ -1,5 +1,11 @@
 # cpd's interface
 
+Generated interface snapshot. Literal legacy tier fields describe the generating
+revision's wire surface; they do not define new model selections. Intended
+selection and retry behavior is owned by [contract §9](contract.md#9-model-selection).
+Regenerate the interface as part of implementing that policy; this documentation
+cleanup does not claim the installed command surface has migrated.
+
 Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not edit by hand. Regenerate: `CPD_BLESS=1 scripts/cargo.sh test -p cpd --test interface`. Callers, cockpit and internal: [commands.md §2](commands.md#2-command-index). A § without a file is commands.md's.
 
 | Command | Description | Callers | Cockpit |

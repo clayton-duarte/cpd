@@ -108,7 +108,7 @@ Cold build into a plain name (`~/gb2-spot/target-plain`) against `target.noindex
 
 - Spotlight index (`mdfind -onlyin <dir> 'kMDItemFSName == "*.d"'`): **190** files of `target-plain`, **0** of `target.noindex`. So macOS skips a `.noindex` dir (previously `unverified`: now measured on this macOS).
 - mds CPU sums: plain mean 79.7 %, max 281 %; `.noindex` mean 72.2 %, max 167.5 %. The machine's baseline from other worktrees' `target/` dirs is 72-87 % before either build (`mds-before`), so the difference sits inside the noise of one pair of runs (*inferred*: the two builds' own indexing share is the 8 % mean / 113 % peak difference; not proven).
-- A directory under `~/.cache` was not indexed in either name (`mdfind` found 0 `.d` files of `~/.cache/gb2-measure/t-base3` and of `shared.noindex`): *inferred* a hidden parent is skipped too, so the proposed `$HOME/.cache/cpd-target.noindex` is covered either way. `rg -n 'cache|CARGO_TARGET_DIR' scripts docs` finds no existing cpd build cache dir (`~/.cache/cpd-preview` for preview builds only, `docs/ui-preview.md`).
+- A directory under `~/.cache` was not indexed in either name (`mdfind` found 0 `.d` files of `~/.cache/gb2-measure/t-base3` and of `shared.noindex`): *inferred* a hidden parent is skipped too, so the proposed `$HOME/.cache/cpd-target.noindex` is covered either way. `rg -n 'cache|CARGO_TARGET_DIR' scripts docs` finds no existing cpd build cache dir (`~/.cache/cpd-preview` for preview builds only, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`).
 
 ### 5.6 What stays open
 

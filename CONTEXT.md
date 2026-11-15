@@ -33,10 +33,10 @@ _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 Checking a new Context record against nearby in-force records at write time. Retirement follows [contract §4.6](docs/contract.md#46-the-context-store).
 
 **Vector cache** (entity):
-`$CPD_HOME/vectors.db`: the derived file of record embeddings and already-checked markers for Neighbour curation. Each embedding row carries `content_hash`, the SHA-256 (hex) of the text it embedded, so `context embed` can skip a row whose text is unchanged. Written by `context curate` and `context embed`, and also read by `context search`. Not the source of truth and never synced; deleting it loses nothing. Contract §4.6.
+Rebuildable embeddings and curation markers derived from Context records. It supports retrieval and is not a source of truth.
 
-**Permanent Context** (entity, pro-d338):
-One of exactly three Contexts that every machine keeps: `cpd`, `host` (local maintenance of the machine) and `codereview` (the review intake of `inbox claim`). Never archived, renamed or deleted (`context_permanent`); its Plans behave as in any Context. The engine ensures all three every tick, and `context manager`, `inbox claim` and the host click ensure them too: a missing row is created and a live Manager is started, while a live Manager is left alone.
+**Permanent Context** (entity):
+A built-in Context reserved for CPD, local host maintenance or review intake, retained for the machine's lifetime.
 _Avoid_: default Context, system Context
 
 **Context record**:
@@ -76,11 +76,11 @@ A Job of kind `update`, added by cpd for a Workflow whose pull request is alread
 _Avoid_: sync Job, rebase Job
 
 **Scout** (new, pro-d210):
-The Job kind `scout`: a Job of the explore kinds that answers one question from this machine only (where a checkout is, what a log or an Attempt transcript says, a code survey). Its deliverable is a Markdown artefact and a bounded summary, with no commit. Tier `H1`-`H3`. See contract §2.2 "Explore Jobs".
+The Job kind `scout`: a Job of the explore kinds that answers one question from this machine only (where a checkout is, what a log or an Attempt transcript says, a code survey). Its deliverable is a Markdown artefact and a bounded summary, with no commit. See contract §2.2 "Explore Jobs".
 _Avoid_: explorer, survey Job
 
 **Researcher** (new, pro-d215):
-The Job kind `research`: an Explore Job that may also reach outside this machine (upstream docs, a registry, a web page, an attached MCP server) to answer one question. Its deliverable is the same as a Scout's. Tier `S1`-`S3`. An ordinary research Job of a docs Workflow, whose findings are committed as `docs/research/*.md`, is a `work` Job, not a Researcher.
+The Job kind `research`: an Explore Job that may also reach outside this machine (upstream docs, a registry, a web page, an attached MCP server) to answer one question. Its deliverable is the same as a Scout's. An ordinary research Job of a docs Workflow, whose findings are committed as `docs/research/*.md`, is a `work` Job, not a Researcher.
 _Avoid_: web Job, lookup Job
 
 **Explore Job** (new, pro-d210, pro-d215):
@@ -142,7 +142,7 @@ A Job the User has not approved yet. The engine never runs it, and it is editabl
 _Avoid_: proposed, pending Job
 
 **Locked** (state):
-The state of every Job that is not a draft: its title, Tier, Workflow, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt (`job edit --spec`, no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved. Distinct from the Plan lock (`plan lock`, the act that moves phase `plan` to `dispatch`) and from a file lock or kernel `flock` (Runtime).
+The state of every Job that is not a draft: its title, initial model selection, Workflow, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt (`job edit --spec`, no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved. Distinct from the Plan lock (`plan lock`, the act that moves phase `plan` to `dispatch`) and from a file lock or kernel `flock` (Runtime).
 _Avoid_: frozen, final
 
 **Ready** (state):

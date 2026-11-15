@@ -62,7 +62,7 @@ A message down to a Lead goes through the message tool's `op` `delegate`, to the
   - `cpd context decide --context <c> "<decision>"` (positional `<TEXT>`, NO `--title` or `--body`; the sibling command is `cpd context note`, and there is no `context add`).
   - `cpd plan new <id> --context <c> --title "<title>" --brief-file <file>` (`--title` and `--brief-file <file>` are the only flags for the Plan's title and its brief: no flag takes a goal or a brief text). Write `<file>` with the `write` tool and never delete `<file>` before `cpd plan new` finishes. On your own shaping Plan the form is `cpd plan new <id> --context <c> --title "<t>" --shaping` (`--brief-file` and `--by-user` are refused with `--shaping`).
   - `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` (`--unblocks` is always required; never send the identical text to two Sessions within 60 minutes or `broadcast` is refused).
-  - `cpd job retry <key> --plan <p> --tier <T>` (`--tier <T>` is always required). On a shaping Plan the list adds `cpd job add <k> --title "<t>" --tier <T> --spec <file.json> --kind scout|research --plan <id>` (the explore kinds only, with no `--draft`), `cpd job list --plan <id>`, `cpd job show <k> --plan <id>`, `cpd job cancel <k> --reason "<why>" --plan <id>` and `cpd answer <escalation> "<text>" --plan <id>` (a Worker's question).
+  - `cpd job retry <key> --plan <p>` (`--tier <T>` is always required). On a shaping Plan the list adds `cpd job add <k> --title "<t>" --spec <file.json> --kind scout|research --plan <id>` (the explore kinds only, with no `--draft`), `cpd job list --plan <id>`, `cpd job show <k> --plan <id>`, `cpd job cancel <k> --reason "<why>" --plan <id>` and `cpd answer <escalation> "<text>" --plan <id>` (a Worker's question).
 
 ## Tool hooks
 
@@ -115,11 +115,11 @@ Use when a question needs reading code or the outside world and no Lead exists t
 
 ```
 cpd plan new <id> --context <c> --title "<t>" --shaping
-cpd job add <k> --title "<t>" --tier <T> --spec <file.json> --kind scout|research --plan <id>
+cpd job add <k> --title "<t>" --spec <file.json> --kind scout|research --plan <id>
 cpd job list --plan <id>
 cpd job show <k> --plan <id>
 cpd job cancel <k> --reason "<why>" --plan <id>
-cpd job retry <k> --tier <T> --plan <id>
+cpd job retry <k> --plan <id>
 cpd answer <escalation> "<text>" --plan <id>
 ```
 

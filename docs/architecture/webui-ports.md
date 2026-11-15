@@ -1,8 +1,10 @@
-# WebUI ports: checkout resolution and supervision
+# Historical WebUI implementation audit: b8021cd90
+
+Historical evidence only; current runtime requirements are in [the core contract](../contract.md#37b-the-serve-process-runtime-and-port-supervision). This report does not establish present implementation status.
 
 This page states how the checkout of each WebUI server is found, and how the engine supervises the production server on port 3333 and the preview server on port 33333. It describes the code as read at base commit `b8021cd90`. Where the code differs from a decided rule, the difference is listed in "Divergences" below and is not resolved here.
 
-The rules are normative elsewhere: the port map and origin rule in `docs/architecture/webui-network-ports.md` and `web/CONTRACT.md` §15.1; the decided supervision rules (takeover, restart bound, port check) in `docs/architecture/webui-supervision.md`.
+The rules are normative elsewhere: the port map and origin rule in `docs/architecture/webui-access.md` and `web/CONTRACT.md` §15.1; the decided supervision rules (takeover, restart bound, port check) in `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`.
 
 ## Ports
 
@@ -76,14 +78,14 @@ Each row is a decided or documented rule, and what the code does at base `b8021c
 
 | Rule (source) | Code |
 |---|---|
-| The engine resolves the preview worktree from app-root and the checkout, `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` (`web/CONTRACT.md` §31.1, `docs/ui-preview.md`) | The engine does not read app-root. It searches the six candidates above; candidate 2 is the checkout's parent when a checkout is found. |
-| Prod and preview are supervised from the checkout (`docs/architecture/webui-supervision.md`) | Prod runs from `<CPD_HOME>`, and is supervised only if `<CPD_HOME>/web/src/server/serve.ts` exists. |
-| Takeover waits up to 10 seconds (`docs/architecture/webui-supervision.md`, "Takeover of port holders") | The poll is 10 × 100 ms, so about 1 second. |
-| The preview holder is the same service when it runs `vite` whose working directory is the preview worktree (`docs/architecture/webui-supervision.md`) | Any command line containing `vite` matches. The working directory is not checked. |
-| A port holder that is not the same service is not latched, and is checked again at every tick (`docs/architecture/webui-supervision.md`, citing `docs/contract.md` §3.7) | The holder latches the service `stopped`, and it is not checked again. |
-| After a payload install, each supervised service restarts once (`docs/architecture/webui-supervision.md`) | The marker is not deleted by the supervisor, so while it exists each tick restarts both services (see "Restart marker"). |
-| The preview is a prod build of the preview branch (`web/ELECTRON.md`, air-d96) | The engine runs `pnpm run dev`, the Vite dev server. |
-| "`cpd watch` starts, probes and restarts no web server" (`docs/architecture/webui-supervision.md`, status line) | Stale: `engine/src/watch/webui.rs` does this, from the tick. |
+| The engine resolves the preview worktree from app-root and the checkout, `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` (`web/CONTRACT.md` §31.1, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`) | The engine does not read app-root. It searches the six candidates above; candidate 2 is the checkout's parent when a checkout is found. |
+| Prod and preview are supervised from the checkout (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`) | Prod runs from `<CPD_HOME>`, and is supervised only if `<CPD_HOME>/web/src/server/serve.ts` exists. |
+| Takeover waits up to 10 seconds (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, "Takeover of port holders") | The poll is 10 × 100 ms, so about 1 second. |
+| The preview holder is the same service when it runs `vite` whose working directory is the preview worktree (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`) | Any command line containing `vite` matches. The working directory is not checked. |
+| A port holder that is not the same service is not latched, and is checked again at every tick (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, citing `docs/contract.md` §3.7) | The holder latches the service `stopped`, and it is not checked again. |
+| After a payload install, each supervised service restarts once (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`) | The marker is not deleted by the supervisor, so while it exists each tick restarts both services (see "Restart marker"). |
+| The preview is a prod build of the preview branch (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, air-d96) | The engine runs `pnpm run dev`, the Vite dev server. |
+| "`cpd watch` starts, probes and restarts no web server" (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, status line) | Stale: `engine/src/watch/webui.rs` does this, from the tick. |
 
 ## Not verified
 

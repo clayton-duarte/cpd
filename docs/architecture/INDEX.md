@@ -5,15 +5,12 @@ defines behavior; the [command reference](../commands.md) defines operations.
 
 ## Design and operational references
 
-- [Client: the browser is the interface](client.md)
 - [cpd doctor cross-machine probing](doctor-cross-machine.md)
 - [cpd end-game architecture](endgame.md)
-- [Install convergence](install-convergence.md)
 - [The model input cap](model-input-cap.md)
 - [CLI and WebUI argv parity](parity.md)
 - [Architecture Design: CPD as Core + pi Extension + WebSocket Clients](pi-native-core.md)
 - [PR lifecycle scenario](pr-lifecycle-scenario.md)
-- [cpd serve: the production server and the UI-only preview](serve.md)
 - [Store repair: architecture](store-repair.md)
 - [SWR for the classifier: the Lead completion badge and endpoint health](swr-classifier.md)
 - [SWR: the GitHub datasource](swr-github.md)
@@ -23,6 +20,4 @@ defines behavior; the [command reference](../commands.md) defines operations.
 - [Stale-while-revalidate (SWR)](swr.md)
 - [cpd upgrade: isolated build, dry run, swap and rollback](upgrade.md)
 - [WebUI access](webui-access.md)
-- [WebUI network ports and origins](webui-network-ports.md)
 - [WebUI ports: checkout resolution and supervision](webui-ports.md)
-- [WebUI supervision by the engine](webui-supervision.md)

@@ -423,9 +423,9 @@ Every row except `engine-down` is wrapped in a shadcn `ContextMenu` (`context-me
 
 Snoozes and `Dismiss` go straight through `onAction` (they are not tracked in `pendingActionIds`; 2.7 covers the row buttons only).
 
-### 2.4. Tier filter (pro-d49, pro-d50)
+### 2.4. Urgency filter (pro-d49, pro-d50)
 
-**Header control.** `ToggleGroup[type="multiple"][variant="outline"][size="sm"][data-part="inbox-filters"][aria-label="Filter inbox by tier"]`, right-aligned (`shrink-0`), in the `actions` slot of the header after the `INBOX` h2. The shared header (3i) separates them with its flex spacer only, so the 32px minimum of pro-d50 (`gap-8`) no longer holds. The measuring copy keeps `gap-8`. Seven `ToggleGroupItem`s in this order, each `h-6 gap-1.5 px-1.5 text-xs`:
+**Header control.** `ToggleGroup[type="multiple"][variant="outline"][size="sm"][data-part="inbox-filters"][aria-label="Filter inbox by urgency"]`, right-aligned (`shrink-0`), in the `actions` slot of the header after the `INBOX` h2. The shared header (3i) separates them with its flex spacer only, so the 32px minimum of pro-d50 (`gap-8`) no longer holds. The measuring copy keeps `gap-8`. Seven `ToggleGroupItem`s in this order, each `h-6 gap-1.5 px-1.5 text-xs`:
 
 | Order | `value` | `data-tier-filter` | label | count | text class |
 |---|---|---|---|---|---|
@@ -441,16 +441,16 @@ Snoozes and `Dismiss` go straight through `onAction` (they are not tracked in `p
 - The toggle's `value` list is `["all", "red", …, "white"]` while `all` is selected, else the selected urgencies.
 - **Selection rules** (state: `"all"` or a set of urgencies; initial `"all"`):
   - click `all` → `"all"`;
-  - click a tier while `"all"` → the set holds only that tier (**isolate**);
-  - click a tier while a set is active → toggle that tier; **additive**: later clicks add or remove tiers;
-  - a set that becomes empty (last tier cleared) or holds all six tiers → `"all"`.
+  - click an urgency while `"all"` → the set holds only that urgency (**isolate**);
+  - click an urgency while a set is active → toggle that urgency; **additive**: later clicks add or remove urgencies;
+  - a set that becomes empty (last urgency cleared) or holds all six urgencies → `"all"`.
 - The list shows the rows whose urgency is in the set (every row when `"all"`).
 
 **Collapse into a Popover (pro-d50).** The header measures itself with a `ResizeObserver` on the header and on the measuring copy (`measureRef`, the same items in a `w-max` row with `gap-8`). When the header's `clientWidth` is less than the copy's `scrollWidth`, the filters collapse:
 
-- The `ToggleGroup` is replaced by `Popover` > `PopoverTrigger asChild` > `Button[type="button"][variant="outline"][size="sm"][data-part="inbox-filters-trigger"][aria-label="Filter inbox by tier"]` (`h-6 shrink-0`, `ListFilterIcon` size 3.5, the label `all` or `N tier` / `N tiers`, and the count `filteredRows.length`).
+- The `ToggleGroup` is replaced by `Popover` > `PopoverTrigger asChild` > `Button[type="button"][variant="outline"][size="sm"][data-part="inbox-filters-trigger"][aria-label="Filter inbox by urgency"]` (`h-6 shrink-0`, `ListFilterIcon` size 3.5, the label `all` or `N urgency` / `N urgencies`, and the count `filteredRows.length`).
 - The `PopoverContent` (`align="end"`, `w-auto min-w-[8.5rem] p-1.5`) holds a `ToggleGroup` with the same `type`, `variant`, `size`, `value`, `aria-label`, `data-part="inbox-filters"` and the same seven items, with `orientation="vertical"` and `w-full`.
-- The measure runs on mount and whenever the tier counts or the row count change. The measuring copy shows the same labels and counts, in plain spans.
+- The measure runs on mount and whenever the urgency counts or the row count change. The measuring copy shows the same labels and counts, in plain spans.
 
 ### 2.5. Row (`Item`)
 
