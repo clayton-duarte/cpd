@@ -64,7 +64,10 @@ pub(crate) fn guard_rename(conn: &Connection, plan: &PlanId) -> Result<(), CpdEr
     if row.context != context {
         return Err(CpdError::new(
             ErrorCode::PlanOtherContext,
-            format!("Plan {plan} belongs to Context {}, not {}.", row.context, context),
+            format!(
+                "Plan {plan} belongs to Context {}, not {}.",
+                row.context, context
+            ),
         )
         .with("plan", plan.as_str())
         .with("plan_context", row.context.as_str())

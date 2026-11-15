@@ -308,11 +308,7 @@ pub(crate) fn finish(
 /// `plan new` again with the same flags: redoes the steps that did not happen
 /// (the `plan` record, the first message, the Lead's window) and returns
 /// `"already": true`.
-fn already(
-    env: &mut Env,
-    created: &Created,
-    brief: Option<&Text>,
-) -> Result<Output, CpdError> {
+fn already(env: &mut Env, created: &Created, brief: Option<&Text>) -> Result<Output, CpdError> {
     let plan = &created.plan;
     let machine = env.config.machine.clone();
     let record: Option<String> = env.store.read(|conn| {
@@ -405,14 +401,22 @@ fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
         .with("caller", role)
         .with("context", args.context.as_str()));
     }
-    let brief: Option<Text> = args.brief_file.as_deref().map(|f| read_text_file(f)?.parse()).transpose()?;
+    let brief: Option<Text> = args
+        .brief_file
+        .as_deref()
+        .map(|f| read_text_file(f)?.parse())
+        .transpose()?;
     let context = require_context(env, &args.context)?;
     if let Some(tier) = args.tier {
         let home = env.home.clone();
-        let models = env.store.read(|conn| crate::policy::model::models_of_context(conn, &home, args.context.as_str()))?;
+        let models = env.store.read(|conn| {
+            crate::policy::model::models_of_context(conn, &home, args.context.as_str())
+        })?;
         let catalog = crate::config::catalog::load_with(&models, &mut env.store)?;
         catalog.check(tier)?;
-        env.config.range(&catalog, crate::config::Role::Lead)?.check(tier, crate::config::Role::Lead)?;
+        env.config
+            .range(&catalog, crate::config::Role::Lead)?
+            .check(tier, crate::config::Role::Lead)?;
     }
     refuse_deleted(env, &id)?;
     let name = AgentKey::lead(args.context.clone(), id.clone()).to_string();
@@ -426,12 +430,19 @@ fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
             && args.tier.is_none_or(|t| t.to_string() == created.tier)
             && args.runner.is_none_or(|r| r.as_str() == created.runner)
     };
-    let conflict = |plan: &PlanRow| CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags."))
-        .with("plan", summary(plan, &[]));
+    let conflict = |plan: &PlanRow| {
+        CpdError::new(
+            ErrorCode::PlanExists,
+            format!("Plan {id} exists with other flags."),
+        )
+        .with("plan", summary(plan, &[]))
+    };
     if let Some(plan) = env.store.read(|conn| row::find(conn, &id))? {
         let created = env.store.read(|conn| find(conn, &id))?;
         return match created {
-            Some(created) if matches(&created) => already(env, &created, brief.as_ref()).map_err(|e| provisioning_error(&id, e)),
+            Some(created) if matches(&created) => {
+                already(env, &created, brief.as_ref()).map_err(|e| provisioning_error(&id, e))
+            }
             _ => Err(conflict(&plan)),
         };
     }
@@ -442,8 +453,16 @@ fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
     let tier = args.tier.unwrap_or(env.config.lead_tier).to_string();
     let runner = args.runner.unwrap_or(env.config.new_lead_runner());
     let creation = Creation {
-        id: &id, context: &args.context, title: args.title.as_str(), jira: jira.as_deref(),
-        name: &name, cwd: &cwd, tier: &tier, runner, by_user: args.by_user, session: &session,
+        id: &id,
+        context: &args.context,
+        title: args.title.as_str(),
+        jira: jira.as_deref(),
+        name: &name,
+        cwd: &cwd,
+        tier: &tier,
+        runner,
+        by_user: args.by_user,
+        session: &session,
     };
     let created = env.store.write("plan new", |tx| {
         if let Some(plan) = row::find(tx, &id)? {
@@ -490,9 +509,18 @@ fn insert_shaping(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
     tx.execute(
         "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
          SELECT ?1, ?2, ?3, ?4, 'shaping', ?5, at FROM txns WHERE id = cpd_txn()",
-        rusqlite::params![c.id.as_str(), c.context.as_str(), c.title, c.jira, c.session.as_str()],
+        rusqlite::params![
+            c.id.as_str(),
+            c.context.as_str(),
+            c.title,
+            c.jira,
+            c.session.as_str()
+        ],
     )?;
-    let text = format!("Plan {} \"{}\" created in Context {}, phase shaping.", c.id, c.title, c.context);
+    let text = format!(
+        "Plan {} \"{}\" created in Context {}, phase shaping.",
+        c.id, c.title, c.context
+    );
     let event = NewEvent::plan_created(text, c.title, c.jira, c.session, Value::Null, c.cwd);
     append(tx, event.plan(c.id.clone()))?;
     let text = format!("Lead {} of Plan {} registered, a fresh Lead.", c.name, c.id);
@@ -616,7 +644,10 @@ const LEAD_POINTER: &str = "Context on demand: cpd context search <query> · cpd
 fn header(plan: &PlanRow) -> String {
     format!(
         "You are the Lead of Plan {} \"{}\" in Context {}. Phase {}: follow the cpd-lead skill.",
-        plan.id, plan.title, plan.context, plan.phase.as_str()
+        plan.id,
+        plan.title,
+        plan.context,
+        plan.phase.as_str()
     )
 }
 
