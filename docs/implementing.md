@@ -253,7 +253,7 @@ What stays real: the tests of `core/src/host/deadline.rs`, which are the contrac
 
 ### Ports, Spawn and run_with
 
-Decided API (PR ports2), in `core/src/ports.rs` (cpd-core, always compiled; `Fakes` behind the cargo feature `fakes`). Present tense for what PR ports2 creates; where the merged code differs from this text, the merged code wins.
+Decided API (PR ports2), in `core/src/ports.rs` (cpd-core, always compiled; `Fakes` behind the cargo feature `fakes`). Present tense for what PR ports2 creates; implementation discrepancies are evidence to reconcile against the [core contract](contract.md), not product amendments.
 ```rust
 #[derive(Clone)]
 pub struct Ports { pub clock: Arc<dyn Clock>, pub runner: Arc<dyn Runner>, pub spawn: Arc<dyn Spawn> }
@@ -352,7 +352,7 @@ The real-tmux harness (`env.tmux`, `env.tmux_socket()`, `TestEnv::kill_tmux_serv
 
 ### The git and tmux fixtures of `Fx`
 
-PR testkit-hosts puts the fixtures of the two hosts on `Fx`, with the names `TestEnv` had, so a migration is a rename. They go through the routes above (`GitRoute`, `TmuxRoute` on the `Fx`'s `FakeRunner`): no process, no `PATH` entry, no real git or tmux. Where merged code differs from this text, the code wins.
+PR testkit-hosts puts the fixtures of the two hosts on `Fx`, with the names `TestEnv` had, so a migration is a rename. They go through the routes above (`GitRoute`, `TmuxRoute` on the `Fx`'s `FakeRunner`): no process, no `PATH` entry, no real git or tmux. Implementation discrepancies are reconciled against the [core contract](contract.md).
 
 **Git.**
 - `fx.git_repo(name)` makes `<root>/repos/<name>` in the `Universe`: branch `main`, one commit (`README.md`), and a real working tree and `.git/` directory on disk (see `The git route`).
@@ -373,7 +373,7 @@ PR testkit-hosts puts the fixtures of the two hosts on `Fx`, with the names `Tes
 
 ### The in-process test kit
 
-PR testkit2 adds, on top of `Fx` (PR tk0), what a test needs to run a command that starts a process, waits on time or draws a view, with no exec, no sleep and no real external. Names are those of `TestEnv`, so a migration is a rename; where merged code differs from this text, the code wins.
+PR testkit2 adds, on top of `Fx` (PR tk0), what a test needs to run a command that starts a process, waits on time or draws a view, with no exec, no sleep and no real external. Names are those of `TestEnv`, so a migration is a rename; implementation discrepancies are reconciled against the [core contract](contract.md).
 
 - **Ports.** `Fx` runs `fx.cpd(..)`, `fx.cpd_in(..)` and `fx.cpd_with(..)` (same signatures, same `Run { exit, stdout, stderr }`) through `run_with(&Fakes ports, argv, out)`, not `cli::run`. The `Fakes` hold a `ManualClock`, a `FakeRunner` and a `FakeSpawn`. The environment (`HOME`, `PATH`, `CPD_HOME`, cwd) is set once at the start of the test, behind the process-wide lock of `Fx` (decided for the unattended run, option 1 of the ports research).
 - **Fake programs.** `fx.fake(program, reply)`, `fx.fake_gh(..)`, `fx.fake_pi(..)`, `fx.fake_op(..)` and `fx.fake_node(..)` register a scripted `Reply` on the `FakeRunner` for that program name; no script, binary or `PATH` entry is made. `fx.calls(program)` returns the recorded `Call`s (what `env.calls(..)` read). An unscripted call (no rule and no route) fails the test at drop, unless the test says `fx.allow_unscripted()`.

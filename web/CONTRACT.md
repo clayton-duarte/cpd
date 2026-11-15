@@ -2380,7 +2380,7 @@ Normative. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-
 
 - **The endpoint.** The WebUI opens one WebSocket to core, `ws://127.0.0.1:<port>/cpd-ws`, the endpoint of docs/contract.md §5.8. Core binds `127.0.0.1` only, on a port the OS chooses. There is no proxy on the data path: the WebUI does not connect to port 3333 for data.
 - **Where the port comes from.** The Lead's answer (escalation `webui-core-ws-docs-a1-q1`): the engine records the bound port in `$CPD_HOME/run/core.port`, and the WebUI reads it from there. The answer also allows an environment variable; this section defines one source only, `run/core.port`. **Open, flagged:** docs/contract.md §5.8 open point 2 ("How a client learns the WebSocket port") is still open there, and does not name `run/core.port`. The core-ws-engine Job must write the file and §5.8 must be amended to say so; this section does not amend §5.8.
-- **Port 3333.** Port 3333 is the WebUI production HTTP and static server only (pro-d541: a supervised Node service under the engine, bound on `0.0.0.0:3333`, serving the renderer). Under the Lead's answer it does **not** carry `/cpd-ws`: pro-d541's clause that it serves `/cpd-ws` is superseded by that answer (recency).
+- **Production connection.** The production server and core WebSocket use the runtime contract and [access policy](../docs/architecture/webui-access.md). The browser connects same-origin to `/cpd-ws`; the preview proxies to that endpoint on the same host.
 - **Who hands over the URL.** The page cannot read a file, so the process that serves the page reads `run/core.port` and gives the renderer the `ws://127.0.0.1:<port>/cpd-ws` URL on load. The Lead's answer does not name the hand-over; this is an **inference** that the implementation Job must confirm. In Electron the preload `contextBridge` carries the URL (§15.1, one read-only member, no IPC data channel), as before.
 - **Origin.** The Origin rule of ADR 0015 point 1 applies unchanged (docs/contract.md §5.8): an absent, `null`, `file://` or loopback Origin is accepted; any other is refused before a connection's state is created. Consequence: the page loaded from `http://127.0.0.1:3333` or `http://localhost:3333` is accepted; a page loaded from another machine's address (for example `http://<host>:3333` over the LAN) is refused. This is a fact of the rule, not a new rule.
 - **Framing.** One JSON text frame per message, as §5.8. The renderer speaks core's two requests, with a `{"id", "method", "params"}` request and an `{"id", "result", "error"}` reply: `snapshot` and `events.subscribe`. Core then sends one `{"method": "event", "params": {"event": <Event>}}` notification per Event.
@@ -2902,10 +2902,10 @@ Outbox entry state transitions:
 | From | To | Trigger | Action |
 |---|---|---|---|
 | `queued` | `sending` | User submits (or replay starts) | Send `session.submit`, `cockpit.action`, or `dialog.respond` to server |
-| `sending` | (deleted) | `session.submitAck`, `action.result`, or `session.dialogResolved` arrives (success or 4xx) | Remove from store; update UI (pending submission row removed or marked sent) |
-| `sending` | `queued` | `session.error` or network error (5xx-like) | Move back to `queued` for next replay |
-| `sending` | `failed` | `session.error` with error code set | Mark `state:"failed"`, set `error` field; display to user (optional: inline in chat or as a toast, TBD) |
-| `failed` | (manual) | User clears/retries | Client-side action to retry or remove (TBD); move back to `queued` and replay |
+| `sending` | (deleted) | Successful `session.submitAck`, `action.result`, or `session.dialogResolved` | Remove from store and confirm success in the UI |
+| `sending` | `queued` | Retryable server failure or network error | Move back to `queued` for next replay |
+| `sending` | `failed` | Invalid or otherwise non-retryable action | Retain payload and error visibly for User retry or discard (User, 2026-11-14) |
+| `failed` | `queued` or (deleted) | User retries or discards | Retry explicitly requeues; discard removes the entry. Neither happens automatically |
 
 **Submitted while offline** (outbox usage): When `state.connection` is `"closed"` or `"reconnecting"`, a user submission via the Composer, a dialog response, or a cockpit action is not sent immediately. Instead:
 
@@ -2919,7 +2919,7 @@ Outbox entry state transitions:
 1. For each entry, change `state` to `sending`.
 2. Send the corresponding message (`session.submit`, `cockpit.action`, or `dialog.respond`).
 3. Wait for the server response (ack or result).
-4. On success (ack with `queued: false` or result with `ok: true`) or client error (`ok: false` with 4xx), delete the entry.
+4. On success, delete the entry. On an invalid or non-retryable rejection, retain it as visibly failed with its payload and error until the User retries or discards it.
 5. On server error (5xx-like) or network error, move back to `queued` for the next retry.
 
 ### 34.6 Exact wire contract for outbox and banner fields (A3, A4, pro-d591, pro-d568)

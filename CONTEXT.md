@@ -17,7 +17,7 @@ The Jira words are shorthand for scale and ownership; the table is the definitio
 1. A Context outlives an Epic and may span many Epics.
 2. A Workflow (one repo's share of a Plan, one pull request) has no Jira equivalent.
 3. The PRD holds product decisions only; Jira tickets often carry implementation, which in cpd the Lead settles (pro-d537).
-4. A Job is small and fully specified (one Spec, one commit), nearer a checklist item than a Jira Task.
+4. A Job is small and fully specified (one Spec, one accepted outcome), nearer a checklist item than a Jira Task.
 
 The one rule: **PR means only the pull request** on GitHub. Plan > Workflows > Jobs. History keeps the old words: ADRs, the archive, research, old Context records and applied migrations are never rewritten.
 

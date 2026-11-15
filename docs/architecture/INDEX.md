@@ -6,7 +6,6 @@ defines behavior; the [command reference](../commands.md) defines operations.
 ## Design and operational references
 
 - [cpd doctor cross-machine probing](doctor-cross-machine.md)
-- [cpd end-game architecture](endgame.md)
 - [The model input cap](model-input-cap.md)
 - [CLI and WebUI argv parity](parity.md)
 - [Architecture Design: CPD as Core + pi Extension + WebSocket Clients](pi-native-core.md)
@@ -20,4 +19,11 @@ defines behavior; the [command reference](../commands.md) defines operations.
 - [Stale-while-revalidate (SWR)](swr.md)
 - [cpd upgrade: isolated build, dry run, swap and rollback](upgrade.md)
 - [WebUI access](webui-access.md)
-- [WebUI ports: checkout resolution and supervision](webui-ports.md)
+
+## Historical evidence
+
+- [End-game design and unresolved historical gaps](../research/endgame-design.md)
+- [WebUI implementation audit at b8021cd90](../research/webui-implementation-audit-b8021cd90.md)
+
+These reports do not define current product behavior or certify the installed
+runtime. The core contract and access policy above govern new work.

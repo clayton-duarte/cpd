@@ -1,8 +1,15 @@
-# cpd end-game architecture
+Historical design and gap report, retained as evidence rather than active
+product authority. The [core contract](../contract.md), [WebUI contract](../../web/CONTRACT.md)
+and [access policy](../architecture/webui-access.md) own current requirements.
+The unauthenticated LAN assumptions below are superseded by the owner’s
+2026-11-14 access decision. Unverified implementation gaps in this report do not
+establish current delivery status.
+
+# Historical end-game design
 
 Status: **proposed design** for Plan `endgame-arch`, Job `arch-docs`. This page decides nothing that is not already a Context record. It states the target, the gap to it, and the order to reach it. Implementation is out of scope (Plan assumption A1): each migration step in §7 is a future Plan.
 
-Where this page and an older page disagree, the later decision stands. Decisions are cited by Context id: pro-d571, pro-d572, pro-d573 (below), and the earlier pro-d566, pro-d567, pro-d570 and pro-d552 that this design builds on.
+The [core contract](../contract.md) presents the resolved product rules; [WebUI access](../architecture/webui-access.md) governs current binding and authentication. This page does not override either through file recency or machine-local IDs. Decisions are cited by Context id: pro-d571, pro-d572, pro-d573 (below), and the earlier pro-d566, pro-d567, pro-d570 and pro-d552 that this design builds on.
 
 Operational points settled here (assumption A2) are in §6.
 

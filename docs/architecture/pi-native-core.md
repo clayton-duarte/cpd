@@ -129,6 +129,7 @@ CLI subcommands map directly to typed tool namespaces:
 
 ### 4.3 Context Persistence & Write-Time Curation (pro-d530, pro-d531, pro-d532)
 - **Persistent Facts Only**: The cpd context holds only decisions and lasting facts; progress and status go exclusively to Plan events (pro-d530). Only Managers and Leads write; Workers read.
+- **Write-time curation switch**: `experimental.write_curation` controls the synchronous hook under [the contract](../contract.md#the-write-time-context-curation-hook-pro-d531); disabling it leaves the record stored and retrievable.
 - **Persistence**: Records remain stored when superseded, marked documented, or retired. Automatic retirement and explicit User-requested erasure follow [contract §4.6](../contract.md#46-the-context-store).
 - **Write-Time Curation Hook**: When a record is written via `cpd_context.decide` or `note`, a synchronous pre-write hook scans for semantic near-duplicates, enforces `--supersedes` or requires explicit novelty rationale, and caps character length (pro-d531). Background curation acts only as an auditor.
 - **Retrieval by ID & Layered Digest**: Context reaches chats solely as record IDs, never inlined text (pro-d532). The Manager's turn digest selects IDs in prioritized layers (Plan/topic/bug links first, vector search fallback, tuned by citation rate). No pinned set. Leads receive IDs directly from Managers upon delegation.
@@ -140,7 +141,7 @@ CLI subcommands map directly to typed tool namespaces:
 - **Urgency Modes**: `fyi` (queued for next turn, no wake) or `wake` (immediately starts a turn).
 - **Notices**: System notifications originate from sender `cpd`, never disguised as User messages. Plan status changes send a single diff message to Manager, never a repeated inventory.
 - **Escalation Context Pre-Check**: Before dispatching an escalation, `escalate` queries the context. Strong semantic matches bounce back with the matched record ID. The sender can resend with rationale for why the record does not apply (pro-d534).
-- **10-Minute Escalation Ladder**: An escalation left unanswered for 10 minutes climbs one tier up the hierarchy; once at the User level, it remains open (pro-d534).
+- **10-Minute Escalation Ladder**: An escalation left unanswered for 10 minutes climbs one tier up the hierarchy; once at the User level, it remains open for the normal question card and recorded answer under [the contract](../contract.md#human-answers-and-remaining-profile-choices).
 
 ### 4.5 System Prompt Byte-Stability (pro-n418)
 - Per-turn timestamps and changing timezones are removed from the system prompt block to guarantee exact byte-level stability.

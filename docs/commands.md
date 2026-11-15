@@ -8,6 +8,12 @@ Evidence labels as in contract.md: **verified** (run on the homeserver on 2026-1
 
 The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Grounding, Grilling), **Plan** (Clarifying, Scoping, Splitting, Orchestrating) and **Dispatch** (Documenting, Red testing, Implementing, Verifying, Deploying). contract §3.9 maps each step to its phase and commands.
 
+[Generated help](interface.md) is a runtime interface snapshot, not an amendment
+to product intent. In particular, legacy tier fields do not define new model
+selection; [contract §9](contract.md#9-model-selection) owns the intended policy.
+Literal wire/schema examples retained for compatibility must be migrated by the
+implementation profile rather than reinterpreted as accepted model choices.
+
 ## Contents
 
 1. [Conventions](#1-conventions)
@@ -1756,7 +1762,7 @@ Idempotent: yes; a Plan already deleted returns `"already": true` and writes not
 cpd plan lint [--plan <id>]
 ```
 
-Checks the Plan's drafts and its shape, and returns every error and warning in one list. The rules, their severities and the refusal each error carries are in contract §2.7; this section does not repeat them. The lint reads the Plan's Jobs, Workflows and outline, the Tier advice (§3.4b; the catalog when needed), and writes nothing: no Event and no file; a catalog read may fill the `tier_catalog` cache (§14.3). It runs fresh on every call.
+Checks the Plan's drafts and its shape, and returns every error and warning in one list. The rules, their severities and the refusal each error carries are in contract §2.7; this section does not repeat them. The lint reads the Plan's Jobs, Workflows and outline, and writes nothing: no Event and no file; a catalog read may fill the `tier_catalog` cache (§14.3). It runs fresh on every call.
 
 | Flag | Meaning |
 |---|---|
@@ -4316,7 +4322,7 @@ The engine it starts says how long it was down to each Manager (contract §3.7).
 cpd serve
 ```
 
-The production server of a host: the engine (§12, contract §3.7) and the WebUI on `0.0.0.0:3333`, in one process. Its design, and the UI-only preview on 33333, are `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`; its runtime and port invariants are contract §3.7b. The User's command, or the host's supervisor's (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` §6, open point 1). No agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2).
+The production server of a host: the engine (§12, contract §3.7) and the WebUI on port 3333, in one process, under the [access policy](architecture/webui-access.md). Its design, and the UI-only preview on 33333, are `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`; its runtime and port invariants are contract §3.7b. The User's command, or the host's supervisor's (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` §6, open point 1). No agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2).
 
 Status: decided by pro-d566, pro-d567, pro-d570, pro-d541 and pro-d542. As of this amendment the binary has no `serve` command: the engine runs as `cpd watch`, and the WebUI is a child Node process (`serve.md` §3). The implementing change adds the command with these values.
 
@@ -4325,7 +4331,7 @@ Status: decided by pro-d566, pro-d567, pro-d570, pro-d541 and pro-d542. As of th
 **Start, in this order.** A failure at a step exits with that step's code, and no later step runs:
 
 1. **Lock.** `locks/watch.lock` is taken exclusively, as `cpd watch` takes it (§12). When it is held, the command refuses with `watch_running` (exit 3) and changes nothing.
-2. **Port.** It binds `0.0.0.0:3333`. When the port is held, it exits 1 with `port_in_use` (new code, added to §1.3 by the implementing change) and the message `Port 3333 is in use by <process> (PID <pid>). Exiting.`, or `Port 3333 is in use by an unknown process. Exiting.` when neither `lsof` nor `ss` names the holder (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, "Port checking"). It never tries another port.
+2. **Port.** It binds port 3333 under the [access policy](architecture/webui-access.md): loopback by default, authenticated LAN by explicit configuration. When the port is held, it exits 1 with `port_in_use` (new code, added to §1.3 by the implementing change) and the message `Port 3333 is in use by <process> (PID <pid>). Exiting.`, or `Port 3333 is in use by an unknown process. Exiting.` when neither `lsof` nor `ss` names the holder (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, "Port checking"). It never tries another port.
 3. **Store.** It opens the store as `cpd watch` does (§4.5 verdicts, §12): the refusals of that section apply with their codes and exits, and a live store is never migrated here.
 4. **Ticks.** It runs the engine's tick loop (contract §3.7) until it is stopped.
 
@@ -4767,7 +4773,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.2 Start-up and the cursor
 
 At `session_start`, in this order:
-0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (`PROTOCOL` in `pi/lib/event.ts`; 23 today, contract §5.2). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
+0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (`PROTOCOL` in `pi/lib/event.ts`; contract §5.2). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
 1. `cpd session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name and `key`. The `key` field must be present, a string or null (§10.2); a `session show` without it is refused as `bad_output` (§15.1 'Errors') and is retried like a failed call. The adapter keeps `key` for §15.4. A failure is delivered as an error message once per error code and the call is retried with the follower's back-off (1 s, doubling to at most 30 s) until it succeeds; the adapter does nothing else until then and `session_shutdown` ends the retries. A refusal that cannot pass (`usage`, `session_required`, `invalid_session_id`, `session_ambiguous`, `session_not_found`, `plan_not_found`, `context_not_found`, `cursor_ahead`) is delivered once and not retried: the adapter stays inactive.
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
