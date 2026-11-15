@@ -222,20 +222,27 @@ fn shaping_by_user_mode_is_stored_and_conflicts_are_refused() {
 fn concurrent_shaping_provisioning_serializes_same_id() {
     use cpd_core::clock::Clock;
     use cpd_core::host::runner::{Call, Handler};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
     use std::time::{Duration, Instant};
 
     struct Gate {
         entered: mpsc::SyncSender<()>,
         release: Mutex<mpsc::Receiver<()>>,
+        first: AtomicBool,
     }
     impl Handler for Gate {
         fn handle(&self, call: &Call) -> Reply {
             if call.args.iter().any(|a| a == "new-window")
                 && call.args.iter().any(|a| a == "park-fresh")
+                && self.first.swap(false, Ordering::SeqCst)
             {
-                self.entered.send(()).unwrap();
-                self.release.lock().unwrap().recv().unwrap();
+                let _ = self.entered.try_send(());
+                let _ = self
+                    .release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5));
                 Reply::ok("@1 %1\n")
             } else if call.args.iter().any(|a| a == "new-window") {
                 Reply::ok("@2 %2\n")
@@ -257,8 +264,12 @@ fn concurrent_shaping_provisioning_serializes_same_id() {
             self.inner.utc()
         }
         fn sleep(&self, d: Duration) {
-            self.entered.send(()).unwrap();
-            self.release.lock().unwrap().recv().unwrap();
+            let _ = self.entered.try_send(());
+            let _ = self
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5));
             self.inner.advance(d);
         }
     }
@@ -284,6 +295,7 @@ fn concurrent_shaping_provisioning_serializes_same_id() {
         Arc::new(Gate {
             entered: entered_tx,
             release: Mutex::new(release_rx),
+            first: AtomicBool::new(true),
         }),
     );
     let (waiting_tx, waiting_rx) = mpsc::sync_channel(1);
@@ -297,7 +309,9 @@ fn concurrent_shaping_provisioning_serializes_same_id() {
     std::thread::scope(|scope| {
         let first_ports = f.fakes.ports.clone();
         let first = scope.spawn(move || run(&first_ports, "fresh"));
-        entered_rx.recv().unwrap();
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("first provisioning reached tmux");
         let waiter = scope.spawn(move || run(&waiter_ports, "fresh"));
         // A correct lock sends this before either same-ID caller can create a second window.
         let waiting = waiting_rx.recv_timeout(Duration::from_secs(2));
