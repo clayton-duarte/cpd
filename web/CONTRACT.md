@@ -2044,94 +2044,6 @@ The backend supplies live tool suppression from the current tail normalizer’s 
 2. **A tail window drops live items.** A `session.window` of mode `tail` (sent by `reload`, `backend.ts:197-204`) replaces the transcript (`setTail`, `transcript.ts:41`). The live items are gone. The later deltas of the open message find no item and are ignored (`applyDelta`, `transcript.ts:69`) until its committed line arrives. The live source does not re-send the open message after a window.
 3. **Identity of `message.timestamp`** between the `message_end` object and the committed line (Job assumption A6, 12.1). If the identity fails, the live item of that message is never removed by reconcile.
 
-## 13. Cockpit stream: `cpd cockpit serve` (Plan `cpd-realtime-engine`)
-
-Normative. Plan `cpd-realtime-engine` (its Job `webcockpit-docs`) decides the five points below. Where a statement of 6.3 is marked "Amended by 13.x" or "superseded by 13.x", section 13 wins and the older statement is void.
-
-Sources: `docs/commands.md` §11a and `docs/contract.md` §5.5 on `origin/main` (commit `665c0c159`). The frames, the requests and the exit behaviour are read there and are not run here (unverified, O26). The seams are in `$CPD_HOME/run/cpd-realtime-engine/explore/scout-7.md` (cited as scout-7).
-
-Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7): **PA1** one long-lived NDJSON process, stdin EOF exits 0; **PA2** snapshot panes equal the list commands' JSON, and snapshots are full; **PA4** the other per-request spawns stay (every `actions.ts` command, and each spawn of 6.3 that 13.6 does not replace); **PA5** the web server uses the stream while it is up and the spawn refresh while it is down or not yet ready, and the child restarts with backoff.
-
-### 13.1 Decision 1: the child (`web/src/server/cockpit/stream.ts`)
-
-- `stream.ts` owns exactly one long-lived child, `cpd cockpit serve` (no arguments; `cockpitServeArgs()` = `["cockpit","serve"]`). `stream.ts` spawns nothing. The spawn is `CockpitStreamBoundary.start(): StreamProcess` in `cli.ts`, the only module that runs `cpd` (2.1). `plugin.ts` builds the real boundary and tests fake it (A6). `StreamProcess` has the shape of `FollowProcess` (6.3) plus `write(line)` and `closeStdin()`.
-- stdin is a pipe that stays open for the child's whole life. Requests are written to it as lines.
-- stdout is split into lines as `events follow` is (`FollowProcess.onLine`, 6.3). stderr is logs only; its tail is kept for an exit message (13.9).
-- `stop()` closes stdin, then kills the child (SIGTERM). Either alone ends it: stdin EOF exits 0 (PA1). A parent that dies closes its end of stdin, so the child never outlives its parent.
-- `stream.ts` reports typed frames and the ready state. It reads no pane and builds no model; the mapping is in 13.8 and lives in `events.ts`.
-
-### 13.2 Ready state
-
-- The stream is **ready** from the child's `hello` until that child exits. Before `hello`, and between an exit and the next child's `hello`, it is not ready. Readiness belongs to one child: a new child is not ready until its own `hello`.
-
-### 13.3 Decision 2: snapshot panes and `plan_show`
-
-- The service takes the panes of a `snapshot` frame as the cockpit's panes. It keeps the parsed rows of the last applied snapshot: `contexts`, `plans`, `sessions`, `inbox`, and `cursor` (the minimum of the four `events_cursor`). The rows are parsed by the read model's own functions (`parseContextList`, `parsePlanList`, `parseSessionList`, `parseInboxList`, 6.3) and the tree and inbox are built by its own builders (`buildTree`, `buildInbox`). `events.ts` holds no copy of a parser or a builder.
-- The plan view is not a snapshot pane (the `plan` pane of a snapshot is `cpd plan list`). It is read by a `plan_show` request when a Plan is selected, answered by a `plan_show` frame, then `parsePlanShow` and `buildPlanView` as in 6.3.
-- A request carries a string id that the service chooses, unique within its child, and the plan id it asks for. A reply for a Plan that is no longer selected is dropped.
-
-### 13.4 Decision 3: coalescing
-
-- `COALESCE_MS` = 16 (one frame). It replaces 250 of 6.3 and has two uses: the spawn fallback's burst of 6.3 rule 3, and the emission of snapshot panes.
-- A `snapshot` frame validates and maps all pane candidates before storing its rows. A rejected frame leaves the last accepted raw/mapped/status state and pending coalesced update intact (#1227). The coalesced emit uses the accepted mapped value; a synchronous session-state patch refreshes that value too. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
-
-### 13.5 Decision 4: the `session-state` patch
-
-- An `event` frame of kind `session-state` with a non-null `session` changes the stored row of that session: its `state` becomes `data.to`. `data.to` must be one of the five states of 3.2; otherwise it is an error (13.8) and nothing changes.
-- A session not among the stored rows is not patched. A Worker is not in the tree (scout-7 §4), and a session registered in the same batch is not stored yet.
-- The tree is rebuilt by `buildTree` over the stored rows. The dot is therefore computed by the read model's own dot rule (5.1), with `attention` taken from the stored inbox rows. The tree pane is emitted in the same tick, with no coalescing wait. Target: under 5 ms (unverified, not measured).
-- The next `snapshot` replaces the stored rows and so reconciles the patch.
-- Only `session-state` patches the panes. Every other kind waits for the snapshot that follows its batch (5.5: a batch's `event` frames come before its snapshot).
-
-### 13.6 Decision 5: fallback and readiness
-
-- While the stream is not ready, the service runs 6.3 unchanged: the `events follow` child from `followArgs(lastCursor)`, the coalesced refresh of 13.4 through `loadPanes` (spawn), and the plan pane through `loadPanes`.
-- The follow child runs while the stream is not ready. `start()` starts it as 6.3 says. The first `hello` stops it. A child's exit starts it again from `lastCursor`. `lastCursor` is the highest Event id seen from either source, so Events committed while the stream was down come back through `events follow --since`, and the next snapshot carries the state.
-- `start()` still runs `loadAll` by spawn first (6.3 rule 1), then starts the stream.
-- A `plan_show` request made while the stream is not ready, or in flight when the child exits, resolves `down` at once. The service then loads the plan by spawn.
-- **`store_too_new` heal** (pro-d452; A3). An `error` frame with a null id and `code` `store_too_new`, or a `plan_show` rejection (an `error` frame with a string id) with `code` `store_too_new`, makes the stream kill the child and respawn it at once, with no wait of 13.7. It reports no `cockpit.error`. Its pending requests, the rejected one included, resolve `down` as for a restart. If the respawned child emits `store_too_new` again before its `hello`, that error is reported as an ordinary `cpd_failed` with `details.cpdCode` `store_too_new`, and the normal backoff of 13.7 applies; that child is not healed again.
-
-### 13.7 Restart backoff
-
-| Constant | Value | Meaning |
-|---|---|---|
-| `STREAM_RESTART_BASE_MS` | 500 ms | the first restart waits this long |
-| `STREAM_RESTART_CAP_MS` | 10 000 ms | no restart waits longer |
-
-- The restart after the n-th consecutive failure waits `min(STREAM_RESTART_BASE_MS * 2^n, STREAM_RESTART_CAP_MS)`, n counted from 0: 500, 1 000, 2 000, 4 000, 8 000, 10 000, 10 000 ms, and so on. A failure is a child that exits before its first snapshot is applied.
-- n resets to 0 when a child's first snapshot is applied, not at `hello`: a child that says hello and dies at once keeps backing off. A repeated `hello` on the same child is not a new child: it is an in-place restart (13.9), and it changes neither n nor the wait.
-- The first start of the process has no wait. Each wait is a Scheduler timer (A6); `stop()` cancels it.
-- The `store_too_new` respawn of 13.6 is not a wait: it starts at once, and it does not change n.
-- Unchanged for the fallback: `SAFETY_REFRESH_MS` = 30 000 and `FOLLOW_RESTART_BASE_MS` = 1 000 with its cap of 30 000 (6.3 rule 7).
-
-### 13.8 Frame-to-pane mapping
-
-Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line that is not one JSON object, has no string `t`, or has fields its `t` does not take, is `cpd_malformed_json` (7).
-
-| Frame (`t`) | Accepted shape | Effect on the cockpit |
-|---|---|---|
-| `hello` | `protocol` = 1 | Ready (13.2); the follow child stops (13.6). On a child that already said hello, it is an in-place restart (13.9): the stream stays ready. Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 13.7 applies, while the spawn path serves the panes. |
-| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox` (**amended by 20:** and `status`, §20.1), each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. A snapshot also clears `lastError` when its `details.cpdCode` is `store_too_new`, as it already clears `cockpit.error`. |
-| `event` | `event` is one object that `parseEventLine` (6.3) accepts | `lastCursor` = max id. Kind `session-state`: 13.5. If `panesFor` of the event puts the plan pane in the set for the selected Plan, the plan is due: its `plan_show` request is sent after the snapshot that ends the batch. Any other kind changes nothing by itself. |
-| `plan_show` | `id` matches a pending request; `value` is an object | Resolve the request: `parsePlanShow`, `buildPlanView`, and emit the plan pane if that Plan is still selected. |
-| `error` with `id` a string | `error.code`, `error.message` | Reject the pending request with `WebError("cpd_failed", message, {cpdCode: error.code})` (7). `selectPlan` keeps the previous plan and emits one error update (6.3). An `id` that matches no pending request: one error update. A `store_too_new` code: the heal of 13.6 instead, with no error update. |
-| `error` with `id` null | `error.code`, `error.message` | One error update, `cpd_failed` with `cpdCode: error.code`. The child keeps serving unless it exits (13.9). A `store_too_new` code: the heal of 13.6 instead, with no error update. |
-| anything else | none | `cpd_malformed_json`: one error update, the line skipped, the child kept (as commands.md §11a: a malformed line keeps the process serving). |
-
-### 13.9 Failure rules
-
-- A child that exits while the stream is running is not ready. Its pending requests resolve `down` (13.6), the follow child starts (13.6), and a restart follows after the wait of 13.7. An exit caused by `stop()` is not a failure and emits nothing.
-- A second `hello` on the same child is not an exit: `cpd cockpit serve` exec'd in place when its executable was replaced (commands.md §11a, pro-d450). Its pending requests resolve `down` (13.6), the stream stays ready, and `onError` is not called. No follow child starts and no restart wait applies.
-- An exit emits one error update, unless an `error` frame with a null id has already reported it: `cpd_failed` with `cpdCode` `no_json` and the message the trimmed stderr, or `cpd exited <n>` when stderr is empty (the mapping of 6.3 for a non-JSON failure). A null-id `error` frame is followed by the exit of a store error (commands.md §11a), and that frame reports it.
-- A failed write to stdin means the child is gone: it is killed and handled as an exit.
-- A malformed frame never restarts the child (13.8).
-- A child killed by the `store_too_new` heal (13.6) is a respawn, not a failure: its exit emits nothing, as the exit of `stop()` does, and its pending requests resolve `down`.
-
-### 13.10 Tests and limits
-
-- Tests run without a real process, socket, timer or `cpd` (A6). `web/src/server/cockpit/stream.test.ts` (new; fake `StreamProcess`, fake Scheduler): ready only after `hello`; the backoff sequence of 13.7 and its reset at the first snapshot; `stop()` closes stdin, kills the child, cancels the wait and emits nothing afterwards; a request is answered, rejected, or resolved `down` when not ready and when the child exits. `web/src/server/cockpit/events.test.ts` (changed): the 16 ms coalescing of snapshot panes and of the spawn burst; the panes of a snapshot equal the spawn path's panes for the same replies; a `session-state` patch emits the tree in the same tick and the next snapshot replaces it; the follow child runs only while the stream is not ready.
-- Limits, stated plainly: the live output of `cpd cockpit serve` is unverified (O26); the 5 ms target is unmeasured; `seq` is informational, because one pipe keeps frames in order; no `hello` timeout is defined, so a child that never says `hello` stays not ready, with the spawn path serving the panes and no restart (unverified, O26).
-  - **Amended by 15.2 (Plan `webui-ws`): `seq` is no longer only informational** — the serve-stream watchdog compares it (a `seq` that stops advancing is one of its two stall signals, §15.2). One pipe still keeps frames in order; the watchdog reads `seq`, it does not reorder anything.
 
 ## 14. Amendments air-n13, air-n15, air-d28: the Context tree's live refresh and the Plan pane's empty state (Plan `toast-fix`)
 
@@ -2225,13 +2137,6 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 - A chat message that carries one or more images and no text is valid and is delivered: it means the User asks the agent to look at the image and find the problem. `invalid_submission` stays only for a submit with no text, no images and no files; `PI_SEND_TEXT_MAX` still applies to the text that is sent (11.3).
 - The Composer and the pi backend take it as any other submission: the images are written to the attachments directory as 11.3 says, the text sent is the marker lines alone (`[Attached image: <path>]` and `[Attached file: <path>]`), with no leading blank line (11.3, amended above; b15), and the submission is echoed, queued and delivered like any other.
 
-## 18. The web-to-CLI argv contract (Plan `desktop-e2e`; air-d54, air-d57)
-
-Normative for every web module that builds a `cpd` command line. The full statement — the rule, the `cpd argv-check` command interface and the Gate test — is **docs/contract.md §5.6 "The web-to-CLI argv contract"**; where the two differ, docs/contract.md wins (this file's preamble rule, section 10 excepted).
-
-- **One shared argv module.** No web code spawns `cpd` with hand-built argv: every command line is built by `web/src/server/cpd-argv.ts`, which exposes the discriminated union `CpdCommand` (one variant per cpd command the web sends) and `toArgv(cmd: CpdCommand): string[]` — the argv after the program name. Every spawn flavour (the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, and the Electron paths `web/src/electron/update/`, `pty.ts`, `pty-tabs.ts`) consumes only `toArgv` output; the call-site modules (`web/src/server/cockpit/`, `web/src/server/pi/backend.ts`, `web/src/server/durable/backend.ts`, and the Electron paths) construct `CpdCommand` values, never their own arrays.
-- **The Worker count's argv is in the contract (Plan `settings-workers`, air-d69).** The Agent Tiers dialog's save (17, 19) sends `cpd config concurrency set <n>` (commands.md §14.2c) as the `CpdCommand` variant `{ readonly kind: "config.concurrency.set"; readonly n: number }`, whose `toArgv` returns `["config", "concurrency", "set", String(n)]`. The builder's enumeration list `allCpdCommands()` carries the variant, so the Gate test below covers the argv with no change to the test: it enumerates every variant, and an argv with no variant has no test.
-- **The Gate test.** `web/src/server/cockpit/argv-contract.test.ts` builds every `CpdCommand` variant from `cpd-argv.ts` alone, spawns one `cpd argv-check` process, feeds the argv arrays on stdin, and fails on any parse error (docs/contract.md §5.6 states the command's stdin/stdout/exit interface exactly). It runs in the Gate (`pnpm run verify`, step `verify:web`), so a CLI grammar change that breaks a web argv fails the Gate before merge.
 
 ## 17. Model selection controls
 
@@ -2515,7 +2420,7 @@ The core WebSocket connection and session streaming pipeline are tested and veri
 
 Both test suites pass cleanly under Vitest.
 
-## 27. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
+## 27. Per-process WebUI tokens
 
 Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
 
@@ -2524,16 +2429,16 @@ The durable host verifier now reads the per-PID directory on every submit (#1140
 ### 27.1 Who writes a token
 
 - **Existing same-PID file (#1139).** A boot replaces an existing file for its actual process PID with a fresh token at mode 0600. It never invents a different PID to avoid that file: verifiers require a live server identity. Tests representing separate servers supply distinct PIDs and fake their liveness; production servers retain their real process identity.
-- Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
+- Each WebUI server writes its own token once, at its start: the production browser backend and the preview server. Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
 - The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The production server removes its own token during shutdown. Neither removes a file of another pid.
 
 ### 27.2 Lifecycle cases
 
 | Event | Effect on the files | Effect on the tokens |
 |---|---|---|
-| A second server starts while another runs (CPD.app and the preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
+| A second server starts while another runs (production and preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
 | One server quits (`before-quit` or `closeAll`) | Only its own file is removed | The other server's token still verifies |
-| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running CPD.app server is unaffected |
+| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running production server is unaffected |
 | A server exits without its close (crash, or `app.exit(0)` of the watchdog's rollback relaunch, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`) | The file stays until the next start sweeps it | Its token is not accepted once its pid is dead |
 | The packaged app relaunches after an update (pro-d502) | A new process, a new file | As a restart |
 | SIGUSR1 reloads the window in place (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
@@ -2624,7 +2529,6 @@ The SVG is the preferred icon. The ICO is the fallback for a browser that does n
 - Dev (`vite`, port 5173, `strictPort`): `GET /favicon.svg` answers 200 with `image/svg+xml`, and `GET /favicon.ico` answers 200 with `image/x-icon`.
 - Build (`vite build`): `dist/favicon.svg` and `dist/favicon.ico` sit at the output root, so a static server of `dist/` answers the same paths with 200.
 - Tests (Job `web-tests`, `web/src/ui/favicon.test.ts`), each with no real server, socket or file watcher (A6):
-  - `index.html` has the two links of 29.3, read as text, the pattern of `src/electron/electron-html.test.ts`.
   - The generator's ICO has the header and the entry count of 29.1, and its SVG is the source bytes.
   - The dev middleware answers the two paths with 200 and the content types of 29.4, against a fake `ViteDevServer`.
   - The build emits both files, against a fake plugin context.
@@ -2965,9 +2869,9 @@ The banner displays the top-level connection and engine state, separate from the
 
 | Precedence | Condition | Banner kind | Fields |
 |---|---|---|---|
-| 1 | WebSocket not `open` | `reconnecting` | none |
-| 2 | WebSocket not `open` | `server-unreachable` | `since` = last-seen timestamp (ISO) or `engineDownSince` when present |
-| 3 | `InboxModel.engineRunning === false` AND socket is `open` | `engine-down` | `since: engineDownSince` (ISO, from server) |
+| 1 | WebSocket not `open` and no last-seen timestamp | `reconnecting` | none |
+| 2 | WebSocket not `open` and a last-seen timestamp exists | `server-unreachable` | `since` = last-seen timestamp (ISO) or `engineDownSince` when present |
+| 3 | `InboxModel.engineRunning === false` AND socket is `open` AND `engineRestartReason !== "install"` | `engine-down` | `since: engineDownSince` (ISO, from server) |
 | 4 | `InboxModel.engineRunning === false` AND socket is `open` AND `engineRestartReason === "install"` | `engine-restarting` | `reason: "install"`, `since: engineDownSince` (ISO) |
 | 5 | none of the above | none | (no banner) |
 

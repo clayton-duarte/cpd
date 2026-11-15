@@ -157,7 +157,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Grilling](#grilling); they e
 
 #### Exploring
 
-An explore Job has a Worker answer one question, so the material stays out of it. A **scout** reads only this machine, Tier `H3`; a **research** Job may also reach outside it, Tier `S1` or higher. Add one in `grounding`, `plan`, `dispatch`, `deploy` or `done`. Past planning, it moves the Plan back to `plan` until locked again:
+An explore Job has a Worker answer one question, so the material stays out of it. A **scout** reads only this machine; a **research** Job may also reach outside it. Both use direct model and effort selection under the contract. Add one in `grounding`, `plan`, `dispatch`, `deploy` or `done`. Past planning, it moves the Plan back to `plan` until locked again:
 
 ```
 cpd job add <k> --title "<title>" --spec <file.json> --kind scout|research

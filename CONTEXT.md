@@ -40,11 +40,11 @@ A built-in Context reserved for CPD, local host maintenance or review intake, re
 _Avoid_: default Context, system Context
 
 **Context record**:
-One typed entry of a Context's durable knowledge: a decision (which may supersede others: `--supersedes` may repeat, and prose that says a record is superseded without linking it is refused, contract §4.6), a note, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
+One typed entry of a Context’s durable knowledge: a decision, note, Plan or Brief. A decision may supersede earlier records; an Axiom belongs in agent instructions.
 _Avoid_: wiki page, memory
 
 **Context store**:
-A Context's records, held only in the machine's database (tables `contexts` and `context_records`). Contexts are machine-local (hs-d23, hs-a1); an earlier git store was imported and archived by migration 0007. Rendered as markdown for Leads on demand.
+The persistent, machine-local collection of Context records, retrieved on demand.
 _Avoid_: wiki, notes folder
 
 **Distilled Context** (hs-d549, hs-d551; replacing hs-d194; the pilot of Epic B, auxiliary agents):
@@ -64,15 +64,15 @@ A self-contained unit of work defined by a Spec. Delivery Jobs belong to a Workf
 _Avoid_: card, step; task (except in the Jira analogy of the table)
 
 **Job kind** (new, hs-d340, hs-d341):
-What a Job is for, and so which checks its submit runs: `work` (the default), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer), `impl` (makes the tests of the test Jobs it needs pass), `verify` (adds checks that change no product behaviour; the Lead adds it by hand), `open` and `update`, which only cpd adds, and the explore kinds `scout` and `research`, which the Lead adds to the Plan (see **Explore Job**). The kinds a Workflow may hold follow its Shape. Defined once in contract §2.2 "Job kinds".
+The classification that determines a Job’s purpose, deliverable and checks. The supported kinds and constraints live in [contract §2.2](docs/contract.md#22-objects).
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
-The last Job of every started Workflow, added by cpd (engine `open-jobs`), never by the Lead: a Job of kind `open` that is Ready when every other Job of its Workflow is merged or cancelled. Its Worker merges the base into the Lead Branch only if the two conflict; cpd then runs the Gate and opens the Workflow's pull request, ready, never a draft. `pr open` repairs a failed one or a down engine.
+The automatically created integration Job that prepares a Workflow’s pull request after its delivery Jobs finish.
 _Avoid_: opener, release Job
 
 **Update Job** (new, hs-d340):
-A Job of kind `update`, added by cpd for a Workflow whose pull request is already open and conflicts with its base (never for a base that merely moved, and never for feedback). Like the Open Job it merges the base, then cpd runs the Gate and pushes. `pr rebase` and `pr push` repair a failed one.
+The automatically created integration Job that resolves a Workflow pull request’s conflict with its base.
 _Avoid_: sync Job, rebase Job
 
 **Scout** (new, pro-d210):
@@ -142,7 +142,7 @@ A Job the User has not approved yet. The engine never runs it, and it is editabl
 _Avoid_: proposed, pending Job
 
 **Locked** (state):
-The state of every Job that is not a draft: its title, initial model selection, Workflow, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt (`job edit --spec`, no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved. Distinct from the Plan lock (`plan lock`, the act that moves phase `plan` to `dispatch`) and from a file lock or kernel `flock` (Runtime).
+The state in which a Job’s approved identity and dependencies are fixed. Spec corrections before the first Attempt, retries and explicit amendment operations follow [contract §3.2](docs/contract.md#32-job-statuses).
 _Avoid_: frozen, final
 
 **Ready** (state):
@@ -217,7 +217,7 @@ Workers run the Jobs of kind `impl` and `work`, and Merge them into the Lead Bra
 Workers run the Jobs of kind `verify`: checks that change no product behaviour.
 
 **Deploying** (step, pro-d145, pro-d146):
-The process of a Workflow's pull request, the last step once all its Jobs ran: the Open Job, the Gate (which runs inside it), opening the pull request, CI, pull request review and its polling (`pr poll`, `pr-feedback`), feedback fixes (Addressing), posting and merge.
+Handling a Workflow’s pull request through checks, review, feedback and merge. The Plan phase named `deploy` does not establish that a production deployment occurred; external prerequisites and deployment approvals are separate.
 
 **Addressing** (step):
 A feedback fix is one `work` Job per cohesive fix, appended to the Workflow whose pull request is open (only `work` Jobs are allowed there); the Plan returns to phase `dispatch` and the Job's own merge pushes the Lead Branch to the pull request: no Update Job, no Gate at `gate.pr`. A conflict with the base queues an Update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
@@ -278,7 +278,7 @@ The human who owns the ticket and talks only to the Lead (or the Manager).
 _Avoid_: operator; owner (that is a GitHub login)
 
 **Manager** (role, B3):
-The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It holds the Context's records and Requirements, splits them into Plans, starts each Plan's Lead with a Brief, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User or a Lead talks to it, and reads the Context on demand; it never answers for the User. Its default Tier is `manager_tier`. A Permanent Context (`cpd`, `host`, `codereview`) always has one, ensured by the engine; its `cwd` is the User's home directory.
+The agent responsible for a Context’s product decisions, durable knowledge and division of work into Plans. It delegates execution to Leads and escalates unresolved product decisions to the User.
 _Avoid_: master, supervisor, orchestrator
 
 **Lead** (role):
@@ -286,7 +286,7 @@ The agent that translates User intent into Specs and orchestrates the Plan; it n
 _Avoid_: coordinator, orchestrator
 
 **Worker** (role):
-An agent that executes one Attempt of one Job in its own worktree.
+An agent that executes one Attempt of one Job. Its workspace follows the Job kind and runtime profile; a Job may have several Worker executions.
 _Avoid_: subagent, executor, thread (as a word for a Worker)
 
 **Agent key** (term, pro-d345, pro-d346):
@@ -415,15 +415,15 @@ _Avoid_: uptime, ping, status page
 ## Checks and gates
 
 **Gate** (mechanism, changed, pro-d146; changed, air-d86):
-A check that stops undesired behaviour from going further; cpd gates undesired behaviour (the canonical definition in [README.md](README.md)). The word's cpd instances are named hooks: the repo's `pre-merge` hook, run by cpd on a Workflow's Lead Branch at the submit of its open or update Job, before cpd pushes, and by the repair commands `pr open`, `pr push` and `pr rebase`; only when the policy key `gate.pr` is `local` (cpd's default is `none`: core/src/policy/default.toml). It is never run per Job. Where `gate.pr` is `none`, CI is the check where it exists. Keys and hooks: contract §7.3, §8.3.
+A check that prevents an undesired action from proceeding. The repository Gate is the policy-dependent pre-merge check; its scope and evidence follow [contract §7.3](docs/contract.md#73-hooks-from-the-repo-policy-file).
 _Avoid_: CI; checks (GitHub's word); quick check (that is the `pre-commit` hook)
 
 **Quick check** (mechanism, pro-d146; changed, air-d86):
-The repo's `pre-commit` hook, run by cpd on a Worker's Attempt at its merge — a Gate in the sense of the canonical definition in [README.md](README.md), not only a hook of this repo — only when the policy key `gate.merge` is `local` (default `none`). With no such hook there is no Quick check and nothing runs instead.
+The policy-dependent pre-commit check at an Attempt’s merge, distinct from the repository Gate. See [contract §7.3](docs/contract.md#73-hooks-from-the-repo-policy-file).
 _Avoid_: pre-flight, lint step; Gate (that is the `pre-merge` hook)
 
 **Mechanical checks** (mechanism, changed hs-d340, hs-d341):
-The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an open or update Job the Lead Branch's fit with its base (refused only on a conflict) and the Gate. The Worker fixes what they report; the Lead runs none. Not a step of the CPD flow: part of Deploying.
+Checks selected by a Job’s kind to establish whether its submitted result meets the execution contract. See [contract §7.7](docs/contract.md#77-job-kinds-the-checks-at-submit-the-open-job-and-the-update-job-hs-d340-hs-d341).
 
 **CI** (other):
 The repo's GitHub checks on a pull request, where CI exists (this repo runs none). cpd's `pr.feedback.checks` key decides whether failing checks raise `pr-feedback`. Not the Gate and not Mechanical checks.

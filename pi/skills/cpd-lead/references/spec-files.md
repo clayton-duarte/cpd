@@ -64,7 +64,7 @@ are not a substitute for an exact model and effort.
 
 ## A feedback fix Job
 
-On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>`.
+On an open Workflow a fix is one `work` Job (no `--kind` or `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>`.
 
 ## Test Jobs
 
@@ -102,7 +102,7 @@ A Research Job is an ordinary Workflow Job that writes `docs/research/<topic>.md
 
 ## Explore Jobs
 
-The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (Tier letter `H`, effort 1 or above or `X` (air-d16, air-d17, air-d21), up to the worker range's ceiling); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs; Tier letter `S`, effort 1 or above or `X` (air-d16, air-d17, air-d21), up to the worker range's ceiling). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout|research` (`--kind scout` or `--kind research`) and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
+The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (model selection follows the contract); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout|research` (`--kind scout` or `--kind research`) and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
 
 The file passed as `--spec` has exactly these four fields, all required, and no others (`spec_invalid`, exit 2, with the JSON path, for `touches`, `tests`, `test_files` or `resources`):
 
