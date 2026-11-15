@@ -44,7 +44,7 @@ BEGIN SELECT RAISE(ABORT, 'review_pending'); END;
 
 CREATE TRIGGER plans_phase BEFORE UPDATE OF phase ON plans
 WHEN OLD.phase <> NEW.phase AND (OLD.phase || '>' || NEW.phase) NOT IN
-  ('grounding>plan', 'plan>dispatch', 'dispatch>deploy', 'deploy>dispatch', 'done>dispatch', 'done>deploy',
+  ('grounding>plan', 'plan>dispatch', 'dispatch>deploy', 'deploy>done', 'deploy>dispatch', 'done>dispatch', 'done>deploy',
    'dispatch>plan', 'deploy>plan', 'done>plan', 'shaping>done', 'done>shaping')
   AND NOT (OLD.phase = 'grounding' AND NEW.phase = 'done' AND NEW.context = 'codereview')
 BEGIN SELECT RAISE(ABORT, 'illegal_transition'); END;
