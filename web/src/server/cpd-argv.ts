@@ -84,7 +84,7 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "context.list": return ["context", "list"];
     case "context.curation": return ["context", "curation", `--context=${cmd.contextId}`, `--limit=${cmd.limit}`];
     case "context.manager": return ["context", "manager", `--context=${cmd.contextId}`, "--by-user"];
-    case "context.new": return ["context", "new", cmd.contextId, `--title=${cmd.title}`, `--owner=${cmd.owner}`];
+    case "context.new": return ["context", "new", cmd.contextId, `--title=${cmd.title}`, `--owner=${cmd.owner}`, "--by-user"];
     case "context.rename": return ["context", "rename", cmd.contextId, `--title=${cmd.title}`];
     case "context.archive": return ["context", "archive", cmd.contextId];
     case "context.unarchive": return ["context", "unarchive", cmd.contextId];

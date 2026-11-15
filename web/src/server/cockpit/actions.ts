@@ -86,10 +86,6 @@ async function resolveArgs(cpd: Cpd, action: CockpitAction): Promise<CpdCommand>
 }
 export async function runAction(cpd: Cpd, raw: unknown): Promise<ActionOutput> {
   const action = parseCockpitAction(raw);
-  if (action.kind === "context.new") {
-    await cpd.json(toArgv({ kind: "context.new", contextId: action.contextId, title: action.title, owner: action.owner }));
-    return await cpd.json(toArgv({ kind: "context.manager", contextId: action.contextId }));
-  }
   const args = toArgv(await resolveArgs(cpd, action));
   try {
     return await cpd.json(args);

@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 import { allCpdCommands, generateArgvFixturesJson, toArgv } from "./cpd-argv.ts";
 
 describe("toArgv", () => {
-  it("context.new builds the context new argv", () => {
-    // CONTRACT 20.1: the TUI's own argv for Action::NewContext (`tui/src/tree/actions.rs`).
-    expect(toArgv({ kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte" } as never))
-      .toEqual(["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"]);
+  it("context.new creates a by-user Manager from the tree", () => {
+    expect(toArgv({ kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte" }))
+      .toEqual(["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte", "--by-user"]);
   });
 
   it("context.manager builds the context manager argv with --context and --by-user", () => {

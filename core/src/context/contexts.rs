@@ -2,6 +2,7 @@
 //! record, each one database transaction.
 
 use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::Value;
 
 use super::Jira;
 use super::distill::State;
@@ -81,6 +82,7 @@ pub struct Written {
 /// only place they live (contract §4.6). Every write is one transaction.
 pub struct Contexts<'a> {
     machine: MachineName,
+    config: Config,
     store: &'a mut Store,
 }
 
@@ -97,13 +99,15 @@ impl<'a> Contexts<'a> {
     pub fn new(config: &Config, store: &'a mut Store) -> Contexts<'a> {
         Contexts {
             machine: config.machine.clone(),
+            config: config.clone(),
             store,
         }
     }
 
     /// `context new` (commands.md §3.1): the Context's row and `context-created`.
-    /// Returns the row and whether it already existed with this title, Jira key and owner.
+    /// Returns the row, whether it already existed, and the provisioned Manager.
     /// The owner's policy file must resolve (`owner_unconfirmed`, `policy_invalid`).
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &mut self,
         home: &CpdHome,
@@ -112,7 +116,8 @@ impl<'a> Contexts<'a> {
         jira: Option<&Jira>,
         owner: &OwnerLogin,
         confirm_fallback: bool,
-    ) -> Result<(ContextRow, bool), CpdError> {
+        by_user: bool,
+    ) -> Result<(ContextRow, bool, Value), CpdError> {
         let existing = |conn: &Connection| -> Result<Option<ContextRow>, CpdError> {
             // A deleted Context keeps its row, and so its id: never reused (contract §2.2 "Deleted").
             let deleted: bool = conn
@@ -148,21 +153,44 @@ impl<'a> Contexts<'a> {
             .with("jira", row.jira)
             .with("owner", row.owner))
         };
-        if let Some(row) = self.store.read(|conn| existing(conn))? {
-            return Ok((row, true));
+        let found = self.store.read(|conn| existing(conn))?;
+        let manager = self.store.read(|conn| super::manager::live(conn, id))?;
+        if found.is_none() {
+            let link = match resolve(home, &PolicyKey::Owner(owner.clone())) {
+                Err(e) if e.code() == ErrorCode::OwnerUnconfirmed && confirm_fallback => true,
+                other => other.map(|_| false)?,
+            };
+            if link {
+                crate::policy::confirm_fallback(home, owner)?;
+            }
         }
-        let link = match resolve(home, &PolicyKey::Owner(owner.clone())) {
-            Err(e) if e.code() == ErrorCode::OwnerUnconfirmed && confirm_fallback => true,
-            other => other.map(|_| false)?,
+        let prepared = if manager.is_none() {
+            Some(super::manager::prepare_pair(&self.config, id)?)
+        } else {
+            None
         };
-        if link {
-            crate::policy::confirm_fallback(home, owner)?;
-        }
         let machine = self.machine.clone();
-        self.store.write("context new", |tx| {
+        let result = self.store.write("context new", |tx| {
             // Another process may have created it since the read.
             if let Some(row) = existing(tx)? {
-                return Ok((row, true));
+                let registered = if super::manager::live(tx, id)?.is_none() {
+                    let prepared = prepared.as_ref().ok_or_else(|| CpdError::bad_row(format!("Manager of Context {id} disappeared during creation")))?;
+                    super::manager::insert(tx, id, prepared, by_user, self.config.manager_runner)?;
+                    true
+                } else {
+                    let stored: bool = tx.query_row(
+                        "SELECT by_user FROM sessions WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
+                        [id.as_str()],
+                        |r| r.get(0),
+                    )?;
+                    if stored != by_user {
+                        return Err(CpdError::new(ErrorCode::ContextExists, format!("Context {id} exists with a different Manager by-user mode."))
+                            .with("context", id.as_str())
+                            .with("by_user", stored));
+                    }
+                    false
+                };
+                return Ok((row, true, registered));
             }
             let taken: bool = tx.query_row(
                 "SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)",
@@ -190,8 +218,37 @@ impl<'a> Contexts<'a> {
                 )
                 .context(id.clone()),
             )?;
-            Ok((ContextRow::require(tx, id)?, false))
-        })
+            let prepared = prepared.as_ref().ok_or_else(|| CpdError::bad_row(format!("Manager exists without Context {id}")))?;
+            super::manager::insert(tx, id, prepared, by_user, self.config.manager_runner)?;
+            Ok((ContextRow::require(tx, id)?, false, true))
+        })?;
+        let mut provision = || -> Result<Value, CpdError> {
+            let by_user: bool = self.store.read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT by_user FROM sessions WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
+                    [id.as_str()],
+                    |r| r.get(0),
+                )?)
+            })?;
+            if !by_user && (result.2 || !home.manager_message(id).is_file()) {
+                let topics = self
+                    .store
+                    .read(|conn| super::curated::topic_counts(conn, id))?;
+                super::manager::write_first_message(home, id, &result.0.title, &topics)?;
+            }
+            let crate::output::Output::Success(mut output) = super::manager::start_for_new(id)?
+            else {
+                return Err(CpdError::bad_row("Manager provisioning returned no output"));
+            };
+            output
+                .remove("manager")
+                .ok_or_else(|| CpdError::bad_row("Manager provisioning returned no Manager"))
+        };
+        let manager = provision().map_err(|e| {
+            let message = format!("Context {id} and its Manager are registered, but Manager provisioning failed: {}. Retry context new with the same flags.", e.message());
+            CpdError::new(e.code(), message).with("context", id.as_str()).with("cause", e.to_json())
+        })?;
+        Ok((result.0, result.1, manager))
     }
 
     /// Writes one record (§4.6 "A write"): in one transaction, validates it
