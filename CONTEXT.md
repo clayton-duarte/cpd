@@ -26,7 +26,7 @@ Definitions describe the concepts; command mechanics belong in the references ab
 ## Work units
 
 **Context** (entity, pro-d136):
-The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a Session. Each machine may keep one Manager per Context. Distinct from the Context stage.
+The knowledge shared by related Plans, optionally mapped to a Jira Epic. Each machine may keep one Manager per Context; the Context is distinct from a Session and from the Context stage.
 _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 
 **Neighbour curation** (mechanism, Experimental Feature `write_curation`):
@@ -52,15 +52,15 @@ Classification and compression of Context records to support retrieval, with ret
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Plan** (entity, pro-d136; changed from R34):
-One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. A Plan may be **Lead-less** in the phase `shaping`: its Manager creates it and explores through its explore Jobs before any Lead exists, with a null `lead_session` (contract §3.1). Otherwise its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
+One deliverable belonging to exactly one Context, optionally mapped to a Jira ticket. It may begin as a Lead-less shaping Plan before any Workflow exists; see [Plan phases](docs/contract.md#31-plan-phases).
 _Avoid_: project; task, run (as a noun)
 
 **Workflow** (entity, pro-d136, pro-d138):
-The part of a Plan in one repository: its repo, base branch, Lead Branch and Lead worktree, its Jobs, and the Workflows it needs. It ends in exactly one pull request, which cpd opens from its Lead Branch; it maps to one pull request but is not it. One repository may hold several Workflows of one Plan, and the Jira key of the work stays on the Workflow. cpd 1 used the word for a Plan (D3, retired); a GitHub Actions workflow is always written in full.
+One repository's contribution to a Plan, organized toward one pull request. A Plan may have several Workflows in the same repository; each Workflow owns its Jira key. A GitHub Actions workflow is always qualified as such.
 _Avoid_: PR, sub-plan, track, slice, repo plan
 
 **Job** (changed):
-A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context. It belongs to exactly one Workflow of its Plan, and has a Job kind. A GitHub Actions job is written in full.
+A self-contained unit of work defined by a Spec. Delivery Jobs belong to a Workflow; Explore Jobs belong directly to the Plan. A GitHub Actions job is always qualified as such.
 _Avoid_: card, step; task (except in the Jira analogy of the table)
 
 **Job kind** (new, hs-d340, hs-d341):
@@ -104,7 +104,7 @@ A relation saying a Workflow starts only after another Workflow of the same Plan
 _Avoid_: blocker, prerequisite
 
 **Shape** (new, hs-d341, hs-d497):
-How a Workflow lays out its Jobs, stored when the Workflow is added and never changed: `tdd` (docs, test, impl: the default), `docs` or `config` (no test Job), or `free` (every kind the Lead may add). It decides which Job kinds the Workflow may hold (contract §2.2 "Job kinds").
+The pattern that determines which Job kinds a Workflow may contain and must include. Shapes and their constraints are defined in [contract §2.2](docs/contract.md#22-objects).
 _Avoid_: template, type
 
 **Stacked Workflow** (new, hs-d522, hs-d523):
@@ -116,7 +116,7 @@ The branch of one Workflow that accumulates its Merged Jobs and becomes its pull
 _Avoid_: feature branch, integration branch
 
 **Lead worktree** (new):
-The git worktree of a Workflow's Lead Branch, created when the Workflow starts. The Gate and the Open Job's merge run against it; Workers have their own worktrees.
+The git worktree of a Workflow's Lead Branch. Workspace rules are defined in [contract §7](docs/contract.md#7-git-and-the-gate).
 _Avoid_: workflow worktree, main worktree
 
 **Attempt**:
@@ -170,7 +170,7 @@ _Avoid_: edit (an edit changes the Spec: `job edit --spec`)
 ## The CPD flow
 
 **Phase, stage and step** (entity, pro-d145, pro-d146):
-Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`workflow add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step `workflow-start`" (contract §3.7).
+A **phase** is a Plan's stored position: `shaping`, `grounding`, `plan`, `dispatch`, `deploy` or `done`; [contract §3.1](docs/contract.md#31-plan-phases) defines the transitions. A **stage** groups activities into Context, Plan or Dispatch. A **step** names an activity within a stage; an engine step belongs to the engine loop instead.
 _Avoid_: stage for a phase, step for a Job
 
 **PRD** (entity, pro-d536, pro-d537, pro-d538):
