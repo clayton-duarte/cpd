@@ -696,6 +696,12 @@ The command never moves the chat slot (hs-d103); `session open <manager>` does (
 
 `started` is true when this call registered the Manager or started its pane. Idempotent: yes; a Manager with a pane returns `"started": false` and writes nothing.
 
+**Stopped pi Manager.** Background ensures and agent calls do not resume an
+existing stopped pi Session. An explicit User resume preserves its identity and
+transcript under [the lifecycle rule](contract.md#36-session-states). This does not
+prevent creation of a missing Manager or supervision of an already-awake
+durable host.
+
 ### 3.12 `context pending`
 
 ```
