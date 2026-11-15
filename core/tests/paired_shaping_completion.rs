@@ -1,6 +1,7 @@
 //! Paired shaping completion through Lead-owned commands, with all host ports faked.
 
 use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt;
 
 use clap::Parser;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -34,18 +35,32 @@ impl Fixture {
         let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
         std::fs::create_dir_all(home.root().join("policy/acme")).unwrap();
-        std::fs::write(home.root().join("policy/acme/owner.toml"), "").unwrap();
+        std::fs::write(home.root().join("policy/acme/owner.toml"), "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n").unwrap();
         std::fs::write(home.config(), "version = 1\nmachine = \"m1\"\nlead_runner = \"durable\"\n").unwrap();
-        let saved = ["CPD_HOME", "HOME", "CPD_SESSION", "PI_SESSION_ID", "CPD_PLAN", "CPD_ATTEMPT"]
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let pi = bin.join("pi");
+        std::fs::write(&pi, "").unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let install = dir.path().join("install");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(install.join("current-version"), "1.0.0\n").unwrap();
+        for package in ["pi-coding-agent", "pi-ai"] {
+            let dist = install.join("releases/1.0.0/node_modules/@earendil-works").join(package).join("dist");
+            std::fs::create_dir_all(&dist).unwrap();
+            std::fs::write(dist.join("index.js"), "").unwrap();
+        }
+        let saved = ["CPD_HOME", "HOME", "PATH", "CPD_SESSION", "PI_SESSION_ID", "CPD_PLAN", "CPD_ATTEMPT"]
             .into_iter().map(|key| (key, std::env::var_os(key))).collect();
         unsafe {
             std::env::set_var("CPD_HOME", home.root());
             std::env::set_var("HOME", dir.path());
+            std::env::set_var("PATH", &bin);
             std::env::set_var("CPD_SESSION", MANAGER);
             for key in ["PI_SESSION_ID", "CPD_PLAN", "CPD_ATTEMPT"] { std::env::remove_var(key); }
         }
         let f = Self { home, ports: Fakes::new(), saved, _dir: dir };
-        f.sql(&format!("INSERT INTO contexts (id,title,owner,created_at,created_on) VALUES ('ctx','Context','acme','t','m1'); INSERT INTO sessions (id,role,context,name,cwd,tier,state,state_at,created_at) VALUES ('{MANAGER}','manager','ctx','ctx','/','O3','stopped','t','t');"));
+        f.sql(&format!("INSERT INTO contexts (id,title,owner,created_at,created_on) VALUES ('ctx','Context','acme','t','m1'); INSERT INTO sessions (id,role,context,name,cwd,tier,state,state_at,created_at) VALUES ('{MANAGER}','manager','ctx','ctx','/','O3','stopped','t','t'); INSERT INTO tier_catalog (pi_version,letter,model,efforts,read_at) VALUES ('1.0.0','O','p/opus','[0,1,2,3,4]','t'),('1.0.0','S','p/sonnet','[0,1,2,3,4]','t'),('1.0.0','H','p/haiku','[0,1,2,3,4]','t'),('1.0.0','G','p/gemini','[]','t');"));
         f
     }
     fn store(&self) -> Store { Store::open(&self.home, 5000).unwrap() }
