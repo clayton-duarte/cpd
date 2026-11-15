@@ -587,6 +587,21 @@ A question from a Worker to its Lead (`cpd ask`).
 | `asker_pid` | int | pid of the blocking `cpd ask` |
 | `asked_at`, `answered_at`, `expired_at` | time, time?, time? | |
 
+##### Escalation routing
+
+User decision, 2026-11-14: product decisions go through the Manager; execution
+questions go directly from the Lead to the User.
+
+| Question | Route |
+|---|---|
+| A Worker needs clarification | Worker → Lead; the Lead answers from the Spec or settled records when possible. |
+| The Lead needs a product decision about requirements, behavior, scope or a product trade-off | Lead → Manager → User. The Manager cites an existing decision or asks the User, records the answer, and returns its record id to the Lead. |
+| The Lead needs a decision about implementation or operation within settled product requirements | Lead → User directly, using `ask_user_question`. |
+
+The Lead relays the resulting answer to a waiting Worker with `cpd answer`.
+A Manager reports the User's decisions; it does not decide on the User's behalf.
+A Lead-less shaping Plan keeps its Manager-owned explore routing (§3.1).
+
 #### Session
 
 A pi session cpd knows about: every Manager, Lead and Worker is one.
@@ -1045,11 +1060,11 @@ Before migration 0008 the phase `deploy` was called `pr` (hs-d76); old Events an
 
 **Plan (planning).** Phase `plan` is planning, and it is also where a Plan goes back to when an explore Job is added to a Plan past planning (`dispatch`, `deploy` or `done` → `plan`, the rows above). `locked_at` tells its two states apart (A1, pro-d433): an **unlocked** Plan (`locked_at` null) has started no Workflow and is still being drafted; a **re-planned** Plan (`locked_at` set) was locked before, its started Workflows and their Jobs keep running (§3.2, A5), and the lock, an approval of drafts or a `workflow add` returns it to `dispatch`. Every rule that applies before the lock keys on `locked_at IS NULL`, and every rule that applies after it on `locked_at IS NOT NULL`.
 
-**Grounding.** The phase in which the Lead grounds itself on the Context: it reads its first message (its brief and the rendered Context records), the material the User gives, and interviews the User (cpd 1 requirements §2 "Context", kept). The phase is always entered; a Lead whose brief and records already say enough adds to the Context with `context decide`, `note` or `ask` if it learns something, or moves on to `plan` at once. That is how "skipped or appended to" (ADR-0011) is represented: one phase name, `grounding`, and no special case. `plan phase plan` writes the phase and `plan-phase` and nothing else.
+**Grounding.** The phase in which the Lead grounds itself on the Context: it reads its first message (its brief and the rendered Context records), the material the User gives, and resolves open questions under [Escalation routing](#escalation-routing). The phase is always entered; a Lead whose brief and records already say enough adds to the Context with `context decide`, `note` or `ask` if it learns something, or moves on to `plan` at once. That is how "skipped or appended to" (ADR-0011) is represented: one phase name, `grounding`, and no special case. `plan phase plan` writes the phase and `plan-phase` and nothing else.
 
 **`plan new` always starts a fresh Lead** (hs-d92): a Session registered `forked_from` null, whose first message is the Plan header, the full brief and the Context: the digest (the relevant short forms by topic, built by cpd) and at most 20 uncurated records raw (§4.6 "Consumers", `commands.md` §4.1). With `--brief-file` it also writes the brief as a Context record of kind `brief` (§2.2, B3-A4).
 
-**The Context's Manager** (hs-d83..d86, hs-d92, hs-d133; Plan manager B3). The higher-level Lead of a Context: it works at the Epic level, holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads and knows where each is. Its memory is the records (records first; the chat is disposable). It acts only when the User talks to it; at each turn start the adapter gives it a digest (§5.3, `commands.md` §15.7). Leads keep asking the User directly; the Manager never answers for the User.
+**The Context's Manager** (hs-d83..d86, hs-d92, hs-d133; Plan manager B3). The higher-level Lead of a Context: it works at the Epic level, holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads and knows where each is. Its memory is the records (records first; the chat is disposable). It acts only when the User talks to it; at each turn start the adapter gives it a digest (§5.3, `commands.md` §15.7). Questions follow [Escalation routing](#escalation-routing).
 - **One live Manager per Context**: a Session with `role = manager`, `plan` null, `tier` = `manager_tier` (§8.2, default `O4`; moved later by `session retier`, §2.2), name `<context>`, `cwd` = the User's home directory (pro-d343), never the caller's directory. A unique index allows one non-archived Manager per Context (§4.4).
 - **`cpd context manager [--context <c>]`** registers it when the Context has none live (`session-registered`), then creates its parked window `ctx-<context>` running `cpd session run <id>` and appends `session-moved` in a second transaction after the commit, as `plan new` starts a Lead (§6.5). When the Manager is `stopped` with no pane, it starts it again on its session file (resume); otherwise it changes nothing. It never moves the chat slot (hs-d103) and is idempotent. An archived Context is refused with `archived`, an unknown one with `context_not_found`.
 - **First message**: `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.` followed by the Context as `plan new` gives it (§4.6 "Consumers"): the digest (the relevant short forms by topic) and at most 20 uncurated records raw.
@@ -3997,7 +4012,7 @@ The reply of `decide` and `note` carries `hook`: `{"mode": "semantic" | "fts-onl
 **Direction is fixed by the tool, not by an argument.**
 
 - `delegate` goes **down** one tier only: a Manager to the Leads of its Context's Plans, a Lead to the Workers of its Plan. Its `to` is a non-empty array of distinct Session ids; a recipient outside those is `not_permitted` (exit 3). A Worker has no `delegate` (`not_permitted`). A Manager does not delegate straight to a Worker: the chain is `Manager -> Lead -> Worker`.
-- `escalate` goes **up** one tier and has **no `to` argument**: the recipient is the sender's parent (a Worker's is its Lead, a Lead's is its Manager, a Manager's is the User). One recipient is therefore a property of the schema, not a check. A Manager's escalation reaches the User as an Inbox item (§2.2), and the ladder ends there (below).
+- `escalate` goes **up** one tier and has **no `to` argument**: the recipient is the sender's parent (a Worker's is its Lead, a Lead's is its Manager, a Manager's is the User). A Lead uses this route for product decisions; execution questions use `ask_user_question` directly under [Escalation routing](#escalation-routing). A Manager's escalation reaches the User as an Inbox item (§2.2), and the ladder ends there (below).
 
 **Urgency.** `fyi` is stored and delivered at the recipient's next turn, without starting a turn. `wake` starts a turn (`triggerTurn`, §5.3). Both reach the adapter as a `message` Event (a new Event kind, §5.2, with its migration), which the adapter delivers as §5.3 delivers a `cpd` message. The sender's label is shown as given, so a notice from `cpd` is never shown as a User message.
 

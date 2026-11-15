@@ -135,7 +135,7 @@ CLI subcommands map directly to typed tool namespaces:
 - **Retrieval by ID & Layered Digest**: Context reaches chats solely as record IDs, never inlined text (pro-d532). The Manager's turn digest selects IDs in prioritized layers (Plan/topic/bug links first, vector search fallback, tuned by citation rate). No pinned set. Leads receive IDs directly from Managers upon delegation.
 
 ### 4.4 Message Bus: Delegate & Escalate (pro-d533, pro-d534)
-- **Hierarchical Bus**: Replaces legacy `board post` and `session send` with directional primitives:
+- **Hierarchical Bus**: Replaces legacy `board post` and `session send` with directional primitives. [Escalation routing](../contract.md#escalation-routing) determines when a Lead uses this bus rather than asking the User directly:
   - `delegate`: Downward (`Manager -> Lead -> Worker`), supports 1 or more recipients.
   - `escalate`: Upward (`Worker -> Lead -> Manager -> User`), exactly 1 recipient.
 - **Urgency Modes**: `fyi` (queued for next turn, no wake) or `wake` (immediately starts a turn).

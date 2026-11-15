@@ -160,7 +160,7 @@ A Ready Job that `scheduling` could not start for want of a pool. Nothing is res
 Where a Workflow is, stored as `waiting`, `dispatch`, `open`, `merged` or `cancelled` (contract §3.8). Qualified in prose: "a waiting Workflow" is one whose needs or base are not yet met; `dispatch` means started, its Jobs running, no pull request yet; `open` means its pull request is open; `merged` means its pull request is squash-merged; `cancelled` means given up. The words `dispatch` and `waiting` here are not the Dispatch stage and not a Session's waiting state.
 
 **Escalation** (changed):
-A question raised by an agent to its parent in the delegation tree (Worker → Lead → User) when continuing would require guessing.
+A question requiring information or authority the agent lacks. Its recipient follows the [escalation routing](docs/contract.md#escalation-routing).
 _Avoid_: blocker; ask (as a noun)
 
 **Addendum** (entity):
