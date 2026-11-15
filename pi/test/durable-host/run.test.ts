@@ -56,7 +56,7 @@ const MOVES: Record<string, readonly string[]> = {
   blocked: ["working", "idle", "waiting", "stopped"],
 };
 
-function rig(over: { role?: string; state?: string; firstMessage?: boolean; firstMessageFails?: boolean; liveRun?: boolean } = {}) {
+function rig(over: { role?: string; state?: string; firstMessage?: boolean; firstMessageFails?: boolean; liveRun?: boolean; compactionEnabled?: boolean } = {}) {
   const session = { state: over.state ?? "stopped" };
   const calls: string[][] = [];
   const opens: Parameters<Deps["open"]>[0][] = [];
@@ -72,6 +72,7 @@ function rig(over: { role?: string; state?: string; firstMessage?: boolean; firs
   });
 
   const deps: Deps = {
+    compactionSettings: () => ({ enabled: over.compactionEnabled ?? true }),
     guard: async () => {},
     cpd: async (args) => {
       calls.push([...args]);
@@ -440,4 +441,10 @@ test("a tier switch while idle is applied", { timeout: 20_000 }, async () => {
     assert.ok(r.order.includes("configure"), "an idle host configures the conversation");
     assert.ok(!r.calls.some((c) => c[1] === "switch-failed"), "no switch-failed");
   });
+});
+
+test("the durable host honors disabled compaction from the effective settings", { timeout: 20_000 }, async () => {
+ const r = rig({ compactionEnabled: false });
+ await r.up();
+ assert.equal(r.opens[0]!.settings?.compaction.enabled, false);
 });

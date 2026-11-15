@@ -425,3 +425,12 @@ describe("durable frames v2 dialect", () => {
     }
   });
 });
+
+for (const protocol of [1, 2] as const) {
+ it(`protocol ${protocol} skips silent skill baselines and retains following chat`, () => {
+ const d = createDialect(protocol);
+ const baseline = { id: 1, conversationId: "root", kind: "cpd-skills", model: [], data: { skill: "lead", files: [] } };
+ const loaded = d.applyBase(protocol === 1 ? view([baseline, user(2, "hello")]) : baseV2([baseline, user(2, "hello")]));
+ expect(loaded.transcript.items.map(i => i.id)).toEqual(["u:2"]);
+ });
+}

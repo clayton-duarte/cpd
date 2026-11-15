@@ -36,6 +36,7 @@ export function hookIdleCompaction(target: object): void {
 	);
 	hookMethod(target, "_checkCompaction", "cpd-compaction-idle-check", async (self, args, original) => {
 		const assistantMessage = args[0];
+		if (self.autoCompactionEnabled === false) return false;
 		if (args[1] === false) return false;
 		if (self.agent?.hasQueuedMessages?.() === true) {
 			return assistantMessage?.stopReason === "error" ? original.apply(self, args) : false;

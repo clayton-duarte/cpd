@@ -78,7 +78,7 @@ interface Rig {
 }
 
 /** A fresh stand-in prototype hooked by `hookIdleCompaction`, and an instance with fake collaborators. */
-const rig = (opts: { streaming?: boolean; queued?: boolean; checkResult?: boolean; over?: boolean; messages?: unknown[] }): Rig => {
+const rig = (opts: { enabled?: boolean; streaming?: boolean; queued?: boolean; checkResult?: boolean; over?: boolean; messages?: unknown[] }): Rig => {
 	const original = {
 		before: spy((context: unknown) => context),
 		exceeds: spy(opts.over ?? false),
@@ -94,6 +94,7 @@ const rig = (opts: { streaming?: boolean; queued?: boolean; checkResult?: boolea
 	hookIdleCompaction(proto);
 	// The instance-level answer the post run fallback consults: the stand-in's own threshold check.
 	const session = Object.create(proto, {
+		autoCompactionEnabled: { value: opts.enabled ?? true },
 		agent: { value: { state: { isStreaming: opts.streaming ?? false }, hasQueuedMessages: () => opts.queued ?? false } },
 		sessionManager: { value: { buildSessionProjection: () => ({ messages: opts.messages ?? [] }) } },
 		model: { value: model(1_000_000) },
@@ -222,4 +223,10 @@ test("Manager compaction threshold follows the model input cap", async (t) => {
 			});
 		}
 	});
+});
+
+test("disabled automatic compaction is respected by the idle fallback", async () => {
+	const { session, run } = rig({ enabled: false, over: true, checkResult: false });
+	assert.equal(await session._checkCompaction(msg("stop")), false);
+	assert.equal(run.calls.length, 0);
 });
