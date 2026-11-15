@@ -81,16 +81,11 @@ The adapter runs in pi's process (contract §6.6). The guard must run before pi'
 
 Pi's own threshold compaction is **idle-only** (commands §15.19, pro-d353): it is deferred while a turn runs or messages are queued. So the guard cannot wait for the threshold to fire. It compacts explicitly, as step 3 of §3 says. The guard's compaction and pi's threshold compaction are two triggers of one pi compaction path; the implementation Job makes sure they do not both run for one request.
 
-### 6.3 Compaction ratio derivation (contract §6.18, commands §15.19)
+### 6.3 Production Manager compaction threshold (contract §6.18, commands §15.19)
 
-pi compacts when `used > (1 − r) × W`, where `r` is the `reserveTokensRatio` that `reserveTokensOf` derives (commands §15.19). The cap refuses or compacts when `used > cap`. Both read the same `W`, from the same model in hand, through the same derivation. Nothing in pro-d559 changes `r`.
+The decided production Manager contract, including for a durable Manager host, is `threshold = min(200000, floor(0.8 * W))` and `reserve = W - threshold`, where `W` is the active model's available context window in tokens. Compaction is triggered when used context exceeds the threshold. `W` must be present and a finite positive integer; missing or invalid metadata is invalid input and must be rejected at the boundary. No threshold or reserve is derived from invalid metadata, and no fallback window is substituted.
 
-Which trigger fires first, from the arithmetic (inferred, not run):
-
-- Under the default ratio `r = 0.1`, pi's trigger is at `0.9 × W`, above the cap for every window (`0.8 × W` or 200 000). **The cap always binds first**, so under defaults the guard's compaction is the one that fires.
-- pi's trigger binds first only when `(1 − r) × W` falls below the cap, for instance a ratio above 0.2 on a window where `0.8 × W` is the cap.
-
-The implementation Job must test both orders, so the guard does not depend on which trigger runs.
+This threshold contract is distinct from the model-input cap described in this note. It does not assert incident attribution or runtime deployment, and this note makes no claim about the production trigger's implementation or which path runs first.
 
 ### 6.4 Auxiliary runs
 

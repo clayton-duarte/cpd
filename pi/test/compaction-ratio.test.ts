@@ -1,22 +1,4 @@
-/**
- * The compaction ratio (docs/commands.md section 15.19, hs-d660 corrected by hs-d662).
- *
- * `pi/lib/compaction-ratio.ts` hooks pi's `SettingsManager.prototype.getCompactionReserveTokens` so
- * that, for a model with a positive contextWindow, the reserve is `Math.round(contextWindow * ratio)`
- * instead of the flat `compaction.reserveTokens`. The ratio is, per model key `provider/modelId`,
- * highest first: the model override's `reserveTokens` (explicit absolute), the model override's
- * `reserveTokensRatio`, the global `reserveTokensRatio`, the global `compaction.reserveTokens`
- * (explicit absolute), then the built-in `0.1`. A model with no positive contextWindow keeps pi's
- * value; a ratio outside (0, 1) or not finite throws naming the exact key. The value is derived on
- * every call and never stored.
- *
- * It also hooks three AgentSession methods so threshold auto-compaction runs only while the agent is
- * idle (docs/commands.md section 15.19; context records pro-d353, pro-d204): the idle rules are pinned
- * below against stand-in prototypes through `hookIdleCompaction`.
- *
- * These tests are written first, against a stub that installs no hook, so every derived value fails
- * for the right reason until the implementation Job replaces `pi/lib/compaction-ratio.ts`.
- */
+/** Compaction derives its reserve from the active model input cap (air-d213). */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { AgentSession, SettingsManager, shouldCompact } from "@earendil-works/pi-coding-agent";
 import { hookIdleCompaction, registerCompactionRatio } from "../lib/compaction-ratio.ts";
+import { compactionPolicy } from "../durable-host/compaction.ts";
 
 // The user's own settings.json must not decide what these tests derive: an empty agent directory of their own.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "compaction-ratio-agent-"));
@@ -51,75 +34,21 @@ const piOriginals = IDLE_METHODS.map((name) => piProto[name]);
 // The hook is installed once, as the adapter installs it; nothing here is stored.
 registerCompactionRatio();
 
-test("the default ratio reserves a tenth of the model's context window", () => {
-	assert.equal(reserve({}, model(1_000_000)), 100_000);
-	assert.equal(reserve({}, model(128_000)), 12_800);
-	const settings = manager({}).getCompactionSettings(model(1_000_000));
-	assert.equal(shouldCompact(900_001, 1_000_000, settings), true);
-	assert.equal(shouldCompact(900_000, 1_000_000, settings), false);
-});
-
-test("an explicit global ratio replaces the default", () => {
-	assert.equal(reserve({ reserveTokensRatio: 0.2 }, model(1_000_000)), 200_000);
-	const settings = manager({ reserveTokensRatio: 0.2 }).getCompactionSettings(model(1_000_000));
-	assert.equal(shouldCompact(800_001, 1_000_000, settings), true);
-	assert.equal(shouldCompact(800_000, 1_000_000, settings), false);
-});
-
-test("a model override ratio wins over the global ratio", () => {
-	const compaction = {
-		reserveTokensRatio: 0.2,
-		modelOverrides: { "openrouter/deepseek/deepseek-v4.1-flash": { reserveTokensRatio: 0.5 } },
-	};
-	assert.equal(reserve(compaction, model(1_000_000)), 500_000);
-});
-
-test("an explicit reserveTokens override wins over every ratio", () => {
-	const overriding = {
-		reserveTokensRatio: 0.2,
-		modelOverrides: {
-			"openrouter/deepseek/deepseek-v4.1-flash": { reserveTokens: 8_000, reserveTokensRatio: 0.5 },
-		},
-	};
-	assert.equal(reserve(overriding, model(1_000_000)), 8_000);
-	// Without the absolute value the same model ratio wins over the global one, so the absolute is what wins.
-	const ratioOnly = {
-		reserveTokensRatio: 0.2,
-		modelOverrides: { "openrouter/deepseek/deepseek-v4.1-flash": { reserveTokensRatio: 0.5 } },
-	};
-	assert.equal(reserve(ratioOnly, model(1_000_000)), 500_000);
-});
-
-test("an explicit global reserveTokens wins over the default ratio", () => {
-	assert.equal(reserve({ reserveTokens: 16_384 }, model(1_000_000)), 16_384);
-	assert.equal(reserve({ reserveTokens: 16_384, reserveTokensRatio: 0.2 }, model(1_000_000)), 200_000);
-});
-
-test("a model with no context window keeps pi's reserveTokens", () => {
-	const compaction = { reserveTokensRatio: 0.2 };
-	assert.equal(reserve(compaction, model()), 16_384);
-	assert.equal(reserve(compaction, model(0)), 16_384);
-});
-
-test("a ratio outside zero and one is refused", () => {
-	for (const ratio of [0, 1, -0.1, 1.5, NaN]) {
-		assert.throws(
-			() => manager({ reserveTokensRatio: ratio }).getCompactionSettings(model(1_000_000)),
-			(error: unknown) => error instanceof Error && error.message.includes("compaction.reserveTokensRatio"),
-			`ratio ${String(ratio)}`,
-		);
+test("legacy ratio and absolute settings do not override the model input cap", () => {
+	const settings = [
+		{}, { reserveTokensRatio: 0.2 }, { reserveTokens: 16_384 },
+		{ reserveTokensRatio: 0, modelOverrides: { "openrouter/deepseek/deepseek-v4.1-flash": { reserveTokens: 8_000, reserveTokensRatio: 1.5 } } },
+	];
+	for (const setting of settings) {
+		assert.equal(reserve(setting, model(1_000_000)), 800_000);
+		assert.equal(reserve(setting, model(128_000)), 25_600);
 	}
-	assert.throws(
-		() =>
-			manager({
-				modelOverrides: {
-					"openrouter/deepseek/deepseek-v4.1-flash": { reserveTokensRatio: 1.5 },
-				},
-			}).getCompactionSettings(model(1_000_000)),
-		(error: unknown) =>
-			error instanceof Error &&
-			error.message.includes('compaction.modelOverrides["openrouter/deepseek/deepseek-v4.1-flash"].reserveTokensRatio'),
-	);
+});
+
+test("invalid or missing model windows fail closed", () => {
+	for (const window of [undefined, 0, -1, 1.5, NaN, Infinity]) {
+		assert.throws(() => reserve({}, model(window)), { code: "context_window_invalid" });
+	}
 });
 
 test("compaction triggers at the window minus the derived reserve", () => {
@@ -256,8 +185,93 @@ test("registerCompactionRatio hooks the AgentSession prototype once and a second
 	IDLE_METHODS.forEach((name, i) => assert.equal(piProto[name], hooked[i]));
 });
 
- test("disabled automatic compaction is respected by the idle fallback", async () => {
- const { session, run } = rig({ enabled: false, over: true, checkResult: false });
- assert.equal(await session._checkCompaction(msg("stop")), false);
- assert.equal(run.calls.length, 0);
- });
+// Exercise the installed production hook with a fake Pi settings receiver, and the durable
+// host's live policy with fake model metadata. Neither test starts Pi or a session.
+test("Manager compaction threshold follows the model input cap", async (t) => {
+	const cases = [
+		{ window: 250_000, threshold: 200_000, reserve: 50_000 },
+		{ window: 1_000_000, threshold: 200_000, reserve: 800_000 },
+		{ window: 123_457, threshold: 98_765, reserve: 24_692 },
+	];
+	await t.test("installed settings hook uses the current model", async (t) => {
+		const fakePi = { getSettings: () => ({ compaction: {} }) };
+		const hooked = SettingsManager.prototype.getCompactionReserveTokens as unknown as (
+			this: typeof fakePi, m: ReturnType<typeof model>,
+		) => number;
+		for (const c of cases) {
+			await t.test(`window ${c.window}`, () => {
+				const reserve = hooked.call(fakePi, model(c.window));
+				assert.equal(reserve, c.reserve);
+				assert.equal(c.window - reserve, c.threshold);
+			});
+		}
+	});
+	await t.test("durable policy follows active model changes", async (t) => {
+		let active = { provider: "mock", modelId: "initial" };
+		const windows = new Map(cases.map((c, i) => [`mock/model-${i}`, c.window]));
+		const source = {
+			settings: () => ({}),
+			agent: () => active,
+			windowOf: (provider: string, modelId: string) => windows.get(`${provider}/${modelId}`),
+		};
+		for (const [i, c] of cases.entries()) {
+			active = { provider: "mock", modelId: `model-${i}` };
+			await t.test(`active model ${i}`, () => {
+				const reserve = compactionPolicy(source).reserveTokens;
+				assert.equal(reserve, c.reserve);
+				assert.equal(c.window - reserve!, c.threshold);
+			});
+		}
+	});
+});
+
+test("disabled durable compaction preserves effective settings without model metadata", () => {
+	const settings = { enabled: false, reserveTokens: 1234, keepRecentTokens: 567 };
+	const policy = compactionPolicy({
+		settings: () => settings,
+		agent: () => { throw new Error("disabled compaction must not read the model"); },
+		windowOf: () => { throw new Error("disabled compaction must not read the window"); },
+	});
+	assert.deepEqual(policy, settings);
+});
+
+test("disabled automatic compaction is respected by the idle fallback", async () => {
+	const { session, run } = rig({ enabled: false, over: true, checkResult: false });
+	assert.equal(await session._checkCompaction(msg("stop")), false);
+	assert.equal(run.calls.length, 0);
+});
+
+// Pi's comparison is mocked at its observed strict `>` boundary; this tests our hooks,
+// not Pi's token estimation or comparison implementation.
+test("idle production hooks use the active model reserve at both threshold boundaries", async () => {
+	let tokens = 0;
+	let active = model(123_457);
+	const fakePi = { getSettings: () => ({ compaction: {} }) };
+	const reserveFor = SettingsManager.prototype.getCompactionReserveTokens as unknown as (
+		this: typeof fakePi, m: ReturnType<typeof model>,
+	) => number;
+	const run = spy(Promise.resolve(true));
+	const proto = {
+		_compactBeforeNextAssistantResponse: spy(undefined),
+		_exceedsCompactionThreshold: (m: ReturnType<typeof model>) =>
+			tokens > m.contextWindow! - reserveFor.call(fakePi, m),
+		_checkCompaction: spy(false),
+		_runAutoCompaction: run,
+	};
+	hookIdleCompaction(proto);
+	const session = Object.create(proto, {
+		autoCompactionEnabled: { value: true },
+		agent: { value: { state: { isStreaming: false }, hasQueuedMessages: () => false } },
+		sessionManager: { value: { buildSessionProjection: () => ({ messages: [] }) } },
+		model: { get: () => active },
+	});
+	for (const [window, threshold] of [[123_457, 98_765], [1_000_000, 200_000], [123_457, 98_765]]) {
+		active = model(window);
+		for (const [offset, expected] of [[-1, false], [0, false], [1, true]] as const) {
+			tokens = threshold + offset;
+			run.calls.length = 0;
+			assert.equal(await session._checkCompaction(msg("stop")), expected, `window ${window}, tokens ${tokens}`);
+			assert.deepEqual(run.calls, expected ? [["threshold", false]] : []);
+		}
+	}
+});

@@ -6329,25 +6329,17 @@ This writes `$CPD_HOME/run/secret/allow/<attempt-id>.json` (contract §8.4). The
 
 **Manager only** (internal): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 `host-alert`). **Aborted:** when the tool call is aborted, the dialog is dismissed and the blocked fact is closed, releasing the Session. The adapter refuses an agent's bash `cpd host approve` with the reason `φ: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: cpd host approve` (model: §15.17).
 
-### 15.19 The compaction ratio (hs-d660)
+### 15.19 The compaction threshold (hs-d660)
 
-pi's compaction default `compaction.reserveTokens: 16384` makes a model without a per-model reserve compact only at `contextWindow - 16384` (~98% full), so models with a large window (the OpenRouter DeepSeek models) fill up and never compact. The fix is one pi setting, `compaction.reserveTokensRatio`: a fraction of the model's own context window reserved for the response.
+For production Manager compaction, including the durable Manager host, the threshold is `min(200000, floor(0.8 * W))` tokens, where `W` is the active model's available context window. The corresponding reserve is `W - threshold`; compaction is triggered when used context exceeds the threshold. The calculation is per active model, not a fixed token reserve. This documents the decided contract and does not assert an incident cause or runtime deployment.
 
-The setting is read from pi's settings.json (global and trusted-project, merged by pi's SettingsManager). cpd adds no file and no key of its own.
+`W` is the context window of the model in hand. It must be available and be a finite positive integer; a missing or invalid window is invalid input and must be rejected at the boundary, rather than replaced by a guessed/default window. No threshold or reserve is derived for invalid metadata.
 
-The module is `pi/lib/compaction-ratio.ts`, loaded by the adapter (`extension.ts`, section 15.1). `pi/compact-tools` is NOT involved. The module hooks `SettingsManager.prototype.getCompactionReserveTokens` and `AgentSession.prototype` (the idle-only rule below).
+The model's window can vary by model, so both threshold and reserve are derived from that model's `W`. For example, `W = 128000` gives threshold `102400` and reserve `25600`; `W = 1000000` gives threshold `200000` and reserve `800000`.
 
-For a model with a positive contextWindow: `reserveTokens = Math.round(contextWindow * reserveTokensRatio)`, so compaction triggers at `used > contextWindow - reserveTokens = contextWindow * (1 - reserveTokensRatio)` (pi's `shouldCompact`). The value is derived on every call from the model in hand; it is never written to the session file or to the settings.
+This threshold is the documented production Manager contract, not a pi settings.json ratio or an assertion about which code path is deployed. The trigger is strict: compaction begins when used context exceeds `min(200000, floor(0.8 * W))`.
 
-Precedence, per model key `provider/modelId`, highest first: (1) `compaction.modelOverrides["<key>"].reserveTokens` (an explicit absolute value, wins over every ratio); (2) `compaction.modelOverrides["<key>"].reserveTokensRatio` (a ratio for that model); (3) `compaction.reserveTokensRatio` (a ratio for every model); (4) `compaction.reserveTokens` (an explicit absolute value for every model, used only when no ratio applies); (5) the built-in ratio `0.1`. The default behaviour is therefore to compact at 90% of the window, whatever the model.
-
-A model whose contextWindow is absent or not a positive number keeps pi's own value (the model override or pi's default). `branchSummary.reserveTokens` is a separate setting and is unchanged.
-
-A ratio outside (0, 1), or one that is not a finite number, is refused: `getCompactionReserveTokens` throws an Error whose message names the exact key (`compaction.reserveTokensRatio`, or `compaction.modelOverrides["<key>"].reserveTokensRatio`). There is no silent fallback.
-
-The ratio applies in every cpd pi session; a plain pi that does not load the adapter is not covered.
-
-**Idle-only threshold compaction** (User, 2026-11-02, Context decision pro-d353). pi 1.3.0 runs threshold auto-compaction in the middle of a turn: between tool calls, before each LLM request, before a turn starts, and after `agent.prompt` resolves while queued messages still wait. The User wants compaction to wait until the agent is idle. `registerCompactionRatio` therefore also wraps three methods of `AgentSession.prototype`, through the repo's `hookMethod`, once per process: a second call and a reload replace nothing and stack nothing.
+**Idle-only threshold compaction** (User, 2026-11-02, Context decision pro-d353). Threshold auto-compaction waits until the agent is idle:
 
 - `_compactBeforeNextAssistantResponse` only refreshes the messages from `sessionManager.buildSessionProjection()`; it never compacts.
 - `_exceedsCompactionThreshold` answers false while `agent.state.isStreaming` is true, and pi's own answer otherwise.
