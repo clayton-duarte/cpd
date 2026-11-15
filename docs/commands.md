@@ -2008,29 +2008,34 @@ Effects (§3.2 "Cancel"):
 {"ok": true, "job": "worker", "status": "cancelled", "cancel_requested": false, "failed": ["dep"], "cancelled": ["draft-dep"]}
 ```
 
-Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a `failed` Job stay `queued`: `job retry` recovers the need, so that wait is legal. **Cancelling a Workflow's `open` Job stands** (contract §3.7 `open-jobs`, §3.8): engine `open-jobs` adds no fresh one, so the Workflow stays `dispatch` with no live `open` Job. It is not a way to start over: to open its pull request later the Lead runs `pr open --workflow <key>` (§9.1, the repair, not refused `open_job_live` since no `open` Job is live); to give it up, `workflow cancel <key>` (§9.6), which also cancels every `draft`, `queued` or `failed` Job of the Workflow, its `open` Job included, with the Workflow and adds nothing back. `job retry` (§5.4) takes a `failed` Job, or a queued one whose effective Tier is out of its range (pro-d484), and runs it again at another Tier.
+Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a `failed` Job stay `queued`: `job retry` recovers the need, so that wait is legal. **Cancelling a Workflow's `open` Job stands** (contract §3.7 `open-jobs`, §3.8): engine `open-jobs` adds no fresh one, so the Workflow stays `dispatch` with no live `open` Job. It is not a way to start over: to open its pull request later the Lead runs `pr open --workflow <key>` (§9.1, the repair, not refused `open_job_live` since no `open` Job is live); to give it up, `workflow cancel <key>` (§9.6), which also cancels every `draft`, `queued` or `failed` Job of the Workflow, its `open` Job included, with the Workflow and adds nothing back. `job retry` (§5.4) queues another Attempt with a valid model selection.
 
 ### 5.4 `job retry`
 
-```
-cpd job retry <key> --tier <T> [--plan <id>]
-```
+The Lead requests another Attempt of a failed Job. A Manager may do so for a
+Lead-less shaping Plan in its own Context; a Plan with a Lead or another
+Context is refused (`plan_has_lead` or `plan_other_context`).
 
-A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+Before retrying, apply the [model selection and retry-effort
+contract](contract.md#retry-effort). A request may explicitly supply a valid
+model and effort; otherwise the next supported effort is selected
+automatically. At maximum effort, or without effort settings, automatic
+retry stops for the Lead's decision. Letter tiers and role ranges are no
+longer selection inputs. Direct-selection flag names are not specified here.
 
-| Precondition | Code | Exit |
-|---|---|---|
-| `--tier` is outside the range of the Job's role, checked after `tier_invalid`: **`job retry --tier` refuses a Tier outside the worker range** (from `worker_tier` through the highest valid rung at or below `lead_tier`, `details` `{tier, role: "worker", floor, ceiling, allowed, key: "worker_tier"}`), so a Job that failed at the ceiling cannot be retried higher; its remedy is the same Tier or a new Job with a better Spec. For an explore Job the range is its kind's (`scout`: letter `H`; `research`: letter `S`; effort ≥ 1 or `X`, up to the worker ceiling) and `details` name the kind and its range. Checked first, so a refused Tier changes nothing | `tier_not_allowed` | 2 |
-| the Job is not `failed`, nor `queued` at a Tier outside its range: a `queued` Job whose effective Tier (the Tier `scheduling` would start its next Attempt at) fails the range check, the `tier_not_allowed` of `scheduling` (contract §3.7 `scheduling`, §9 "Attempt Tier"), may be retried, to a Tier in range (pro-d484); a `queued` Job with this `retry_tier` and no Attempt since is `already`. Otherwise the refusal is `job_not_failed` | `job_not_failed` | 3 |
-| no `needs` Job is `cancelled` (`needs_unavailable`, exit 3, `details.needs` lists them): a Job held by a cancelled need can never start, so cancel it and add a replacement whose needs do not name the cancelled Job. A `failed` need is allowed: retrying recovers it | `needs_unavailable` | 3 |
+A retry requires a failed Job, or a queued Job whose selection is invalid.
+A cancelled dependency prevents retry (`needs_unavailable`, exit 3); a failed
+dependency may itself be retried. Refused selection or state changes nothing.
 
-Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `failed_cause = null` (the Job's `tier` field is left unchanged; a queued Job stays `queued`, pro-d484). **Event** `job-retried` `{tier}`. The next Attempt has `origin = retry` and this Tier and the ladder restarts from it with a fresh cap (§9; for an explore Job the ladder stays in its kind's range and climbs to the next valid effort inside the letter, and after the top rung a `no_submit` fails the Job, while a `crashed` or `merge_conflict` there is retried at the same Tier under the cap, Plan `explore-roles`, R6; Attempts whose driver never started are never counted). The Plan view, `plan render` and `context pending` show the Tier the Job is displayed at (contract §3.4a), which is `retry_tier` while the Job is queued at it; `plan show` and `job show` print both `tier` and `retry_tier` as raw field values. And, when the Plan's working Lead runs it, it names the Workflow as the Lead's Workflow (§1.3).
+In one transaction, queue the Job, retain the next selection, clear its failure
+marker and record `job-retried`. The next Attempt has `origin = retry`, and
+starts a fresh retry-limit window. Keep previous Attempts and feedback. A
+repeated request already recorded for a queued Job is idempotent.
 
-```json
-{"ok": true, "job": "worker", "status": "queued", "tier": "S4"}
-```
-
-Idempotent: yes, as stated. (The engine also retries a `failed` open or update Job of the same Workflow when its fix merges, contract §3.2 "Engine auto-retry on fix merge" (pro-d89); a Lead normally retries only when no fix is needed or when a fix did not restart the Job.)
+When the working Lead requests the retry, record the Job's Workflow as the
+Lead's current Workflow (§1.3). A merged fix may also requeue a failed open or
+update Job under the [fix-merge rule](contract.md#32-job-statuses); that path obeys the
+same retry-effort boundary.
 
 ### 5.4a `job replace-test`
 
