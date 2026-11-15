@@ -77,6 +77,33 @@ test("restart reconciles an already-approved review instead of reopening its dia
   assert.equal(reviewsFromEntries(records, "p1").reviews.get("r1")?.status, "approved");
 });
 
+test("restart closes a same-ID superseded review without reopening or deciding it", async () => {
+  const held = createHeld();
+  const records = [{ kind: "cpd-plan-review", model: [] as readonly unknown[],
+    data: { plan: "p1", review: "r1", surface: "chat", status: "pending" } as Record<string, unknown> }];
+  const calls: string[][] = [];
+  const messages: unknown[] = [];
+  let notifications = 0;
+  const flow = createPlanReview({
+    plan: "p1", held,
+    dialogs: createDialogs({ held, broadcast: message => { messages.push(message); }, stateChanged: () => {} }),
+    entries: async () => records,
+    write: async record => { records.push(record); },
+    readText: async () => { throw new Error("a superseded review must not load a summary"); },
+    cpd: async args => {
+      calls.push([...args]);
+      return { review: { id: "r1", status: "superseded", current: false } };
+    },
+    notifyDecision: async () => { notifications++; },
+  });
+  await flow.open("r1", "start");
+  assert.equal(reviewsFromEntries(records, "p1").reviews.get("r1")?.status, "superseded");
+  assert.equal(held.heldCount(), 0);
+  assert.deepEqual(messages, []);
+  assert.equal(notifications, 0);
+  assert.deepEqual(calls, [["plan", "show", "--plan", "p1"]]);
+});
+
 test("the production host starts a Lead turn for an approval recovered at startup", { timeout: 20_000 }, async () => {
   await withHost({
     stored: [{ kind: "cpd-plan-review", model: [], data: { plan: "p1", review: "r1", surface: "chat", status: "pending" } }],

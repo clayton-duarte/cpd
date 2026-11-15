@@ -183,7 +183,9 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
           await settle(pending, shown.status === "approved", typeof shown.feedback === "string" ? shown.feedback : undefined, shown.current !== false, true);
           return;
         }
-        if (isObject(shown) && typeof shown.id === "string" && reviewNumber(shown.id) > reviewNumber(review)) {
+        if (isObject(shown) && typeof shown.id === "string" && (
+          (shown.id === review && shown.status === "superseded") || reviewNumber(shown.id) > reviewNumber(review)
+        )) {
           closeSuperseded(pending);
           return;
         }
