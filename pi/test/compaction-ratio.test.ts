@@ -225,6 +225,16 @@ test("Manager compaction threshold follows the model input cap", async (t) => {
 	});
 });
 
+test("disabled durable compaction preserves effective settings without model metadata", () => {
+	const settings = { enabled: false, reserveTokens: 1234, keepRecentTokens: 567 };
+	const policy = compactionPolicy({
+		settings: () => settings,
+		agent: () => { throw new Error("disabled compaction must not read the model"); },
+		windowOf: () => { throw new Error("disabled compaction must not read the window"); },
+	});
+	assert.deepEqual(policy, settings);
+});
+
 test("disabled automatic compaction is respected by the idle fallback", async () => {
 	const { session, run } = rig({ enabled: false, over: true, checkResult: false });
 	assert.equal(await session._checkCompaction(msg("stop")), false);

@@ -21,10 +21,12 @@ export type CompactionSource = {
 /**
  * The live `settings.compaction` object: a getter, so every compaction decision derives the reserve at that moment.
  * `reserveTokens` is the derivation over the settings and the model `agent()` names with `windowOf`'s window; the
- * other fields come from the same `settings()` read. A model with no positive window keeps the settings' own value.
+ * other fields come from the same `settings()` read. Disabled compaction keeps the effective settings unchanged;
+ * enabled compaction requires a valid model window.
  */
 export function compactionPolicy(source: CompactionSource): CompactionSettings {
   const settings = source.settings();
+  if (settings.enabled === false) return { ...settings };
   const agent = source.agent();
   const window = agent === undefined ? undefined : source.windowOf(agent.provider, agent.modelId);
   const reserve = reserveTokensOf(settings, agent === undefined ? undefined : { ...agent, ...(window === undefined ? {} : { contextWindow: window }) });
