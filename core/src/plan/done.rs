@@ -57,19 +57,17 @@ pub(crate) fn check_complete(conn: &rusqlite::Connection, plan: &PlanId) -> Resu
 /// `done` is left alone. `just` names the Workflow this call merged and the time `gh` reported for it: that time, not the
 /// transaction time, is its `merged_at` in the Event. Whether the Plan became `done` in this call.
 ///
-/// A **Lead-less `shaping` Plan** (air-d19, air-d22) has no Workflow, so only the Job half of the guard applies: once it has at
-/// least one Job and every Job is final (`merged` or `cancelled`; a `draft`, `queued`, `running` or `failed` Job, or no Job at
-/// all, keeps it `shaping`), it moves `shaping -> done` with `done_at` set and one quiet `plan-done`
-/// `{workflows: [], turn: false}`; `locked_at` stays null. Idempotent.
+/// A `shaping` Plan with no Workflow settles once it has at least one Job and every Job is final (`merged` or
+/// `cancelled`): it moves `shaping -> done` with `done_at` set and one quiet `plan-done` `{workflows: [], turn: false}`.
+/// Both paired and historical Lead-less shaping Plans keep `locked_at` null. Idempotent.
 pub(crate) fn settle_done(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
     just: Option<(&WorkflowKey, &str)>,
 ) -> Result<bool, CpdError> {
-    // A Lead-less `shaping` Plan (air-d22): only the Job half of the guard applies, no Workflow condition.
-    let leadless: bool = tx
+    let shaping: bool = tx
         .query_row(
-            "SELECT 1 FROM plans WHERE id = ?1 AND phase = 'shaping' AND lead_session IS NULL",
+            "SELECT 1 FROM plans WHERE id = ?1 AND phase = 'shaping'",
             [plan.as_str()],
             |_| Ok(true),
         )
@@ -77,10 +75,11 @@ pub(crate) fn settle_done(
             rusqlite::Error::QueryReturnedNoRows => Ok(false),
             e => Err(e),
         })?;
-    if leadless {
+    if shaping {
         let settle: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1)
-               AND NOT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled'))",
+               AND NOT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled'))
+               AND NOT EXISTS (SELECT 1 FROM workflows WHERE plan = ?1)",
             [plan.as_str()],
             |r| r.get(0),
         )?;
@@ -89,7 +88,7 @@ pub(crate) fn settle_done(
         }
         let moved = tx.execute(
             "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE id = ?1 AND phase = 'shaping' AND lead_session IS NULL",
+              WHERE id = ?1 AND phase = 'shaping'",
             [plan.as_str()],
         )?;
         if moved == 0 {

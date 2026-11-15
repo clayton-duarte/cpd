@@ -509,8 +509,8 @@ fn insert_shaping(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
         rusqlite::params![c.session.as_str(), c.context.as_str(), c.id.as_str(), c.name, c.cwd, c.tier, c.by_user, c.runner.as_str()],
     )?;
     tx.execute(
-        "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
-         SELECT ?1, ?2, ?3, ?4, 'shaping', ?5, at FROM txns WHERE id = cpd_txn()",
+        "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at, shaping_origin)
+         SELECT ?1, ?2, ?3, ?4, 'shaping', ?5, at, 1 FROM txns WHERE id = cpd_txn()",
         rusqlite::params![
             c.id.as_str(),
             c.context.as_str(),
