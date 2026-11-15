@@ -3,6 +3,25 @@ import { test } from "node:test";
 import { CpdError } from "../../lib/cpd.ts";
 import { CONFIG, entry, line, rig } from "./rig.ts";
 
+test("a Plan completion with no session starts its durable Lead exactly once", { timeout: 20_000 }, async () => {
+  const r = rig();
+  try {
+    const hooks = await r.up();
+    const completion = line(48357, "job-merged", { session: null, data: { turn: true } });
+    hooks.onLine(completion);
+    hooks.onLine(completion);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(r.submitted.length, 1, "a filtered Plan event must not be dropped because its subject session is null");
+    assert.equal(r.submitted[0]!.requestId, "event:48357");
+    assert.equal(r.submitted[0]!.entry.data.delivered_to, CONFIG.session);
+    r.finish[0]!("done");
+    await r.until(() => r.states().includes("idle"));
+    assert.equal(hooks.cursor(), 48357);
+  } finally {
+    await r.stop();
+  }
+});
+
 test("runHost starts the follower at the cursor read from the stored entries", { timeout: 20_000 }, async () => {
   const r = rig({ stored: [entry(130, "job-failed"), entry(120, "pr-feedback"), { kind: "cpd-event", data: { id: 400, kind: "job-failed", delivered_to: "the-source" } }] });
   const hooks = await r.up();
