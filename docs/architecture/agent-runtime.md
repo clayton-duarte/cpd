@@ -2,8 +2,6 @@
 
 The **pi adapter is the agent runtime** (`hs-d802` (a record of machine `hs`), item 3). It is cpd's own code — the TypeScript package `pi/`, loaded in every pi session cpd starts — that binds pi sessions to the SDK: first messages, dialog serialization, titles and state reporting ([commands §15](../commands.md), [commands §15.1](../commands.md)). The adapter is **the only pi-specific code**: it turns Events into messages, reports agent states and runs the Plan review in the Lead's chat, and it calls only `cpd` commands — it never reads the database and never types into a pane ([commands §15](../commands.md)).
 
-This note documents the model in hs-d802 against today's docs. Where the model and the docs disagree, the discrepancy is named in place and sourced to [architecture-verification.md](../research/architecture-verification.md), which verified `hs-d802` claim by claim.
-
 ## cpd is pi-dependent by design
 
 pi is a **system dependency** of cpd, named beside `git`, `tmux >= 3.6` and `gh` ([contract §1.1](../contract.md)). The adapter is the only pi-specific code ([commands §15](../commands.md)); cpd starts pi for every Lead, Manager and Worker, for the title writer and for the distiller ([contract §6.6](../contract.md)).
@@ -21,7 +19,7 @@ This is the design stance, not an accident (hs-d802, item 3): cpd does not abstr
 
 ## The worker runner: pi and pi-durable
 
-The worker/lead runner is chosen by the `worker_runner` config key — exactly `"pi"` or `"durable"`, default `"pi"` — read once per Attempt and stored on it ([contract §8.2](../contract.md), [contract §8.1](../contract.md)); [CONTEXT — Worker runner](../CONTEXT.md) defines it as "what runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place)."
+The worker/lead runner is chosen by the `worker_runner` config key — exactly `"pi"` or `"durable"`, default `"pi"` — read once per Attempt and stored on it ([contract §8.2](../contract.md), [contract §8.1](../contract.md)); [CONTEXT — Worker runner](../../CONTEXT.md) defines it as "what runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place)."
 
 pi-durable is the headless runner built on `@earendil-works/pi-durable`: the **durable Worker runner** (`pi/durable-worker/main.ts`) and the **durable session host** (`pi/durable-host/main.ts`) ([contract §6.12](../contract.md), [contract §6.13](../contract.md), [contract §6.14](../contract.md)).
 
@@ -29,7 +27,7 @@ pi-durable is the headless runner built on `@earendil-works/pi-durable`: the **d
 
 ## tmux: still the host, marked for removal
 
-**tmux is the only host today.** The engine runs in a hidden session, the cockpit's panes are tmux panes, and Leads run in the cockpit ([contract §1.1](../contract.md), [contract §6.1](../contract.md)); [CONTEXT — Cockpit](../CONTEXT.md) says "tmux hosts the panes, ratatui draws the views." pi sessions themselves run in a tmux window ([contract §6.6](../contract.md)).
+**tmux is the only host today.** The engine runs in a hidden session, the cockpit's panes are tmux panes, and Leads run in the cockpit ([contract §1.1](../contract.md), [contract §6.1](../contract.md)); [CONTEXT — Cockpit](../../CONTEXT.md) says "tmux hosts the panes, ratatui draws the views." pi sessions themselves run in a tmux window ([contract §6.6](../contract.md)).
 
 hs-d802 (item 2) marks tmux **for removal once the pi → pi-durable migration completes** (hs-d802; see also the model's item 2). The durable runner and host already run with **no tmux pane** ([contract §6.12](../contract.md), [contract §6.13](../contract.md)).
 
@@ -48,7 +46,7 @@ The runtime sits on the SDK ([[sdk]]); it starts the three agent roles and the a
 - [contract §1.1](../contract.md) — system dependencies; tmux the only host
 - [contract §3.6](../contract.md), [contract §3.7](../contract.md) — Session states; `session-titles` titles
 - [commands §15](../commands.md) — the pi adapter's protocol ([§15.1](../commands.md), [§15.4](../commands.md), [§15.5](../commands.md))
-- [CONTEXT — Worker runner](../CONTEXT.md), [CONTEXT — Session](../CONTEXT.md), [CONTEXT — Cockpit](../CONTEXT.md)
+- [CONTEXT — Worker runner](../../CONTEXT.md), [CONTEXT — Session](../../CONTEXT.md), [CONTEXT — Cockpit](../../CONTEXT.md)
 - [ADR-0005](../adr/0005-cpd-cli-control-plane.md) — the CLI control plane keeps the path open to other agents
 - hs-d802, hs-d752 (records of machine `hs`; see [INDEX](INDEX.md)).
 - [architecture-verification.md](../research/architecture-verification.md) — item 3 and its disagreements

@@ -2,7 +2,7 @@
 
 ## How to read this glossary
 
-CPD (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there, except **Workflow**, which returns with a new meaning (pro-d136).
+Vocabulary for [CPD](README.md). The [contract](docs/contract.md) specifies behavior; the [command reference](docs/commands.md) specifies operations.
 
 The three layers: one agent, one deliverable and one scope each (pro-d536, pro-d537, pro-d538). This table is the definition:
 
@@ -21,7 +21,7 @@ The Jira words are shorthand for scale and ownership; the table is the definitio
 
 The one rule: **PR means only the pull request** on GitHub. Plan > Workflows > Jobs. History keeps the old words: ADRs, the archive, research, old Context records and applied migrations are never rewritten.
 
-An entry is a bold term, a parenthesis with its kind and the Context record that decided it, a colon, the definition, and an `_Avoid_:` line when words are to be avoided. The kinds are entity, phase, stage, step, state, role, mechanism, policy, other and retired. A definition says what a thing is, never how a command works: the contract and [commands.md](docs/commands.md) own that, and an entry points to them. An Avoid word that is also a command is meant as a noun. A word with several senses has one entry per sense, each with a qualified name.
+Definitions describe the concepts; command mechanics belong in the references above. `_Avoid_` names discouraged synonyms. Different senses have qualified names.
 
 ## Work units
 

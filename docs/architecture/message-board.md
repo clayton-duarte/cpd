@@ -10,15 +10,15 @@ A Session that learns something another Session needs — "the pull request open
 
 - **Producer** — the sending Session. `cpd board post <text> --to <ref>` writes one `board_posts` row, addressed to `manager` (the live Manager of the sender's Context, else `no_manager`), a Plan id (its live Lead Session; a Plan in phase `done` or `archived` is refused `plan_inactive`) or a Session id ([commands §10a.1](../commands.md)). The row keeps the sender's Session (`from_session`, null when there is none), the target's Context, the text and a null `read_at`.
 - **Consumer** — the target Session. `cpd board list` reads its unread posts, oldest first ([commands §10a.2](../commands.md)), and `cpd board take --session <id>` returns the unread posts and marks them read in the same transaction; it is internal, the pi adapter's message picker at turn start ([commands §10a.3](../commands.md); [commands §15.7](../commands.md)).
-- **Purpose** — keep the Context registry clean: the post is a message, not a record ([CONTEXT — Board post](../CONTEXT.md)).
+- **Purpose** — keep the Context registry clean: the post is a message, not a record ([CONTEXT — Board post](../../CONTEXT.md)).
 
 ## Never starts a turn
 
 `cpd board post` **appends no Event and never starts a turn** ([commands §10a.1](../commands.md); `hs-d514`, `hs-d802`). The target reads the post only when it is already taking a turn (`cpd board take`); the board cannot wake an idle Session. That is what makes it safe for routine agent-to-agent traffic.
 
-## Guarantee
-
-**Guarantee: a board post is delivered at the target's next turn and only then — it appends no Event and never starts a turn.** Reading marks the post read; a second `cpd board take` returns an empty list and changes nothing ([commands §10a.3](../commands.md)); `cpd board post` is not idempotent, each call is one post ([commands §10a.1](../commands.md)).
+Each `cpd board post` call creates a new post. A second `cpd board take` after
+reading returns an empty list and changes nothing
+([commands §10a](../commands.md)).
 
 The board is distinct from the two other queue-like things cpd keeps: the truthful store of what the teams know is the Context records ([[knowledge-plane]]), and what needs the User is the Inbox ([[attention-inbox]]); the board is neither.
 
@@ -32,6 +32,6 @@ The board is distinct from the two other queue-like things cpd keeps: the truthf
 ## Sources
 
 - [commands.md](../commands.md) — §10a (`board`), §15.7 (the adapter's turn start).
-- [CONTEXT.md](../CONTEXT.md) — Board post.
+- [CONTEXT.md](../../CONTEXT.md) — Board post.
 - [architecture-verification.md](../research/architecture-verification.md) — §9 (the two queue-like concepts).
 - Model: `hs-d802`, `hs-d514` (records of machine `hs`; see [INDEX](INDEX.md)).

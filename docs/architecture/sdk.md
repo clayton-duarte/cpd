@@ -1,23 +1,9 @@
 # The SDK
 
-`cpd SDK` names the whole of cpd as one programmable thing: the **core**, the
-**ledger** and the **engine** ([contract §1.1](../contract.md); `hs-d802` (a record of machine `hs`)). This note says what each part is and how
-they sit together. The vault's
-[architecture-verification.md](../research/architecture-verification.md) maps
-the claim to the contract sections that own it and records where the name does
-not match the docs: `contract.md` names four Rust crates
-(`cpd-core`, `cpd`, `cpd-tui`, `cpd-engine`) and no `SDK` string
-([contract §1.1](../contract.md)), so `SDK` is a name for the concept, not a
-fifth thing to build.
-
-## What the SDK is — and is not
-
-The SDK is the programmable whole — the library, the store and the loop that
-together run cpd's work. It is **not the interfaces**: the CLI (`cpd`), the
-cockpit (`cpd tui`) and the web UI are clients of the SDK, not parts of it
-([contract §1.1](../contract.md); see [[interfaces]]). It is also not a
-separate product to install: cpd ships one binary, and the SDK is how that
-binary's internals are named ([contract §1.1](../contract.md)).
+The SDK comprises the **core**, **ledger** and **engine**
+([CONTEXT — SDK](../../CONTEXT.md); `hs-d802`). It is a name for the
+programmable whole, not a separate product to install. The CLI, cockpit and web
+UI are its clients; see [[interfaces]].
 
 ## Core
 
@@ -32,7 +18,7 @@ a command, the engine and the pi adapter all call into it.
 ## Ledger
 
 The ledger is cpd's one store: one SQLite database per machine at
-`$CPD_HOME/cpd.db` ([contract §4.1](../contract.md); [CONTEXT — Ledger](../CONTEXT.md)).
+`$CPD_HOME/cpd.db` ([contract §4.1](../contract.md); [CONTEXT — Ledger](../../CONTEXT.md)).
 It holds two things at once:
 
 - the **typed rows** — the stored state of every object (Plans, Jobs, PRs,
@@ -46,7 +32,7 @@ It holds two things at once:
 The ledger is written under a **single-writer discipline**:
 
 - **one engine process** per machine writes the scheduled work
-  ([contract §3.7](../contract.md); [CONTEXT — Engine](../CONTEXT.md));
+  ([contract §3.7](../contract.md); [CONTEXT — Engine](../../CONTEXT.md));
 - **short-lived CLI transactions**: every write goes through cpd (a connection
   that is not a cpd process cannot write, because triggers call `cpd_txn()`),
   and one command is one write transaction for its state change, its `history`
@@ -61,14 +47,14 @@ The ledger is written under a **single-writer discipline**:
 ## Engine
 
 The engine is the tick loop: the one `cpd watch` per machine
-([contract §3.7](../contract.md); [CONTEXT — Engine](../CONTEXT.md)). Every
+([contract §3.7](../contract.md); [CONTEXT — Engine](../../CONTEXT.md)). Every
 `tick_seconds` it runs its ordered steps, `escalations` to `permanent-contexts` (`overdue-bump` is retired) — scheduling Jobs under one
 concurrency limit, watching liveness and timeouts, polling pull requests,
 reconciling the Inbox, curating Context records, and the rest (no Step sends a
 Slack message by itself: `inbox` only labels an overdue post `review overdue`, pro-d388)
 ([contract §3.7](../contract.md)). One per machine is the rule (D5): the engine
 is not a daemon per Plan or a scheduler per Workflow
-([CONTEXT — Engine](../CONTEXT.md)).
+([CONTEXT — Engine](../../CONTEXT.md)).
 
 The SWR sources split across two steps ([swr.md §12](swr.md)): **`pr-poll` owns the
 GitHub pass** — its poll and its outbox drain — and **`swr` runs every other SWR

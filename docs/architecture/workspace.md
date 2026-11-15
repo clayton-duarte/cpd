@@ -9,12 +9,12 @@ records where the model's "per-attempt worktrees" is only partly true. Related n
 passes through while its worktree lives), [[clocks]] (the engine clock that schedules the
 janitor). Vocabulary: today's CLI and tables still say `pr`/`prs`; this note uses
 **Workflow** where it points at the target words and quotes today's identifiers where it
-documents current behaviour ([CONTEXT — How to read this glossary](../CONTEXT.md)).
+documents current behaviour ([CONTEXT — How to read this glossary](../../CONTEXT.md)).
 
 ## One Workflow: the Lead Branch and the Lead worktree
 
 Each Workflow gets one long-lived **Lead worktree** and the **Lead Branch** checked out in
-it ([contract §7.1](../contract.md), [CONTEXT — Lead worktree](../CONTEXT.md)). It is
+it ([contract §7.1](../contract.md), [CONTEXT — Lead worktree](../../CONTEXT.md)). It is
 created at the Workflow's start — by `plan lock` for a Workflow with no needs and no base
 Workflow, or by engine `workflow-start` / `cpd pr start` for the others ([contract
 §7.1](../contract.md), [contract §3.8](../contract.md)).
@@ -43,7 +43,7 @@ Rule S brings the Lead worktree up to date after any mover, in any order, and st
 ## One Attempt: linear reuses the Lead worktree, parallel gets its own
 
 An **Attempt** is one execution of a Job by one fresh Worker session ([CONTEXT —
-Attempt](../CONTEXT.md)). Its worktree depends on whether it is linear or parallel
+Attempt](../../CONTEXT.md)). Its worktree depends on whether it is linear or parallel
 ([contract §7.2](../contract.md), [contract §7.4](../contract.md) "Linear vs parallel
 Attempts"):
 
@@ -116,7 +116,7 @@ worktrees and branches only; neither it nor the janitor touches a remote branch 
 - [commands §29](../commands.md) — `janitor`
 - [commands §23](../commands.md) — `prune`
 - [scripts/prune-worktrees.sh](../../scripts/prune-worktrees.sh) — now only `exec cpd prune`
-- [CONTEXT — Lead worktree](../CONTEXT.md), [CONTEXT — Attempt](../CONTEXT.md)
+- [CONTEXT — Lead worktree](../../CONTEXT.md), [CONTEXT — Attempt](../../CONTEXT.md)
 - [docs/research/architecture-verification.md](../research/architecture-verification.md) —
   the verification of `hs-d802`, section 7
 - `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)) — the model

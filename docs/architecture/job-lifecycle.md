@@ -2,7 +2,7 @@
 
 One Job moves from `draft` through `queued` and `running` to `merged`, with
 `failed` and `cancelled` as the other ways out ([contract §3.2](../contract.md);
-[CONTEXT — Attempt](../CONTEXT.md)). The work itself is one **Attempt**: an
+[CONTEXT — Attempt](../../CONTEXT.md)). The work itself is one **Attempt**: an
 Attempt is `starting`, `running` then `merging`, and it ends `merged`, `failed`
 or `cancelled` ([contract §3.4](../contract.md)). The diagram below (the vault's
 diagram **d**) is the attempt lifecycle; the tables and the cause list after it

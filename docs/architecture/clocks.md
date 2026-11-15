@@ -1,8 +1,6 @@
 # The clocks
 
-cpd runs two clocks, not one (`hs-d802` (a record of machine `hs`), item 5): the **engine loop clock** (`watch.tick_seconds`) and the **GitHub poll clock** (engine step `pr-poll`, `watch.pr_poll_seconds`). They are decoupled on purpose: the engine sleeps until the earlier of its next tick and `pr-poll`'s due time, so the poll is never held to a tick boundary ([contract §3.7](../contract.md)). Both keys live in the `[watch]` domain of `$CPD_HOME/config.toml` ([contract §8.2](../contract.md)); the loop they belong to is the one `cpd watch` per machine ([CONTEXT — Engine](../CONTEXT.md), [commands §12](../commands.md)).
-
-This note documents the model in hs-d802 against today's docs. Where the model and the docs disagree, the discrepancy is named in place and sourced to [architecture-verification.md](../research/architecture-verification.md), which verified `hs-d802` claim by claim.
+cpd runs two clocks, not one (`hs-d802` (a record of machine `hs`), item 5): the **engine loop clock** (`watch.tick_seconds`) and the **GitHub poll clock** (engine step `pr-poll`, `watch.pr_poll_seconds`). They are decoupled on purpose: the engine sleeps until the earlier of its next tick and `pr-poll`'s due time, so the poll is never held to a tick boundary ([contract §3.7](../contract.md)). Both keys live in the `[watch]` domain of `$CPD_HOME/config.toml` ([contract §8.2](../contract.md)); the loop they belong to is the one `cpd watch` per machine ([CONTEXT — Engine](../../CONTEXT.md), [commands §12](../commands.md)).
 
 ## The engine loop clock: `tick_seconds`
 
@@ -14,9 +12,9 @@ The engine runs its loop every `tick_seconds` — a decimal, minimum `0.1`, defa
 
 So ticks come at most twice a second, and the Inbox (`inbox`) and the Workflow starts (`workflow-start`) follow another process's commit within 500 ms plus the tick's own time; `tick_seconds` stays the longest wait ([contract §3.7](../contract.md)).
 
-The engine clock is **purely internal**: it is the `cpd watch` tick loop ([contract §3.7](../contract.md), [CONTEXT — Engine](../CONTEXT.md)). The loop schedules every Plan's Jobs under one concurrency limit (`scheduling`), watches liveness and timeouts (`liveness`), starts a Workflow once the Workflows it needs are merged (`workflow-start`), reads and writes the Inbox (`inbox`), curates Context records (`curation`) and titles Sessions (`session-titles`) ([CONTEXT — Engine](../CONTEXT.md), [contract §3.7](../contract.md)).
+The engine clock is **purely internal**: it is the `cpd watch` tick loop ([contract §3.7](../contract.md), [CONTEXT — Engine](../../CONTEXT.md)). The loop schedules every Plan's Jobs under one concurrency limit (`scheduling`), watches liveness and timeouts (`liveness`), starts a Workflow once the Workflows it needs are merged (`workflow-start`), reads and writes the Inbox (`inbox`), curates Context records (`curation`) and titles Sessions (`session-titles`) ([CONTEXT — Engine](../../CONTEXT.md), [contract §3.7](../contract.md)).
 
-> **Model vs docs.** hs-d802 calls the loop "`escalations` to `closed-pr-wake` except `pr-poll`" and says it "moves work from the Context phase to Dispatch." The docs put `pr-poll` *in* the step set (it is an E-step that runs at its own due time), remove `host-alert`, and describe the Context → Plan → Dispatch progression as the Manager's and the Lead's work, not the tick's ([architecture-verification.md](../research/architecture-verification.md), item 2). The step range is also stale in [CONTEXT — engine step](../CONTEXT.md), which says "`escalations` to `merge-reaction`" ([architecture-verification.md](../research/architecture-verification.md), item 2). This note follows the contract.
+> **Model vs docs.** hs-d802 calls the loop "`escalations` to `closed-pr-wake` except `pr-poll`" and says it "moves work from the Context phase to Dispatch." The docs put `pr-poll` *in* the step set (it is an E-step that runs at its own due time), remove `host-alert`, and describe the Context → Plan → Dispatch progression as the Manager's and the Lead's work, not the tick's ([architecture-verification.md](../research/architecture-verification.md), item 2). The step range is also stale in [CONTEXT — engine step](../../CONTEXT.md), which says "`escalations` to `merge-reaction`" ([architecture-verification.md](../research/architecture-verification.md), item 2). This note follows the contract.
 
 ```mermaid
 sequenceDiagram
@@ -35,7 +33,7 @@ sequenceDiagram
 
 Engine step `pr-poll` runs `cpd pr poll` (with no `--plan`) as a **subprocess** — a process boundary — `pr_poll_seconds` after the **end** of the previous poll, **never overlapping**, and **at its due time, not at the next tick**, or at once when a cpd action has requested a poll (the file `run/pr-poll-now`, removed as the poll starts and again before it reads GitHub: [contract §1.4](../contract.md), [contract §3.7](../contract.md) `pr-poll`) ([contract §3.7](../contract.md), [contract §8.2](../contract.md), [commands §9.2](../contract.md)). `pr_poll_seconds` defaults to `5` ([contract §8.2](../contract.md)). A poll of 1.3 s with `pr_poll_seconds = 5` and `tick_seconds = 5` runs every 6.3 s, not every 10 s, whether or not any Plan is in `deploy` ([contract §3.7](../contract.md)).
 
-One poll covers **every open pull request of the User**, any repo on github.com ([contract §7.6](../contract.md), [commands §9.2](../contract.md)); [CONTEXT — PR poll](../CONTEXT.md) calls it "the engine's poll, every 5 s, of the open pull requests of the User on GitHub, one search through `gh`." It watches the **external GitHub state after dispatch** and drives cpd's response ([contract §3.7](../contract.md) `pr-poll`, [contract §7.6](../contract.md)):
+One poll covers **every open pull request of the User**, any repo on github.com ([contract §7.6](../contract.md), [commands §9.2](../contract.md)); [CONTEXT — PR poll](../../CONTEXT.md) calls it "the engine's poll, every 5 s, of the open pull requests of the User on GitHub, one search through `gh`." It watches the **external GitHub state after dispatch** and drives cpd's response ([contract §3.7](../contract.md) `pr-poll`, [contract §7.6](../contract.md)):
 
 - it stores each pull request in the `pull_requests` table and appends `pr-feedback` for the Workflow that owns it (checks failed, changes requested, closed, approved, comments) ([contract §7.6](../contract.md), [commands §9.2](../commands.md));
 - when a pull request's `mergeable` becomes `conflicting` — or a merged base repoints it — it inserts an `update` Job for the Workflow ([contract §3.7](../contract.md) `pr-poll`, [contract §7.6](../contract.md), [commands §9.2](../commands.md));
@@ -105,6 +103,6 @@ The engine loop and the poll are served by the same core and the same store: [[s
 - [contract §7.6](../contract.md) — the PR poll
 - [commands §12](../commands.md) — `watch`
 - [commands §9.2](../commands.md) — `pr poll`
-- [CONTEXT — Engine](../CONTEXT.md), [CONTEXT — PR poll](../CONTEXT.md)
+- [CONTEXT — Engine](../../CONTEXT.md), [CONTEXT — PR poll](../../CONTEXT.md)
 - hs-d802 (records of machine `hs`; see [INDEX](INDEX.md)).
 - [architecture-verification.md](../research/architecture-verification.md) — items 2 and the disagreements on the two clocks

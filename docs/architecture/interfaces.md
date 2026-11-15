@@ -65,16 +65,6 @@ The web is framed by `hs-d753` too: like the cockpit, it is **one client of the
 core**, never a second interface of the engine, and the CLI-first rule applies to
 it ([architecture §6](../architecture.md); `hs-d753`).
 
-## Which interface is first-class, and why
-
-The CLI is first-class ([contract §1.1](../contract.md); `hs-d753`). The reason is the direction of dependency:
-the core is the programmable whole, the engine is headless, and both human
-interfaces (cockpit and web) attach to the same commands. No capability may exist
-only in a TUI, so a capability that the cockpit needs must be a command first
-(`hs-d753`). The cockpit is therefore a
-client of `cli`, not the other way round ([architecture §1.5](../architecture.md));
-the web follows the same rule ([architecture §6](../architecture.md)).
-
 ## Related notes
 
 The roles that use these interfaces are [[roles]]; the runtime the agents run

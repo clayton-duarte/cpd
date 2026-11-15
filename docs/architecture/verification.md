@@ -11,15 +11,15 @@ engine that polls), [[workspace]] (the worktrees the checks run in).
 ## What runs today
 
 **Mechanical checks at submit** ([contract §7.7](../contract.md), [contract
-§7.3](../contract.md) precondition 5, [CONTEXT — Mechanical checks](../CONTEXT.md)). Every
+§7.3](../contract.md) precondition 5, [CONTEXT — Mechanical checks](../../CONTEXT.md)). Every
 `attempt submit` runs, in the Attempt worktree: the tamper check ([contract
 §7.5](../contract.md)), the red-test guard for an `impl` Job, and the kind's check — a
 `test` Job must build and go red, an `impl` Job must build and go green, an `open` or
 `update` Job must resolve its policy. These are the checks a Worker fixes; the Lead runs
-none ([CONTEXT — Mechanical checks](../CONTEXT.md)).
+none ([CONTEXT — Mechanical checks](../../CONTEXT.md)).
 
 **The Gate at the merge** ([contract §7.4](../contract.md) step 6, [contract
-§7.3](../contract.md), [CONTEXT — Gate](../CONTEXT.md)). At an Attempt's merge the driver
+§7.3](../contract.md), [CONTEXT — Gate](../../CONTEXT.md)). At an Attempt's merge the driver
 runs the repo policy's hooks in the Attempt worktree — which, for a linear Job, is the
 Lead worktree ([contract §7.2](../contract.md)). One hook per gate:
 
@@ -33,10 +33,10 @@ A hook that fails ends the Attempt `failed`/`gate_failed` (exit 3) or `gate_erro
 §7.3](../contract.md), [contract §7.4](../contract.md)). With `gate.pr` or `gate.merge`
 `none` — cpd's shipped default, `core/src/policy/default.toml` — no hook runs and, where
 CI exists, the repo's CI is the check ([contract §8.3](../contract.md), [CONTEXT —
-Gate](../CONTEXT.md), [CONTEXT — CI](../CONTEXT.md)). **CI is not the Gate**: CI is the
+Gate](../../CONTEXT.md), [CONTEXT — CI](../../CONTEXT.md)). **CI is not the Gate**: CI is the
 GitHub checks on a pull request, and `pr.feedback.checks` decides whether a failing check
 raises `pr-feedback`; Gate, Quick check, Mechanical checks and CI are four distinct terms
-([CONTEXT — CI](../CONTEXT.md), [CONTEXT — Gate](../CONTEXT.md)).
+([CONTEXT — CI](../../CONTEXT.md), [CONTEXT — Gate](../../CONTEXT.md)).
 
 **The GitHub round-trip.** `pr open` pushes the Lead Branch (rule P, plain, never forced —
 [contract §7.4](../contract.md)), creates the pull request ready, never a draft ([contract
@@ -79,13 +79,13 @@ silently resolved ([architecture-verification.md §6 disagreements
 11 and 12](../research/architecture-verification.md)):
 
 - **The deprecation is already the default.** [contract §8.3](../contract.md) sets
-  `gate.merge = "none"` and `gate.pr = "none"`, and [CONTEXT — Gate](../CONTEXT.md) says
+  `gate.merge = "none"` and `gate.pr = "none"`, and [CONTEXT — Gate](../../CONTEXT.md) says
   "Where `gate.pr` is `none`, CI is the check where it exists." There is a *deprecated
   alias* (`[pr] gate`, [contract §8.3](../contract.md)), but no "marked for deprecation"
   state for the mechanism itself.
 - **The hook pairing.** The docs give one hook per gate — `pre-commit` is the **merge**
   gate and `pre-merge` is the **pre-PR** Gate ([contract §7.3](../contract.md), [CONTEXT —
-  Quick check](../CONTEXT.md), [CONTEXT — Gate](../CONTEXT.md)); the model's one line
+  Quick check](../../CONTEXT.md), [CONTEXT — Gate](../../CONTEXT.md)); the model's one line
   collapses the two.
 
 ```mermaid
@@ -154,8 +154,8 @@ Every arrow above is a documented claim: push by rule P and the merge at [contra
 - [contract §8.3](../contract.md) — the `gate` policy domain and its default
 - [commands §9.2](../commands.md) — `pr poll`
 - [commands §9.8](../commands.md) — `pr view`
-- [CONTEXT — Gate](../CONTEXT.md), [CONTEXT — Quick check](../CONTEXT.md), [CONTEXT —
-  Mechanical checks](../CONTEXT.md), [CONTEXT — CI](../CONTEXT.md)
+- [CONTEXT — Gate](../../CONTEXT.md), [CONTEXT — Quick check](../../CONTEXT.md), [CONTEXT —
+  Mechanical checks](../../CONTEXT.md), [CONTEXT — CI](../../CONTEXT.md)
 - [docs/research/architecture-verification.md](../research/architecture-verification.md) —
   the verification of `hs-d802`, section 6
 - `hs-d802` (a record of machine `hs`; see [INDEX](INDEX.md)) — the model
