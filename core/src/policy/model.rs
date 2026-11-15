@@ -404,4 +404,3 @@ fn direct_roles(
     }
     Ok(roles)
 }
-
