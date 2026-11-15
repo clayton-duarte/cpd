@@ -65,19 +65,17 @@ pub(crate) fn creation_lock(
     kind: &str,
     id: &str,
 ) -> Result<CreationLock, CpdError> {
-    creation_lock_until(
-        home,
-        kind,
-        id,
-        std::time::Instant::now() + Duration::from_secs(60),
-    )
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    creation_lock_with_remaining(home, kind, id, || {
+        deadline.saturating_duration_since(std::time::Instant::now())
+    })
 }
 
-fn creation_lock_until(
+fn creation_lock_with_remaining(
     home: &CpdHome,
     kind: &str,
     id: &str,
-    deadline: std::time::Instant,
+    remaining: impl Fn() -> Duration,
 ) -> Result<CreationLock, CpdError> {
     let dir = home.locks_dir();
     let path = dir.join(format!("{kind}-new-{id}.lock"));
@@ -114,7 +112,7 @@ fn creation_lock_until(
     let (mutex, wake) = local_registry();
     let mut held = mutex.lock().unwrap_or_else(|e| e.into_inner());
     while held.contains(&path) {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let remaining = remaining();
         if remaining.is_zero() {
             return Err(timed_out());
         }
@@ -133,7 +131,7 @@ fn creation_lock_until(
                 _local: local,
             });
         }
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let remaining = remaining();
         if remaining.is_zero() {
             return Err(timed_out());
         }
@@ -654,7 +652,10 @@ fn record_event(context: &ContextId, record: &Record, seq: i64, verb: &str) -> N
 mod creation_lock_tests {
     use super::*;
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::time::Instant;
+
+    fn expired_lock(home: &CpdHome, kind: &str, id: &str) -> Result<CreationLock, CpdError> {
+        creation_lock_with_remaining(home, kind, id, || Duration::ZERO)
+    }
 
     fn home(dir: &tempfile::TempDir) -> CpdHome {
         CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap()
@@ -664,26 +665,26 @@ mod creation_lock_tests {
     fn local_and_file_contention_use_the_same_deadline_and_release() {
         let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let home = home(&dir);
-        let held = creation_lock_until(&home, "context", "ctx", Instant::now()).unwrap();
-        let error = match creation_lock_until(&home, "context", "ctx", Instant::now()) {
+        let held = expired_lock(&home, "context", "ctx").unwrap();
+        let error = match expired_lock(&home, "context", "ctx") {
             Err(error) => error,
             Ok(_) => panic!("local contention must time out"),
         };
         assert_eq!(error.code(), ErrorCode::LockTimeout);
-        let unrelated = creation_lock_until(&home, "context", "other", Instant::now()).unwrap();
+        let unrelated = expired_lock(&home, "context", "other").unwrap();
         drop(unrelated);
         drop(held);
         let path = home.locks_dir().join("context-new-ctx.lock");
         let external = OpenOptions::new().write(true).open(path).unwrap();
         assert!(crate::lock::try_lock(&external).unwrap());
-        let error = match creation_lock_until(&home, "context", "ctx", Instant::now()) {
+        let error = match expired_lock(&home, "context", "ctx") {
             Err(error) => error,
             Ok(_) => panic!("file contention must time out"),
         };
         assert_eq!(error.code(), ErrorCode::LockTimeout);
         assert!(error.message().contains("Retry"));
         drop(external);
-        drop(creation_lock_until(&home, "context", "ctx", Instant::now()).unwrap());
+        drop(expired_lock(&home, "context", "ctx").unwrap());
     }
 
     #[test]
@@ -691,11 +692,11 @@ mod creation_lock_tests {
         let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let home = home(&dir);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let _held = creation_lock_until(&home, "plan", "fresh", Instant::now()).unwrap();
+            let _held = expired_lock(&home, "plan", "fresh").unwrap();
             panic!("injected failure");
         }));
         assert!(result.is_err());
-        drop(creation_lock_until(&home, "plan", "fresh", Instant::now()).unwrap());
+        drop(expired_lock(&home, "plan", "fresh").unwrap());
     }
 
     #[test]
@@ -707,9 +708,9 @@ mod creation_lock_tests {
         let target = dir.path().join("target");
         fs::write(&target, "unchanged").unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
-        assert!(creation_lock_until(&home, "context", "ctx", Instant::now()).is_err());
+        assert!(expired_lock(&home, "context", "ctx").is_err());
         assert_eq!(fs::read_to_string(target).unwrap(), "unchanged");
         fs::remove_file(path).unwrap();
-        drop(creation_lock_until(&home, "context", "ctx", Instant::now()).unwrap());
+        drop(expired_lock(&home, "context", "ctx").unwrap());
     }
 }
