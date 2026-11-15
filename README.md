@@ -80,7 +80,7 @@ State lives in `$CPD_HOME`, default `~/.cpd`: the database `cpd.db` (with its `-
 - [docs/contract.md](docs/contract.md): the normative contract
 - [docs/commands.md](docs/commands.md): the command reference
 - [docs/implementing.md](docs/implementing.md): where things go in the code
-- [docs/architecture.md](docs/architecture.md): the parts and the edges
+- [Architecture references](docs/architecture/INDEX.md)
 - [docs/adr/](docs/adr/): decisions
 - [docs/archive/cpd1/](docs/archive/cpd1/): cpd 1's docs, history only
 

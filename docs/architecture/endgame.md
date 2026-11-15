@@ -199,7 +199,7 @@ Prerequisite (already in flight, not a numbered step): **#1092** (retire CPD.app
 
 Reversal mechanism for every step: `cpd upgrade` rollback (merged in #1091: "build from green main, dry-run, swap and rollback"). Each step lands as a single revertable commit set, so `git revert` of that Plan's merge is the code-level undo.
 
-Open blocker before step (a): **the fate of the TUI cockpit.** `docs/architecture/interfaces.md` says the cockpit is tmux-hosted and is the human view. pro-d571 says there are no terminals in the client. Nothing decides whether `cpd tui` survives. Step (a) cannot delete tmux while the TUI depends on it. This is a question for the Lead, not an assumption this page makes.
+Open blocker before step (a): **the fate of the TUI cockpit.** The cockpit design in [contract §6.1](../contract.md#61-the-server) is tmux-hosted. pro-d571 says there are no terminals in the client. Nothing decides whether `cpd tui` survives. Step (a) cannot delete tmux while the TUI depends on it. This is a question for the Lead, not an assumption this page makes.
 
 ### (a) Durable Leads and Managers, then delete tmux
 

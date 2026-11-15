@@ -2955,6 +2955,16 @@ Decision pro-d584: for a review verdict of `changes` or `reject`, the feedback i
 - **`reject` with feedback** (33.6): whether the wire `reject` carries `feedback`, and how the WebUI collects it. Not decided.
 - **Host-held feedback file location** (33.5): whether the relative `feedback-<review>.md` resolves in `cpd`. Unverified.
 
+### 33.8 Approval dialogs
+
+Four dialogs stop a session until the User answers: `cpd_secret_approve`, `cpd_external_approve`, `cpd_host_approve` and `ask_user_question` (decision pro-d580). Each one is an Inbox item while it waits, and each is answered in the Inbox or in the WebUI.
+
+**Status: decided, not yet built** at base commit `b9b4aaec6`. Today the engine's `dialogs` rule (`core/src/inbox/rules.rs`) labels a waiting session `<who> asks you`, and a `dialog` row offers only Snooze and Dismiss. The rules below are the target.
+
+- **The Inbox item.** While a session waits on one of the four dialogs, the engine opens one `dialog` item for it at engine step `inbox` (contract §2.2 "Inbox item"), labelled `<agent> waits for your approval: <what>`. `<agent>` is the waiting session and `<what>` is what the dialog asks the User to decide. The item closes when the session stops waiting on that dialog, by an answer or by the dialog ending.
+- **Dual resolution (assumption A2).** An answer in the Inbox and an answer in the WebUI reach the same held dialog. The host holds one request per dialog (`pi/durable-host/held.ts`), and the first answer wins; the other surface then sees the dialog resolved and its item closes.
+- **The WebUI composer (assumption A3).** While a session waits on a dialog, the WebUI replaces the message composer with the dialog card, and restores the composer when the dialog resolves. The swap is already in `web/src/ui/ChatPane.tsx`, which draws the card in place of the composer whenever a dialog is open.
+
 ## 34. PWA shell: service worker, offline cache, engine banner, outbox, dedup, and HTTPS (Plan `pwa-shell`; Job `pwa-docs`)
 
 This section states the contract for the PWA shell: offline behavior, server deduplication, engine status banner, and static asset caching. The sections below describe the wire types, server-side dedup, outbox state machine, banner state machine, and HTTPS provisioning (deferred to pro-d571).

@@ -417,7 +417,7 @@ Every row except `engine-down` is wrapped in a shadcn `ContextMenu` (`context-me
 | (separator) | when any entry above is shown | |
 | `Approve` | `deploy` | `inbox.approve` with `row.id` |
 | `Claim` | `review-requested` | `inbox.claim` with `row.id` |
-| `Open Link`, `Copy Link` | `dialog` with `url` (a review Plan's reviewed PR; `docs/architecture/attention-inbox.md`) | `Open Link` opens `row.url` in a new tab (`noopener,noreferrer`); `Copy Link` copies `row.url` to the clipboard, as the `pr-ready` and `pr-closed` entry above does. A `dialog` row's click stays the Go to Lead of 2.6 |
+| `Open Link`, `Copy Link` | `dialog` with `url` (a review Plan's reviewed PR; [contract §2.2](../../../docs/contract.md#inbox-item)) | `Open Link` opens `row.url` in a new tab (`noopener,noreferrer`); `Copy Link` copies `row.url` to the clipboard, as the `pr-ready` and `pr-closed` entry above does. A `dialog` row's click stays the Go to Lead of 2.6 |
 | `Snooze 15 min`, `Snooze 1 h`, `Snooze until tomorrow 09:00` | every kind | `inbox.snooze` with `duration` `15m`, `1h`, `tomorrow` |
 | `Dismiss` | every kind | `inbox.dismiss` with `row.id` |
 
