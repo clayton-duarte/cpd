@@ -3245,7 +3245,7 @@ Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the databa
   - `kev-4b` unreachable or the judge errors: `pending`, `decided_by` NULL. The run then makes no further model call, so each later `duplicate` or `superseded` proposal of that run is written `pending` as well;
   - a disagreement, a verdict other than the proposal's reason (`independent` or `contradicts`), a quote not found or a wrong seq direction: the proposal is **dropped**, and its curation (`topic`, `short`) is still written.
   A `documented` proposal is written `approved` with `decided_by` `git-grep` and makes no model call. The distill output counts `approved` (the rows written `approved`) and `dropped` (the proposals dropped); `retire` counts every written row (commands.md §3.13).
-- **Who decides.** The User decides the `pending` retirements: `cpd context retire` decides them in one transaction, `decided_by` `user`, and appends one Event (§5.2). It is an internal command (commands.md §3.17) that the cockpit's checklist dialog runs when the User approves an Inbox item (`curate-retire`, §2.2); an agent's Session cannot run it (`user_only`: `CPD_SESSION` or `CPD_ATTEMPT` set in the environment; §6.1 says how the cockpit's panes and popups never carry them). Approved retirements **leave force** (the rule above), whoever approved them; `rejected` ones stay in force. No Context record is written for a retirement, so a retirement is not a record and cannot itself be superseded or retired.
+- **Who decides.** Automatic retirement is permitted (User decision, 2026-11-14), under the confirmation rules above. The User decides the `pending` retirements: `cpd context retire` decides them in one transaction, `decided_by` `user`, and appends one Event (§5.2). It is an internal command (commands.md §3.17) that the cockpit's checklist dialog runs when the User approves an Inbox item (`curate-retire`, §2.2); an agent's Session cannot run it (`user_only`: `CPD_SESSION` or `CPD_ATTEMPT` set in the environment; §6.1 says how the cockpit's panes and popups never carry them). Approved retirements **leave force** (the rule above), whoever approved them; `rejected` ones stay in force. No Context record is written for a retirement, so a retirement is not a record and cannot itself be superseded or retired.
 - **`decided_by` values** (pro-d13 D1, D2; a convention, no CHECK, §4.4): `user` (`context retire`), `kev-4b+gemini-3.8-flash` (a pair both models confirmed, or a sweep decision) and `git-grep` (a `documented` retirement).
 - **A rejected retirement is never proposed again** (R9 of hs-d592): a record is curated once (a `record_curations` row; the distiller's batch holds only uncurated records in force, and a line for an id outside the batch is ignored), and a record with a retirement row of any status gets no new proposal (the rule above); the Inbox counts only `pending`.
 - **Retired records stay queryable**: `context show --record <id>` prints one, and `context show` labels it `retired (<reason> <target>)`, as it labels a superseded one; it is never in a digest.
@@ -4030,7 +4030,7 @@ The generated tool definitions and the system prompt block are the same bytes on
 
 #### Removals
 
-- `context delete` and `context retire` leave the CLI schema (pro-d530). No op of `cpd_context` is either of them. §4.6 "Retirement" still names `cpd context retire` as the User's approval of pending retirements; this section does not change §4.6 (open point 2).
+- `context delete` leaves the CLI schema (pro-d530). `cpd_context` exposes neither deletion nor retirement approval. Automatic retirement and the User's `context retire` command for pending proposals remain as defined in §4.6.
 - `board post` and `session send` leave the tool surface, and their instructions leave the skills (Plan 3, `skills-to-tools`). Whether the CLI commands themselves are removed is for Plans 3 and 5.
 
 #### Tests the implementation Job must pin
@@ -4053,11 +4053,9 @@ Verification: Job `pi-extension-tools-ci-fix` verified that `node --test pi/test
 
 #### Open points
 
-1. **Framing** is decided above (NDJSON). The Lead confirms it; it resolves §5.8's open point 1 for `core.sock`.
-2. **`cpd context retire`.** pro-d530 removes `retire`; §4.6 keeps it as the User's approval command for pending retirements (hs-d549, pro-d13). The two conflict. Until the Lead decides, the tool surface follows pro-d530 and the CLI stays as §4.6 has it.
-3. **The User's answer to a Manager's escalation.** Its Inbox item kind and the way the User replies are not defined here; the WebUI (Plan 4) and the Inbox section (§2.2) must settle them.
-4. **The §4.6 `experimental.write_curation` flag**, once the hook is always on: whether it stays as the auditor's switch.
-5. **`cpd_resource.run` as a tool** does not exec; whether an agent needs the process form at all is open.
+1. **The User's answer to a Manager's escalation.** Its Inbox item kind and the way the User replies are not defined here; the WebUI (Plan 4) and the Inbox section (§2.2) must settle them.
+2. **The §4.6 `experimental.write_curation` flag**, once the hook is always on: whether it stays as the auditor's switch.
+3. **`cpd_resource.run` as a tool** does not exec; whether an agent needs the process form at all is open.
 
 ## 6. The tmux host
 

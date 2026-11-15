@@ -123,7 +123,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `plan_other_context` | 2 | a Manager ran one of those commands on a shaping Plan of another Context; `details` `{plan, plan_context, context}`, `plan_context` the Plan's Context and `context` the Manager's; nothing is written (air-d19, air-d22) |
 | `shaping_explore_only` | 2 | `job add` (§5.1) on a shaping Plan (`lead_session` null, phase `shaping` or `done`) with `--kind` other than `scout` or `research`, or with `--workflow`: a shaping Plan holds only explore Jobs; `details` `{plan, kind}` or `{plan, workflow}`; nothing is written (air-d19, air-d22) |
 | `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive`, `session unarchive` or `session resume` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11, §10.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: these commands are the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
-| `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
+| `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides pending retirements, so no agent's Session runs these commands (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
 | `args_invalid` | 2 | `context retire` (§3.17) named one id in both of its lists |
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
 | `push_rejected` | 3 | `pr push` found the remote branch moved (§9.9); `details.stderr` is git's |
@@ -956,7 +956,7 @@ Lists the pending retirements of the Context: the proposals that no model pair c
 
 | Precondition | Code | Exit |
 |---|---|---|
-| `CPD_SESSION` and `CPD_ATTEMPT` are not set in the environment: only the User decides (hs-d551). The cockpit's views and popups carry neither: cpd's tmux client removes `CPD_SESSION` and `CPD_ATTEMPT` along with `TMUX` and `TMUX_PANE` (contract §6.1 "The one place, in Rust"), so even a tmux server started from inside an agent never passes them on and only the panes of a Session (`session run`, contract §6.5) get `CPD_SESSION`, through their `Spawn` | `user_only` | 3 |
+| `CPD_SESSION` and `CPD_ATTEMPT` are not set in the environment: only the User decides pending proposals (hs-d551). The cockpit's views and popups carry neither: cpd's tmux client removes `CPD_SESSION` and `CPD_ATTEMPT` along with `TMUX` and `TMUX_PANE` (contract §6.1 "The one place, in Rust"), so even a tmux server started from inside an agent never passes them on and only the panes of a Session (`session run`, contract §6.5) get `CPD_SESSION`, through their `Spawn` | `user_only` | 3 |
 | a Context was selected (§1.3) | `context_required` | 2 |
 | the Context exists | `context_not_found` | 4 |
 | `--limit` is a positive integer (if given) | (parse error in validation) | 2 |
@@ -976,7 +976,7 @@ Idempotent: read-only.
 cpd context retire [--context <c>] [--approve <id,...>] [--reject <id,...>]
 ```
 
-Decides pending retirements, the proposals that no model pair confirmed (contract §4.6 "Retirement"; hs-d549, hs-d551, pro-d13). A row `approved` by a model pair or by `git-grep` is not pending: it is refused `curation_not_pending`. Called by the cockpit when the User approves the checklist dialog of a `curate-retire` item (§13.2): `--approve` the ticked rows, `--reject` the unticked. Internal (§1.1): hidden in clap. Only the User decides: no agent runs it. An archived Context or one under the floor shows no Inbox item, its pending proposals stay pending and the command still works when run by hand (R6 of hs-d592).
+Decides pending retirements, the proposals that no model pair confirmed (contract §4.6 "Retirement"; hs-d549, hs-d551, pro-d13). A row `approved` by a model pair or by `git-grep` is not pending: it is refused `curation_not_pending`. Called by the cockpit when the User approves the checklist dialog of a `curate-retire` item (§13.2): `--approve` the ticked rows, `--reject` the unticked. Internal (§1.1): hidden in clap. Only the User decides these pending proposals: no agent runs this command. An archived Context or one under the floor shows no Inbox item, its pending proposals stay pending and the command still works when run by hand (R6 of hs-d592).
 
 | Flag | Meaning |
 |---|---|

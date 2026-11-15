@@ -79,7 +79,7 @@ Currently implemented as a polling loop over SQLite `PRAGMA data_version` every 
 - Droppable client surface: `tui` (`cli.rs:98`), bare `cpd` (`cli.rs:205`), `desktop` (`cli.rs:119`), `argv-check` (`cli.rs:196`), `cockpit serve` (`cli.rs:263`), tmux `cpd tui view|action` (`moves.rs:82`), and `cpd-tui` crate dependency.
 
 ### 2.8 Code Drift from Context & Message Board Decisions
-- Today's code allows `cpd context delete` and `cpd context retire`, violating append-only persistence (pro-d530).
+- Context deletion conflicts with the persistence target (§4.3).
 - Board posts today never wake sessions (`board post` is passive), while `session send` arbitrarily restarts or interrupts without structured hierarchy (pro-d533).
 - Manager digest today repeatedly renders the entire Pending work block into context on every turn, burning tokens and polluting cache (pro-d532, pro-n418).
 - Timestamps injected into the system prompt break Anthropic's 5-minute prompt cache TTL (pro-n418).
@@ -130,7 +130,7 @@ CLI subcommands map directly to typed tool namespaces:
 
 ### 4.3 Context Persistence & Write-Time Curation (pro-d530, pro-d531, pro-d532)
 - **Persistent Facts Only**: The cpd context holds only decisions and lasting facts; progress and status go exclusively to Plan events (pro-d530). Only Managers and Leads write; Workers read.
-- **No Deletion**: `cpd context delete` and `retire` are permanently removed (pro-d530). Records are superseded (`--supersedes`) or marked documented (`--documented-in <pr>`). Superseded/documented records are excluded from default queries.
+- **Persistence**: `cpd context delete` is removed (pro-d530). Records remain stored when superseded, marked documented, or retired; retirement follows [contract §4.6](../contract.md#46-the-context-store).
 - **Write-Time Curation Hook**: When a record is written via `cpd_context.decide` or `note`, a synchronous pre-write hook scans for semantic near-duplicates, enforces `--supersedes` or requires explicit novelty rationale, and caps character length (pro-d531). Background curation acts only as an auditor.
 - **Retrieval by ID & Layered Digest**: Context reaches chats solely as record IDs, never inlined text (pro-d532). The Manager's turn digest selects IDs in prioritized layers (Plan/topic/bug links first, vector search fallback, tuned by citation rate). No pinned set. Leads receive IDs directly from Managers upon delegation.
 
@@ -228,7 +228,7 @@ graph TD
 
 ### Plan 2: `pi-extension-tools` (Typed pi Tools from Core Schemas)
 - **Scope**: Use `ts-rs` / `schemars` from `core-ts-types` (pro-d514) to generate TypeScript tool definitions. Implement pi extension connecting to `run/core.sock`. Export 12 domain tools (`cpd_plan`, `cpd_job`, `cpd_context`, `cpd_message`, etc.). Implement write-time curation hook (pro-d531) and escalation context bounce check (pro-d534). Ensure system prompt byte-stability (pro-n418).
-- **Removals**: Remove legacy `context delete` and `retire` commands from CLI schemas (pro-d530).
+- **Removals**: Remove `context delete` from CLI schemas (pro-d530); keep the pending-retirement approval command defined in contract §4.6.
 - **Tests**: Tool invocation tests against mock core socket; schema contract verification; prompt cache stability verification.
 
 ### Plan 3: `skills-to-tools` (Migrate Skills to Typed Tools)

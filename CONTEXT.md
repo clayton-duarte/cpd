@@ -30,7 +30,7 @@ The parent shared by two or more Plans: the shared knowledge between Plans that 
 _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 
 **Neighbour curation** (mechanism, Experimental Feature `write_curation`):
-Checking a new Context record against its nearest in-force records at write time. It proposes pending retirements only; the User approves them. Contract §4.6.
+Checking a new Context record against nearby in-force records at write time. Retirement follows [contract §4.6](docs/contract.md#46-the-context-store).
 
 **Vector cache** (entity):
 `$CPD_HOME/vectors.db`: the derived file of record embeddings and already-checked markers for Neighbour curation. Each embedding row carries `content_hash`, the SHA-256 (hex) of the text it embedded, so `context embed` can skip a row whose text is unchanged. Written by `context curate` and `context embed`, and also read by `context search`. Not the source of truth and never synced; deleting it loses nothing. Contract §4.6.
@@ -48,7 +48,7 @@ A Context's records, held only in the machine's database (tables `contexts` and 
 _Avoid_: wiki, notes folder
 
 **Distilled Context** (hs-d549, hs-d551; replacing hs-d194; the pilot of Epic B, auxiliary agents):
-The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records). The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (in-process full-text search over all records, no engine to install), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
+Classification and compression of Context records to support retrieval, with retirement governed by [contract §4.6](docs/contract.md#46-the-context-store). Source records remain authoritative.
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Plan** (entity, pro-d136; changed from R34):
