@@ -6917,6 +6917,14 @@ The four role defaults must **strictly ascend** on the ladder, `context_distill_
 
 A **policy** says how cpd and its agents work for one GitHub owner or repo: what cpd's commands do where the owners differ, and what the agents are told (hs-d288; design `docs/research/policy-architecture.md` Option 1, evidence `docs/research/repo-policy.md`; where they differ, the decisions cited here win). Policies have three scopes in precedence order (most specific wins): the built-in default, the machine scope, the owner scope, and the repo scope. The machine is never part of the key, but the machine, whether the same one or different across runs, so a policy resolves the same for every key on one machine and differently across machines (hs-d9, hs-d12).
 
+#### Owner role-selection resolver contract
+
+This is the decided contract for the independent owner-scoped resolver prerequisite (air-d195, air-d199, air-d208), not a claim that it is deployed or that curation or other consumers are wired to it. It does not change the existing Tier dispatch contract below or assert inference, credentials or runtime availability.
+
+The resolver selects a complete `role_selection` for an owner, independent of host or repo. An owner table replaces the shared selection atomically, not role by role. Without an owner table, the shared selection comes from optional `$CPD_HOME/policy/default.toml`, or from the compiled air-d195 defaults if that file does not provide one. `role_selection` is forbidden in host and repo policy. The owner `missionlane` must provide explicit roles using Bifrost; it cannot inherit the shared default or guessed model mappings (air-d199).
+
+A selection contains Manager, Lead and Worker, each with a full `provider/model` reference and a nonnegative integer effort. All three use one provider. Pi is the sole authority for whether each exact model and effort is supported: unsupported selections or unavailable capability evidence are refused, not guessed. Auxiliary consumers reuse the Worker selection (air-d208); there is no separate judge or host-specific role policy. Capability evidence is not proof of credentials, availability or successful inference.
+
 #### Model
 
 - A **domain** is a typed slot of a policy, owned by cpd's code. Its value has up to two parts: **typed keys**, closed values cpd's own code branches on, parsed once, unknown ones refused; and **`text`**, Markdown for agents, never parsed by cpd. A policy is the fixed set of domains below: every domain has a value, always.
