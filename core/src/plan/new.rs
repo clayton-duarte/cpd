@@ -28,6 +28,7 @@ struct Created {
     cwd: String,
     tier: String,
     runner: String,
+    by_user: bool,
 }
 
 fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
@@ -37,10 +38,10 @@ fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
     let Some(lead) = plan.lead_session.as_ref() else {
         return Err(CpdError::bad_row(format!("Plan {id} has no Lead")));
     };
-    let (name, cwd, tier, runner) = conn.query_row(
-        "SELECT name, cwd, tier, runner FROM sessions WHERE id = ?1",
+    let (name, cwd, tier, runner, by_user) = conn.query_row(
+        "SELECT name, cwd, tier, runner, by_user FROM sessions WHERE id = ?1",
         [lead.as_str()],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
     Ok(Some(Created {
         plan,
@@ -48,6 +49,7 @@ fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
         cwd,
         tier,
         runner,
+        by_user,
     }))
 }
 
@@ -84,6 +86,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
             && plan.plan.title == args.title.as_str()
             && plan.plan.jira == jira
             && plan.name == name
+            && plan.by_user == args.by_user
             && args.tier.is_none_or(|t| t.to_string() == plan.tier)
             && args.runner.is_none_or(|r| r.as_str() == plan.runner);
         if !same {
@@ -93,7 +96,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
             )
             .with("plan", summary(&plan.plan, &[])));
         }
-        return already(&mut env, &plan, brief.as_ref(), args.by_user);
+        return already(&mut env, &plan, brief.as_ref());
     }
     refuse_id_taken(&mut env, &id)?;
     refuse_archived(&context)?;
@@ -119,7 +122,8 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     env.store.write("plan new", |tx| insert(tx, &creation))?;
 
     // 2. The `plan` record; 3. the first message; 4. the Lead's window.
-    let finished = finish(&mut env, &creation, brief.as_ref(), "plan new")?;
+    let finished = finish(&mut env, &creation, brief.as_ref(), "plan new")
+        .map_err(|e| provisioning_error(&id, e))?;
     Ok(Output::success(json!({
         "plan": summary(&finished.plan, &[]),
         "lead": {"session": session, "name": name, "forked_from": Value::Null, "cwd": cwd,
@@ -308,7 +312,6 @@ fn already(
     env: &mut Env,
     created: &Created,
     brief: Option<&Text>,
-    by_user: bool,
 ) -> Result<Output, CpdError> {
     let plan = &created.plan;
     let machine = env.config.machine.clone();
@@ -353,7 +356,7 @@ fn already(
         )?)
     })?;
     let name = created.name.clone();
-    if !by_user && !env.home.lead_message(&plan.id).exists() {
+    if !created.by_user && !env.home.lead_message(&plan.id).exists() {
         write_message(env, plan, brief)?;
     }
     let (pane, window) = match pane {
@@ -402,59 +405,77 @@ fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
         .with("caller", role)
         .with("context", args.context.as_str()));
     }
-    if args.brief_file.is_some() || args.by_user || args.tier.is_some() || args.runner.is_some() {
-        return Err(CpdError::new(
-            ErrorCode::Usage,
-            "Drop --brief-file, --by-user, --tier and --runner for a shaping Plan.",
-        ));
-    }
+    let brief: Option<Text> = args.brief_file.as_deref().map(|f| read_text_file(f)?.parse()).transpose()?;
     let context = require_context(env, &args.context)?;
+    if let Some(tier) = args.tier {
+        let home = env.home.clone();
+        let models = env.store.read(|conn| crate::policy::model::models_of_context(conn, &home, args.context.as_str()))?;
+        let catalog = crate::config::catalog::load_with(&models, &mut env.store)?;
+        catalog.check(tier)?;
+        env.config.range(&catalog, crate::config::Role::Lead)?.check(tier, crate::config::Role::Lead)?;
+    }
     refuse_deleted(env, &id)?;
-    let matches = |plan: &PlanRow| {
-        plan.context == args.context
-            && plan.title == args.title.as_str()
-            && plan.jira == jira
-            && plan.phase == super::Phase::Shaping
-            && plan.lead_session.is_some()
+    let name = AgentKey::lead(args.context.clone(), id.clone()).to_string();
+    let matches = |created: &Created| {
+        created.plan.context == args.context
+            && created.plan.title == args.title.as_str()
+            && created.plan.jira == jira
+            && created.plan.phase == super::Phase::Shaping
+            && created.name == name
+            && created.by_user == args.by_user
+            && args.tier.is_none_or(|t| t.to_string() == created.tier)
+            && args.runner.is_none_or(|r| r.as_str() == created.runner)
     };
+    let conflict = |plan: &PlanRow| CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags."))
+        .with("plan", summary(plan, &[]));
     if let Some(plan) = env.store.read(|conn| row::find(conn, &id))? {
-        if !matches(&plan) {
-            return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags."))
-                .with("plan", summary(&plan, &[])));
-        }
-        return Ok(shaped(&plan));
+        let created = env.store.read(|conn| find(conn, &id))?;
+        return match created {
+            Some(created) if matches(&created) => already(env, &created, brief.as_ref()).map_err(|e| provisioning_error(&id, e)),
+            _ => Err(conflict(&plan)),
+        };
     }
     refuse_id_taken(env, &id)?;
     refuse_archived(&context)?;
     let cwd = crate::session::agent_cwd()?;
-    let name = AgentKey::lead(args.context.clone(), id.clone()).to_string();
     let session = SessionId::new_v4();
-    let tier = env.config.lead_tier.to_string();
-    let runner = env.config.new_lead_runner();
+    let tier = args.tier.unwrap_or(env.config.lead_tier).to_string();
+    let runner = args.runner.unwrap_or(env.config.new_lead_runner());
     let creation = Creation {
-        id: &id,
-        context: &args.context,
-        title: args.title.as_str(),
-        jira: jira.as_deref(),
-        name: &name,
-        cwd: &cwd,
-        tier: &tier,
-        runner,
-        by_user: false,
-        session: &session,
+        id: &id, context: &args.context, title: args.title.as_str(), jira: jira.as_deref(),
+        name: &name, cwd: &cwd, tier: &tier, runner, by_user: args.by_user, session: &session,
     };
-    let plan = env.store.write("plan new", |tx| {
+    let created = env.store.write("plan new", |tx| {
         if let Some(plan) = row::find(tx, &id)? {
-            if matches(&plan) {
-                return Ok(plan);
-            }
-            return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags."))
-                .with("plan", summary(&plan, &[])));
+            let created = find(tx, &id)?;
+            return match created {
+                Some(created) if matches(&created) => Ok(Some(created)),
+                _ => Err(conflict(&plan)),
+            };
         }
         insert_shaping(tx, &creation)?;
-        row::load(tx, &id)
+        Ok(None)
     })?;
-    Ok(shaped(&plan))
+    if let Some(created) = created {
+        return already(env, &created, brief.as_ref()).map_err(|e| provisioning_error(&id, e));
+    }
+    let finished = finish(env, &creation, brief.as_ref(), "plan new")
+        .map_err(|e| provisioning_error(&id, e))?;
+    Ok(Output::success(json!({
+        "plan": summary(&finished.plan, &[]),
+        "phase": finished.plan.phase.as_str(),
+        "lead_session": session,
+        "lead": {"session": session, "name": name, "forked_from": Value::Null, "cwd": cwd,
+                 "pane": finished.pane, "window": finished.window},
+        "record": finished.record,
+    })))
+}
+
+/// A persisted pair survives later provisioning failures and can be retried.
+fn provisioning_error(id: &PlanId, error: CpdError) -> CpdError {
+    CpdError::new(error.code(), format!("Plan {id} and its Lead are registered, but provisioning failed: {}. Retry plan new with the same flags.", error.message()))
+        .with("plan", id.as_str())
+        .with("cause", error.to_json())
 }
 
 /// Insert both sides and their events in the caller's transaction.
@@ -478,15 +499,6 @@ fn insert_shaping(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
     let event = NewEvent::session_registered(text, "lead", c.name, Value::Null, c.tier);
     append(tx, event.plan(c.id.clone()).session(c.session.clone()))?;
     Ok(())
-}
-
-/// The output of `plan new --shaping` (commands.md §4.1): `phase` and `lead_session` at the top level too.
-fn shaped(plan: &PlanRow) -> Output {
-    Output::success(json!({
-        "plan": summary(plan, &[]),
-        "phase": plan.phase.as_str(),
-        "lead_session": plan.lead_session,
-    }))
 }
 
 /// The Plan as `plan new` prints it; `prs` is empty for a new Plan.
@@ -603,8 +615,8 @@ const LEAD_POINTER: &str = "Context on demand: cpd context search <query> · cpd
 
 fn header(plan: &PlanRow) -> String {
     format!(
-        "You are the Lead of Plan {} \"{}\" in Context {}. Phase grounding: follow the cpd-lead skill.",
-        plan.id, plan.title, plan.context
+        "You are the Lead of Plan {} \"{}\" in Context {}. Phase {}: follow the cpd-lead skill.",
+        plan.id, plan.title, plan.context, plan.phase.as_str()
     )
 }
 
