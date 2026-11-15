@@ -65,9 +65,16 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
         })?;
         for role in [&roles.manager, &roles.lead, &roles.worker] {
             if super::model::model_ref(&role.model).is_err()
-                || role.model.split_once('/').is_none_or(|(p, _)| p != roles.provider)
+                || role
+                    .model
+                    .split_once('/')
+                    .is_none_or(|(p, _)| p != roles.provider)
             {
-                return Err(policy_invalid(file, Some("role_selection"), "invalid model or provider mismatch"));
+                return Err(policy_invalid(
+                    file,
+                    Some("role_selection"),
+                    "invalid model or provider mismatch",
+                ));
             }
         }
     }

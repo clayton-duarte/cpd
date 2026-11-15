@@ -1,4 +1,6 @@
-use super::{PolicyKey, SelectionCapabilities, check_file_names, resolve, resolve_owner_role_selection};
+use super::{
+    PolicyKey, SelectionCapabilities, check_file_names, resolve, resolve_owner_role_selection,
+};
 use crate::home::CpdHome;
 use crate::ids::{OwnerLogin, RepoName};
 
@@ -17,19 +19,28 @@ effort = 0
 "#;
 struct FakeCapabilities;
 impl SelectionCapabilities for FakeCapabilities {
-    fn supports(&self, _: &str, _: u8) -> bool { true }
+    fn supports(&self, _: &str, _: u8) -> bool {
+        true
+    }
 }
 fn setup() -> (tempfile::TempDir, CpdHome, PolicyKey) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     std::fs::create_dir_all(home.root().join("policy/missionlane")).unwrap();
-    let key = PolicyKey::Repo(OwnerLogin::parse("missionlane").unwrap(), RepoName::parse("app").unwrap());
+    let key = PolicyKey::Repo(
+        OwnerLogin::parse("missionlane").unwrap(),
+        RepoName::parse("app").unwrap(),
+    );
     (dir, home, key)
 }
 #[test]
 fn owner_roles_coexist_with_legacy_resolution() {
     let (_dir, home, key) = setup();
-    std::fs::write(home.root().join("policy/missionlane/owner.toml"), format!("[pr]\n{}", ROLES)).unwrap();
+    std::fs::write(
+        home.root().join("policy/missionlane/owner.toml"),
+        format!("[pr]\n{}", ROLES),
+    )
+    .unwrap();
     resolve_owner_role_selection(&home, &key, &FakeCapabilities).unwrap();
     check_file_names(&home).unwrap();
     resolve(&home, &key).unwrap();
