@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { readOnlySettings } from "../lib/settings-read.ts";
 import { callCpd, CpdError } from "../lib/cpd.ts";
 import { validatePackage } from "../lib/reload.ts";
 import { openConversation } from "../durable-worker/harness.ts";
@@ -58,6 +59,7 @@ async function classifyText(models: HostModels, text: string): Promise<number | 
 export function hostDeps(config: Config, models: HostModels): Deps {
   const real = models as unknown as ModelRuntime;
   return {
+    compactionSettings: () => readOnlySettings(config.cwd, getAgentDir()).getSettings().compaction ?? {},
     classify: (text) => classifyText(models, text),
     cpd: (args) => callCpd(exec as never, [...args], { timeoutMs: 30_000 }),
     resolveModel: (pattern) => {
