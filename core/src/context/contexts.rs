@@ -1,6 +1,11 @@
 //! The Context writes (contract §4.6): creating a Context and writing a
 //! record, each one database transaction.
 
+use std::fs::{self, File, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
+use std::time::Duration;
+
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -17,6 +22,52 @@ use crate::home::CpdHome;
 use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind, SessionId};
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
+
+/// Serialize one creation and its external provisioning without holding a store transaction.
+/// Lock files are persistent: unlinking a held inode would allow a second holder.
+pub(crate) fn creation_lock(home: &CpdHome, kind: &str, id: &str) -> Result<File, CpdError> {
+    let dir = home.locks_dir();
+    let path = dir.join(format!("{kind}-new-{id}.lock"));
+    let failed = |e: &dyn std::fmt::Display| {
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot use creation lock {}: {e}.", path.display()),
+        )
+        .with("lock", path.display().to_string())
+    };
+    fs::create_dir_all(&dir).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|e| failed(&e))?;
+    if !file.metadata().map_err(|e| failed(&e))?.is_file() {
+        return Err(failed(&"not a regular file"));
+    }
+    let clock = crate::ports::Ports::current().clock;
+    let wait = Duration::from_secs(60);
+    let deadline = clock.now() + wait;
+    loop {
+        if crate::lock::try_lock(&file).map_err(|e| failed(&e))? {
+            return Ok(file);
+        }
+        if clock.now() >= deadline {
+            return Err(CpdError::new(
+                ErrorCode::LockTimeout,
+                format!(
+                    "Another creation held {} for 60 seconds. Retry with the same flags.",
+                    Path::new(&path).display()
+                ),
+            )
+            .with("lock", path.display().to_string())
+            .with("waited_seconds", wait.as_secs()));
+        }
+        clock.sleep(Duration::from_millis(100));
+    }
+}
 
 /// A row of `contexts`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,6 +169,7 @@ impl<'a> Contexts<'a> {
         confirm_fallback: bool,
         by_user: bool,
     ) -> Result<(ContextRow, bool, Value), CpdError> {
+        let _creation_lock = creation_lock(home, "context", id.as_str())?;
         let existing = |conn: &Connection| -> Result<Option<ContextRow>, CpdError> {
             // A deleted Context keeps its row, and so its id: never reused (contract §2.2 "Deleted").
             let deleted: bool = conn

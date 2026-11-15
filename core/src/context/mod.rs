@@ -101,6 +101,7 @@ use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
+pub(crate) use contexts::creation_lock;
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
 

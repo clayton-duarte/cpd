@@ -56,6 +56,7 @@ fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
 pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     if args.shaping {
         let mut env = Env::open()?;
+        let _creation_lock = crate::context::creation_lock(&env.home, "plan", args.id.as_str())?;
         return shaping(&mut env, args);
     }
     let brief: Option<Text> = args
@@ -64,6 +65,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         .map(|f| read_text_file(f)?.parse())
         .transpose()?;
     let mut env = Env::open()?;
+    let _creation_lock = crate::context::creation_lock(&env.home, "plan", args.id.as_str())?;
     let id = args.id.clone();
     let name = AgentKey::lead(args.context.clone(), id.clone()).to_string();
     let jira = args.jira.as_ref().map(|j| j.as_str().to_owned());
