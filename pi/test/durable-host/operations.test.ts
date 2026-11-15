@@ -162,16 +162,15 @@ test("a retier while a run is pending is refused and reports switch-failed", asy
   assert.ok(typeof reports[0]!.detail === "string" && reports[0]!.detail!.length > 0, "switch-failed carries a detail");
 });
 
-test("the compaction ratio yields the reserve of the window by the lib rules", () => {
+test("the compaction reserve follows the input cap regardless of legacy settings", () => {
   const m = { provider: "anthropic", modelId: "sonnet", contextWindow: 200000 };
-  assert.equal(reserveTokensOf({}, m), 20000, "the built-in ratio 0.1");
-  assert.equal(reserveTokensOf({ reserveTokensRatio: 0.25 }, m), 50000, "the global ratio");
-  assert.equal(reserveTokensOf({ modelOverrides: { "anthropic/sonnet": { reserveTokensRatio: 0.5 } } }, m), 100000, "the model ratio");
-  assert.equal(reserveTokensOf({ modelOverrides: { "anthropic/sonnet": { reserveTokens: 12345 } } }, m), 12345, "the model absolute");
-  assert.equal(reserveTokensOf({ reserveTokens: 7777 }, m), 7777, "the global absolute when no ratio applies");
-  assert.equal(reserveTokensOf({ reserveTokens: 7777 }, { provider: "x", modelId: "y" }), 7777, "no positive window keeps the non-ratio value");
-  assert.throws(() => reserveTokensOf({ reserveTokensRatio: 2 }, m), /compaction\.reserveTokensRatio/);
-  assert.throws(() => reserveTokensOf({ modelOverrides: { "anthropic/sonnet": { reserveTokensRatio: 1 } } }, m), /compaction\.modelOverrides\["anthropic\/sonnet"\]\.reserveTokensRatio/);
+  for (const settings of [
+    {}, { reserveTokensRatio: 0.25 }, { reserveTokens: 7777 },
+    { modelOverrides: { "anthropic/sonnet": { reserveTokens: 12345, reserveTokensRatio: 1 } } },
+    { reserveTokensRatio: 2 },
+  ]) assert.equal(reserveTokensOf(settings, m), 40000);
+  assert.equal(reserveTokensOf({}, { ...m, contextWindow: 1000000 }), 800000);
+  assert.throws(() => reserveTokensOf({}, { provider: "x", modelId: "y" }), { code: "context_window_invalid" });
 });
 
 test("the code mode extension registers the codemode tool and the mcp server namespaces", async () => {

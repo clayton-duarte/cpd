@@ -2,12 +2,27 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sessionMessage } from "../../lib/delivery.ts";
 import type { CpdEvent, EventOf } from "../../lib/event.ts";
-import { ev } from "../fake.ts";
 import { inputOf } from "../../durable-host/deliver.ts";
 
-const event = (id: number, kind: string, over: Record<string, unknown> = {}) => ev(id, kind, { session: "s1", ...over }) as unknown as CpdEvent;
+const event = (id: number, kind: string, over: Record<string, unknown> = {}) => ({
+  id, kind, at: "2026-11-15T03:04:55.381Z", context: "c1", plan: "p1", job: null, attempt: null,
+  session: "s1", text: `text of ${kind} ${id}`, data: {}, ...over,
+}) as CpdEvent;
 const LEAD = { role: "lead", planLead: true };
 const entry = (e: CpdEvent) => ({ kind: "cpd-event", data: { id: e.id, kind: e.kind, delivered_to: "s1" } });
+
+test("Plan Lead events from the filtered stream may have no session or name a Worker", () => {
+  for (const subject of [null, "s-worker"]) {
+    for (const kind of ["job-merged", "job-failed", "pr-feedback", "escalation", "plan-done", "error"]) {
+      const e = event(48357, kind, { session: subject, data: { turn: true } });
+      const input = inputOf(e, "s1", LEAD);
+      assert.ok(input, `${kind} with subject ${subject} must reach the subscribed Lead`);
+      assert.equal(input.requestId, "event:48357");
+      assert.equal(input.entry.data.delivered_to, "s1");
+      assert.equal(input.whenBusy, kind === "escalation" || kind === "pr-feedback" ? "steer" : "followUp");
+    }
+  }
+});
 
 test("inputOf maps a session-message for the Session to a follow-up input that names the sender", () => {
   const user = event(7, "session-message", { data: { text: "hello", from: null } });

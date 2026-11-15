@@ -213,6 +213,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd protocol bug` | The bug record: report, mitigate, close, list, show, escalate (commands.md §33) | | |
 | `cpd protocol bug report` | Record a bug and open its protocol state (commands.md §33.1) | Lead, Manager | |
 | `cpd protocol bug mitigate` | Record the mitigation applied to an open bug (commands.md §33.2) | Lead, Manager | |
+| `cpd protocol bug associate-issue` | Associate an existing GitHub issue without recording a mitigation | Lead, Manager | |
 | `cpd protocol bug close` | Close a bug whose root fix and regression test are in (commands.md §33.3) | Lead, Manager | |
 | `cpd protocol bug list` | List bug records, id ascending (commands.md §33.4) | Manager, Lead, Worker | |
 | `cpd protocol bug show` | Show one bug record (commands.md §33.5) | Manager, Lead, Worker | |

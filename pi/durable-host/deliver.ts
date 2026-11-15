@@ -17,11 +17,12 @@ export type Input = {
 };
 
 /**
- * The input of an Event for this Session, or `undefined` (a no-op kind, another Session's Event, a kind the role does not take).
+ * The input of an Event from `events follow --session`, or `undefined` for a kind the role does not take.
+ * That subscription routes Plan events to their Lead even when the event's subject is null or a Worker.
+ * Only direct session messages require the subject to be this Session.
  * `sender` is the name of a `session-message`'s sender, read by the caller; `null` or absent: the id stands in.
  */
 export function inputOf(event: CpdEvent, session: string, info: { role: string; planLead: boolean }, sender?: string | null): Input | undefined {
-  if (event.session !== session) return undefined;
   const input = (content: string, whenBusy: Input["whenBusy"]): Input => ({
     content,
     requestId: `event:${event.id}`,
@@ -29,6 +30,7 @@ export function inputOf(event: CpdEvent, session: string, info: { role: string; 
     entry: { kind: "cpd-event", data: { id: event.id, kind: event.kind, delivered_to: session } },
   });
   if (event.kind === "session-message") {
+    if (event.session !== session) return undefined;
     const e = event as EventOf<"session-message">;
     const from = e.data.from;
     const message = input(sessionMessage(e, session, from === null ? null : { id: from, name: sender ?? null }).content, "followUp");

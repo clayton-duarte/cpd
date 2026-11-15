@@ -25,6 +25,10 @@ must fit before dispatch or be refused; it does not gain an exception.
 
 Recalculate for the selected model at every dispatch, including after switches.
 Existing harness compaction thresholds remain separate from the hard cap.
+The [production Manager threshold](../commands.md#1519-the-compaction-threshold-hs-d660)
+is derived from the active model’s valid window; its idle trigger and reserve
+are distinct from the dispatch guard, even where the threshold and cap match.
+Neither rule permits a guessed window or establishes runtime deployment.
 
 ## Failure and evidence
 

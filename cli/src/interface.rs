@@ -173,6 +173,7 @@ pub const TABLE: &[Entry] = &[
     ("version sync", &[Lead], false),
     ("protocol bug report", &[Lead, Manager], false),
     ("protocol bug mitigate", &[Lead, Manager], false),
+    ("protocol bug associate-issue", &[Lead, Manager], false),
     ("protocol bug close", &[Lead, Manager], false),
     ("protocol bug list", &[Manager, Lead, Worker], false),
     ("protocol bug show", &[Manager, Lead, Worker], false),
