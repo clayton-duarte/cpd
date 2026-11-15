@@ -949,14 +949,11 @@ pub enum CapabilityError {
 
 /// Load and validate an owner's complete role selection.
 pub fn resolve_owner_role_selection(
-    _home: &crate::home::CpdHome,
-    _key: &PolicyKey,
-    _capabilities: &dyn SelectionCapabilities,
+    home: &crate::home::CpdHome,
+    key: &PolicyKey,
+    capabilities: &dyn SelectionCapabilities,
 ) -> Result<RoleSelections, CpdError> {
-    Err(CpdError::new(
-        ErrorCode::Internal,
-        "NotImplemented: owner role selection",
-    ))
+    model::resolve_direct(home, key, capabilities)
 }
 
 #[cfg(test)]

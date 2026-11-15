@@ -237,3 +237,171 @@ pub fn check_one_provider(models: &Models, file: &Path) -> Result<(), CpdError> 
         )),
     }
 }
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectPolicy {
+    provider: String,
+    manager: super::RoleSelection,
+    lead: super::RoleSelection,
+    worker: super::RoleSelection,
+}
+
+pub(super) fn validate_direct(
+    roles: &super::RoleSelections,
+    owner: &crate::ids::OwnerLogin,
+    capabilities: &dyn super::SelectionCapabilities,
+) -> Result<(), String> {
+    let mut provider = None;
+    for role in [&roles.manager, &roles.lead, &roles.worker] {
+        let (p, m) = role.model.split_once('/').ok_or("invalid model")?;
+        if p.is_empty()
+            || m.is_empty()
+            || p.contains(char::is_whitespace)
+            || m.contains(char::is_whitespace)
+            || p.eq_ignore_ascii_case("copilot")
+            || provider.is_some_and(|v| v != p)
+        {
+            return Err("invalid or mixed provider".into());
+        }
+        provider = Some(p);
+        if owner.as_str() == "missionlane" && p != "bifrost" {
+            return Err("missionlane requires bifrost".into());
+        }
+        match capabilities.evidence(&role.model, role.effort) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(format!(
+                    "unsupported model effort: {} {}",
+                    role.model, role.effort
+                ));
+            }
+            Err(e) => return Err(format!("Pi capability: {e:?}")),
+        }
+    }
+    if roles.worker.model == roles.lead.model && roles.worker.effort >= roles.lead.effort {
+        return Err("worker effort must be below lead effort".into());
+    }
+    Ok(())
+}
+
+fn direct_file(path: &std::path::Path) -> Result<Option<DirectPolicy>, crate::error::CpdError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(crate::error::CpdError::new(
+                crate::error::ErrorCode::FileUnreadable,
+                format!("Cannot read {}: {e}", path.display()),
+            ));
+        }
+    };
+    let table: toml::Table = text
+        .parse()
+        .map_err(|e| super::load::policy_invalid(path, None, e))?;
+    table
+        .get("role_selection")
+        .map(|v| {
+            v.clone()
+                .try_into()
+                .map_err(|e| super::load::policy_invalid(path, Some("role_selection"), e))
+        })
+        .transpose()
+}
+
+pub(super) fn resolve_direct(
+    home: &crate::home::CpdHome,
+    key: &super::PolicyKey,
+    capabilities: &dyn super::SelectionCapabilities,
+) -> Result<super::RoleSelections, crate::error::CpdError> {
+    let dir = super::resolve::policy_dir(home);
+    let host = dir.join("host.toml");
+    if direct_file(&host)?.is_some() {
+        return Err(super::load::policy_invalid(
+            &host,
+            Some("role_selection"),
+            "not allowed at host scope",
+        ));
+    }
+    if let super::PolicyKey::Repo(owner, repo) = key {
+        let path = super::resolve::repo_path(home, owner, repo);
+        if direct_file(&path)?.is_some() {
+            return Err(super::load::policy_invalid(
+                &path,
+                Some("role_selection"),
+                "not allowed at repo scope",
+            ));
+        }
+    }
+    let owner_path = super::resolve::owner_path(home, key.owner());
+    let owner = direct_file(&owner_path)?;
+    if key.owner().as_str() == "missionlane" && owner.is_none() {
+        return Err(super::load::policy_invalid(
+            &owner_path,
+            Some("role_selection"),
+            "missionlane requires explicit roles",
+        ));
+    }
+    let shared_path = dir.join("default.toml");
+    let (mut roles, shared) = if let Some(p) = owner {
+        (direct_roles(p, &owner_path)?, false)
+    } else if let Some(p) = direct_file(&shared_path)? {
+        (direct_roles(p, &shared_path)?, true)
+    } else {
+        (
+            super::RoleSelections {
+                manager: super::RoleSelection {
+                    model: "openai/gpt-6.1-sol".into(),
+                    effort: 2,
+                },
+                lead: super::RoleSelection {
+                    model: "openai/gpt-6.1-terra".into(),
+                    effort: 2,
+                },
+                worker: super::RoleSelection {
+                    model: "openai/gpt-6-luna".into(),
+                    effort: 0,
+                },
+            },
+            true,
+        )
+    };
+    // The approved OpenAI shared worker permits effort 1 only on explicit evidence that 0 is unsupported.
+    if roles.worker.model == "openai/gpt-6-luna"
+        && roles.worker.effort == 0
+        && shared
+        && capabilities.evidence(&roles.worker.model, 0) == Ok(false)
+    {
+        roles.worker.effort = 1;
+    }
+    validate_direct(&roles, key.owner(), capabilities)
+        .map_err(|e| super::load::policy_invalid(&owner_path, Some("role_selection"), e))?;
+    Ok(roles)
+}
+
+fn direct_roles(
+    p: DirectPolicy,
+    path: &std::path::Path,
+) -> Result<super::RoleSelections, crate::error::CpdError> {
+    let roles = super::RoleSelections {
+        manager: p.manager,
+        lead: p.lead,
+        worker: p.worker,
+    };
+    if [&roles.manager, &roles.lead, &roles.worker]
+        .iter()
+        .any(|r| {
+            r.model
+                .split_once('/')
+                .is_none_or(|(provider, _)| provider != p.provider)
+        })
+    {
+        return Err(super::load::policy_invalid(
+            path,
+            Some("role_selection.provider"),
+            "provider does not match roles",
+        ));
+    }
+    Ok(roles)
+}
+

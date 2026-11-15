@@ -340,6 +340,102 @@ pub fn read_with(
     })
 }
 
+/// Pi-derived capability evidence for direct role selections, loaded without a store or inference.
+pub struct DirectCapabilities {
+    levels: BTreeMap<String, Option<Vec<String>>>,
+}
+
+impl DirectCapabilities {
+    /// Ask the installed Pi release about the exact model references supplied by the policy.
+    pub fn load(models: &[&str]) -> Result<Self, CpdError> {
+        Self::read_with(&*Ports::current().runner, &locate_pi()?, models)
+    }
+
+    /// The same Pi boundary using an injected runner and install.
+    pub fn read_with(
+        runner: &dyn Runner,
+        pi: &PiInstall,
+        models: &[&str],
+    ) -> Result<Self, CpdError> {
+        let node = node();
+        let mut cmd = Command::new(&node);
+        cmd.args(["--input-type=module", "-e", MODULE, "--"])
+            .arg(&pi.coding_agent_entry)
+            .arg(&pi.pi_ai_entry)
+            .args(
+                models
+                    .iter()
+                    .enumerate()
+                    .map(|(i, model)| format!("{i}={model}")),
+            )
+            .env("PI_MANAGED_INSTALL_ROOT", pi.agent_dir.join("install"))
+            .current_dir(&pi.agent_dir)
+            .stdin(Stdio::null());
+        let out = runner
+            .output(&mut cmd, "node", NODE_DEADLINE)
+            .map_err(|e| match e {
+                Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display())),
+                Failed::Timeout(e) => e,
+            })?;
+        if !out.status.success() {
+            return Err(
+                catalog_failed("the Pi catalog module failed.").with("stderr", tail(&out.stderr))
+            );
+        }
+        let raw: BTreeMap<String, Option<Vec<String>>> = serde_json::from_slice(&out.stdout)
+            .map_err(|e| catalog_failed(format!("invalid Pi catalog JSON: {e}")))?;
+        let mut levels = BTreeMap::new();
+        for (i, model) in models.iter().enumerate() {
+            let entry = raw
+                .get(&i.to_string())
+                .ok_or_else(|| catalog_failed(format!("Pi catalog omitted {model}")))?;
+            if let Some(names) = entry {
+                for name in names {
+                    if effort_of_level(name).is_none() {
+                        return Err(catalog_failed(format!(
+                            "Pi reports unknown thinking level {name:?} for {model}"
+                        )));
+                    }
+                }
+            }
+            levels.insert((*model).to_owned(), entry.clone());
+        }
+        Ok(Self { levels })
+    }
+}
+
+impl crate::policy::SelectionCapabilities for DirectCapabilities {
+    fn supports(&self, model: &str, effort: u8) -> bool {
+        self.evidence(model, effort) == Ok(true)
+    }
+
+    fn evidence(&self, model: &str, effort: u8) -> Result<bool, crate::policy::CapabilityError> {
+        let levels = self
+            .levels
+            .get(model)
+            .and_then(Option::as_ref)
+            .ok_or(crate::policy::CapabilityError::UnknownModel)?;
+        Ok(levels
+            .iter()
+            .any(|level| effort_of_level(level) == Some(Some(effort))))
+    }
+}
+
+/// Live Pi capability source for the direct policy resolver.
+pub struct PiSelectionCapabilities;
+
+impl crate::policy::SelectionCapabilities for PiSelectionCapabilities {
+    fn supports(&self, model: &str, effort: u8) -> bool {
+        self.evidence(model, effort) == Ok(true)
+    }
+
+    fn evidence(&self, model: &str, effort: u8) -> Result<bool, crate::policy::CapabilityError> {
+        DirectCapabilities::load(&[model])
+            .map_err(|_| crate::policy::CapabilityError::Unavailable)?
+            .evidence(model, effort)
+    }
+}
+
 #[cfg(test)]
 #[path = "catalog_cache_tests.rs"]
 mod cache_tests;
