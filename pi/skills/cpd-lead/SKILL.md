@@ -440,11 +440,11 @@ A Workflow that turns ready to post wakes you with `pr-feedback` reason `ready_t
 For an owner whose `cpd policy show --workflow <key>` has `pr.post.enabled` true:
 
 1. On `ready_to_post`, follow [Pull request review](#pull-request-review). The User posts it from the cockpit (the `ready for user review` row's Post action) or tells you in chat to run `cpd pr post --workflow <key>`; give the User the link it prints. When the policy requires approval, get the User's one-shot approval first with the tool `cpd_external_approve` (kind `pr_post`), then run the post; a refusal `approval_required` means exactly that: no approval yet. Send a Slack message only on the User's explicit instruction, with the tool (kind `slack_send`). A refusal of `cpd pr post` otherwise names what is missing: answer the bot comments, wait for CI, run `cpd pr poll` and try again.
-   - The post also turns on GitHub auto-merge for the pull request, with the method the repo allows (squash first): see `auto_merge.state` in the output (`commands.md` §9.8b). A stacked Workflow's auto-merge request waits until the Workflow is unstacked. A repo that does not allow auto-merge answers `auto_merge.state` `"not_allowed"`: nothing is wrong, cpd merges the pull request when it is ready, so run `cpd pr merge` after the human approval. Never run `gh pr merge --auto` by hand.
+   - Posting and review approval grant no merge authority. Follow [Final merge authority](../../../docs/contract.md#final-merge-authority) before requesting auto-merge or a direct merge.
 
 2. A posted pull request is reviewed by peers: `changes_requested` is addressed at once (one `work` Job per cohesive fix; see [Addressing](#addressing)). `comments` on a posted pull request: when a person's open item does not request changes, ask the User with `ask_user_question` before any Job or reply (address it, reply only, or leave it), then act as [Review comments](#review-comments) says.
 
-3. On `approved` (a human approved it on GitHub; a bot's approval never sends it), try to merge: `cpd pr merge <owner>/<repo>#<n>` (from the Event's `url`). When it refuses, tell the User why in one line and stop: no retry loop.
+3. On `approved`, report readiness to the User. Execute a merge only under [Final merge authority](../../../docs/contract.md#final-merge-authority). If the authorized command refuses, report why and stop.
 
 #### Addressing
 

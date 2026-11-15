@@ -8,7 +8,7 @@ Every Plan moves through three stages:
 
 - Context: the Manager gathers raw direction, explores, and interviews the User (Steps 01–05), then hands off to the Lead (Step 06).
 - Plan: the Lead clarifies, scopes, splits, outlines and locks the work with the User's approval (Steps 07–13).
-- Dispatch: Workers build the work into Lead Branches, and the Lead opens, reviews and merges the pull requests (Steps 14–20).
+- Dispatch: Workers build the work into Lead Branches, the Lead coordinates pull-request readiness, and the User authorizes each final merge (Steps 14–20).
 
 Three kinds of agent act on a Plan:
 
@@ -36,10 +36,10 @@ Three kinds of agent act on a Plan:
 | 14 | Document | dispatch | worker | Docs Commit | — |
 | 15 | Red tests | dispatch | worker | Red Test Commit | — |
 | 16 | Implement | dispatch | worker | Green Impl Commit | 16 · retry |
-| 17 | Merge into Lead Branch | dispatch | lead | Lead Branch Commit | — |
+| 17 | Merge into Lead Branch | dispatch | engine | Lead Branch Commit | — |
 | 18 | Open pull request | dispatch | lead | Pull Request | 16 · fix gate or CI |
 | 19 | Review and reply | dispatch | lead | PR Review / Reply | 16 · fix review |
-| 20 | Merge and close | dispatch | manager | Merged PR (done) | 10 · follow-up work |
+| 20 | Merge and close | dispatch | user | Merged PR (done) | 10 · follow-up work |
 
 ### 01 Intake raw input
 
@@ -119,7 +119,7 @@ Reviewers comment on the Pull Request. The Lead appends one fix Job per review r
 
 ### 20 Merge and close
 
-The Pull Request merges, the Plan becomes `done` and the Manager wakes. Follow-up work starts a new Outline, which loops back to Step 10.
+The User authorizes the final merge under [Final merge authority](contract.md#final-merge-authority). Once the Pull Request merges, the Plan becomes `done` and the Manager wakes. Follow-up work starts a new Outline, which loops back to Step 10.
 
 ## Documents
 
