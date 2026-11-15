@@ -14,7 +14,7 @@ export type CpdCommand =
   | { readonly kind: "config.concurrency.set"; readonly n: number }
   | { readonly kind: "context.list" }
   | { readonly kind: "context.curation"; readonly contextId: string; readonly limit: number }
-  | { readonly kind: "context.new"; readonly contextId: string; readonly title: string; readonly owner: string }
+  | { readonly kind: "context.new"; readonly contextId: string; readonly title: string; readonly owner: string; readonly byUser?: boolean }
   | { readonly kind: "context.manager"; readonly contextId: string }
   | { readonly kind: "context.rename"; readonly contextId: string; readonly title: string }
   | { readonly kind: "context.archive"; readonly contextId: string }
@@ -84,7 +84,7 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "context.list": return ["context", "list"];
     case "context.curation": return ["context", "curation", `--context=${cmd.contextId}`, `--limit=${cmd.limit}`];
     case "context.manager": return ["context", "manager", `--context=${cmd.contextId}`, "--by-user"];
-    case "context.new": return ["context", "new", cmd.contextId, `--title=${cmd.title}`, `--owner=${cmd.owner}`, "--by-user"];
+    case "context.new": return ["context", "new", cmd.contextId, `--title=${cmd.title}`, `--owner=${cmd.owner}`, ...(cmd.byUser ? ["--by-user"] : [])];
     case "context.rename": return ["context", "rename", cmd.contextId, `--title=${cmd.title}`];
     case "context.archive": return ["context", "archive", cmd.contextId];
     case "context.unarchive": return ["context", "unarchive", cmd.contextId];
