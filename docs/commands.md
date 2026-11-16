@@ -1309,10 +1309,10 @@ The only phase moved by hand (cpd 1 §11 `workflow phase`, kept). Any other targ
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `grounding` (already `plan`: `already`) | `illegal_transition` | 3 |
+| the phase is `grounding` or `shaping` (already `plan`: `already`) | `illegal_transition` | 3 |
 | no explore Job (`scout`, `research`) of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}` | `explore_pending` | 3 |
 
-Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux. In phase `grounding`, the explore check (pro-d374, assumption A2) runs in the same transaction, before the change: `details.jobs` is the sorted list of the keys of the Plan's Jobs of kind `scout` or `research` that are `queued`, `running` or `failed`; a `merged` or `cancelled` explore Job does not block, and a refusal writes nothing.
+Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: <old phase>, to: "plan"}`. This promotes a paired shaping Plan to Lead-owned planning, or advances a Plan from `grounding`; it creates no Session, `context-grounded` Event or tmux effect. The explore check (pro-d374, assumption A2) runs in the same transaction, before the change: `details.jobs` is the sorted list of the keys of the Plan's Jobs of kind `scout` or `research` that are `queued`, `running` or `failed`; a `merged` or `cancelled` explore Job does not block, and a refusal writes nothing.
 
 ```json
 {"ok": true, "plan": "pay-4521", "phase": "plan"}
