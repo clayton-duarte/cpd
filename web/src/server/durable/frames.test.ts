@@ -434,3 +434,4 @@ for (const protocol of [1, 2] as const) {
  expect(loaded.transcript.items.map(i => i.id)).toEqual(["u:2"]);
  });
 }
+

@@ -179,3 +179,4 @@ it("a lone tool run is a collapsed chain with one step", () => {
   expect(m.container.querySelector('[data-kind="tool"]')).toBeNull();
   m.unmount();
 });
+
