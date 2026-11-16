@@ -160,6 +160,8 @@ fn cpd_on_fake_ports_returns_a_refusal_as_a_failure_envelope() {
 #[test]
 fn cpd_in_on_fake_ports_runs_in_the_directory_and_restores_it() {
     let fx = fx();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     let before = std::env::current_dir().unwrap();
     let elsewhere = fx.env.root().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
@@ -186,6 +188,8 @@ fn cpd_in_on_fake_ports_runs_in_the_directory_and_restores_it() {
 #[test]
 fn cpd_with_on_fake_ports_sets_the_variables_for_the_call_and_restores_them() {
     let fx = fx();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
 
     fx.cpd_with(
         fx.env.root(),
@@ -580,6 +584,8 @@ fn run_launch_runs_the_recorded_cpd_through_run_with_and_returns_its_run() {
 #[test]
 fn run_launch_sets_the_launch_variables_for_the_run_and_restores_them() {
     let fx = fx();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     let launch = Launch {
         env_set: vec![("CPD_SESSION".to_owned(), "s1".to_owned())],
         ..launch(&["context", "new", "c1", "--title", "T", "--owner", "acme"])
@@ -602,6 +608,8 @@ fn run_launch_sets_the_launch_variables_for_the_run_and_restores_them() {
 #[test]
 fn run_launch_removes_the_variables_the_launch_removes_for_the_run() {
     let fx = fx();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     let launch = Launch {
         env_remove: vec!["CPD_SESSION".to_owned()],
         ..launch(&["context", "new", "c1", "--title", "T", "--owner", "acme"])
@@ -623,6 +631,8 @@ fn run_launch_removes_the_variables_the_launch_removes_for_the_run() {
 #[test]
 fn run_launch_runs_in_the_launch_directory_and_restores_the_directory() {
     let fx = fx();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     let before = std::env::current_dir().unwrap();
     let there = fx.env.root().join("there");
     std::fs::create_dir_all(&there).unwrap();
