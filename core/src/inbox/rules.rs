@@ -728,7 +728,6 @@ fn review_requested(
         }
     }
     let lookup = team::lookup_from_store(store, &refs)?;
-    super::review_plan::finish_closed(store, &lookup)?;
     if posts.is_empty() {
         return Ok(Vec::new());
     }
