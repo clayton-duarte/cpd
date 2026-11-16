@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act } from "react";
+import { act, createElement } from "react";
+import typesetCss from "../../lib/typeset.css?raw";
 import { createRoot } from "react-dom/client";
 import type { Components } from "react-markdown";
 import "../../testing/render.tsx";
@@ -12,6 +13,12 @@ vi.mock("react-markdown", () => ({
   default: (props: { children: string; components?: Components }) => {
     calls.push(props.children);
     capturedComponents = props.components;
+    if (props.children.startsWith("| Product |")) {
+      const rows = props.children.split("\n").filter((_, index) => index !== 1);
+      const cells = rows.map((row) => row.split("|").slice(1, -1).map((cell) => cell.trim()));
+      const tableChildren = <><thead><tr>{cells[0]!.map((cell) => <th key={cell}>{cell}</th>)}</tr></thead><tbody>{cells.slice(1).map((row) => <tr key={row[0]}>{row.map((cell) => <td key={cell}>{cell}</td>)}</tr>)}</tbody></>;
+      return createElement(props.components?.table ?? "table", {}, tableChildren);
+    }
     return <p>{props.children}</p>;
   },
 }));
@@ -50,6 +57,33 @@ describe("splitMarkdown", () => {
 });
 
 describe("Markdown", () => {
+  it("keeps wide Markdown tables accessible in a scrollable region", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    mounted = { unmount() { act(() => root.unmount()); container.remove(); } };
+    const markdown = "| Product | Description | Quantity |\n| --- | --- | --- |\n| Alpha | A very long description for a wide table | 12345 |\n| Beta | Another long description for a wide table | 67890 |";
+    act(() => root.render(<Markdown text={markdown} />));
+
+    const table = container.querySelector("table");
+    expect(table).not.toBeNull();
+    expect(Array.from(table!.querySelectorAll("tr"), (row) =>
+      Array.from(row.querySelectorAll("th, td"), (cell) => cell.textContent),
+    )).toEqual([
+      ["Product", "Description", "Quantity"],
+      ["Alpha", "A very long description for a wide table", "12345"],
+      ["Beta", "Another long description for a wide table", "67890"],
+    ]);
+    expect(table!.closest(".typeset.typeset-chat")).not.toBeNull();
+    const region = table!.closest<HTMLElement>(".typeset-scroll");
+    expect(region, "table must be inside the existing scroll wrapper").not.toBeNull();
+    expect(region!.getAttribute("role")).toBe("region");
+    expect(region!.getAttribute("aria-label")?.trim()).toBeTruthy();
+    expect(region!.tabIndex).toBe(0);
+    // CSS contract only: jsdom does not provide evidence of browser geometry.
+    expect(typesetCss).toMatch(/&:where\(\.typeset-scroll\)\s*\{[^}]*overflow-x:\s*auto/s);
+    expect(typesetCss).toMatch(/&:where\(\.typeset-scroll table\)\s*\{[^}]*width:\s*max-content;[^}]*max-width:\s*none/s);
+  });
   it("Markdown re-renders only the segment that changed", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
