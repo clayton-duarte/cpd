@@ -11,8 +11,9 @@ const CONFIG: &str = "version = 1\nmachine = \"m1\"\n";
 
 /// An `Fx` whose `$CPD_HOME` has the config every command but `config` needs.
 fn fx() -> Fx {
-    let fx = Fx::new();
-    fx.env.write_config(CONFIG);
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     fx
 }
 
