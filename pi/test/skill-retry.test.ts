@@ -32,7 +32,7 @@ test("a failed open or update Job is retried and never cancelled because a cance
   const bullet = line(section(lead, "#### Failed Jobs"), "- **A Workflow's open or update Job**");
   const check = line(section(lead, "#### Mechanical checks"), "- **`job-failed` of the open Job**");
   for (const l of [row, bullet, check]) {
-    assert.match(l, /`cpd job retry <k> --tier <T>`/);
+    assert.match(l, /(?:`cpd job retry <k>`|request a retry with a valid selection)/);
     assert.match(l, /never cancel/i);
   }
   assert.match(bullet, /commands\.md §5\.3/);
