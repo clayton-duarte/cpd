@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 144
+-- cpd-migration: breaking after 145
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
   kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug', 'green-unmerged')),

@@ -2410,7 +2410,7 @@ CREATE INDEX events_session ON events(session, id);
 -- ---------- Inbox items (§2.2) ----------
 CREATE TABLE inbox_items (
   id            INTEGER PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug')),  -- drafts-parked: hs-d731, hs-d733 (the migration that adds it is named by the PR that builds the kind); refusal-alert: migration 20261108T0600-refusal-alert-kind (Plan `agent-refusals`, §2.2, §3.7 refusal-threshold); models-changed: migration 20261102T1200-models-changed (pro-d13, pro-d16); deploy: migration 20261102T0900-deploy-kind (pro-d100); curate-retire, curate-docs: migration curation (hs-d549, hs-d551; `curate-docs` history only since pro-d327, the CHECK keeps it); the last four: migration 0013; loop-guard: migration loop-guard (hs-d552, hs-d571); review-waiting removed by migration drop-plannotator (hs-d738); pr-closed: migration `<YYYYMMDDTHHMM>-pr-closed-kind` (Plan closed-unmerged, §4.5); bug: migration `20261109T2108-bug-protocol-breach` (air-d104, §4.5)
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug', 'green-unmerged')),  -- drafts-parked: hs-d731, hs-d733 (the migration that adds it is named by the PR that builds the kind); refusal-alert: migration 20261108T0600-refusal-alert-kind (Plan `agent-refusals`, §2.2, §3.7 refusal-threshold); models-changed: migration 20261102T1200-models-changed (pro-d13, pro-d16); deploy: migration 20261102T0900-deploy-kind (pro-d100); curate-retire, curate-docs: migration curation (hs-d549, hs-d551; `curate-docs` history only since pro-d327, the CHECK keeps it); the last four: migration 0013; loop-guard: migration loop-guard (hs-d552, hs-d571); review-waiting removed by migration drop-plannotator (hs-d738); pr-closed: migration `<YYYYMMDDTHHMM>-pr-closed-kind` (Plan closed-unmerged, §4.5); bug: migration `20261109T2108-bug-protocol-breach` (air-d104, §4.5)
   urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'blue', 'cyan', 'white')),
   subject       TEXT NOT NULL CHECK (length(subject) >= 1),
   context       TEXT REFERENCES contexts(id),
@@ -2433,6 +2433,27 @@ CREATE TABLE inbox_items (
 ) STRICT;
 CREATE UNIQUE INDEX inbox_items_open ON inbox_items(kind, subject, urgency) WHERE closed_at IS NULL;
 CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
+
+CREATE TABLE green_unmerged_periods (
+  pull_request INTEGER PRIMARY KEY REFERENCES pull_requests(id),
+  since INTEGER NOT NULL,
+  alerted INTEGER NOT NULL CHECK (alerted IN (0, 1)),
+  manager_told INTEGER NOT NULL DEFAULT 0 CHECK (manager_told IN (0, 1))
+) STRICT;
+
+-- A non-green observation breaks the period even if it returns to green before the next tick.
+CREATE TRIGGER green_unmerged_pr_reset AFTER UPDATE OF checks, state ON pull_requests
+WHEN NEW.state != 'open' OR NEW.checks != 'passed'
+BEGIN
+  DELETE FROM green_unmerged_periods WHERE pull_request = NEW.id;
+END;
+CREATE TRIGGER green_unmerged_workflow_reset AFTER UPDATE OF status, pull_request ON workflows
+WHEN OLD.pull_request IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM workflows WHERE pull_request = OLD.pull_request AND status = 'open'
+)
+BEGIN
+  DELETE FROM green_unmerged_periods WHERE pull_request = OLD.pull_request;
+END;
 
 -- ---------- PR posts (pro-d64, pro-d65, pro-d117; Plan pr-post; migration pr-posts, then pr-auto-merge, which adds the last two columns with ALTER TABLE ADD COLUMN; the CHECK tying them is the auto_merge column's own; the repeat bump (pro-d382, §4.4 "The repeat bump") adds last_posted_at the same way) ----------
 CREATE TABLE pr_posts (
