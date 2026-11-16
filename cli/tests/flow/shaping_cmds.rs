@@ -1,12 +1,5 @@
-//! `plan new --shaping` and paired ownership of a shaping Plan (commands.md §4.1 "A Manager on a
-//! shaping Plan", §5.1–§5.4, §6.2–§6.5, §8.2; contract §2.2 "Explore Jobs", §3.1 "The Context's Manager"; air-d19,
-//! air-d22; assumptions A1–A4).
-//!
-//! A **Manager** is a Session with `role = manager` in a Context (`context manager`), and a **Lead** is the role of
-//! an existing Plan (`plan new`). Every command runs in this process (`Fx::with_ports`) on the fake tmux and the fake
-//! pi install, against a temporary `$CPD_HOME`: no real tmux, git, gh or pi is ever started.
-//!
-//! `plan new --shaping` does not exist yet in the base, so every test here is red until the feature lands.
+//! Paired shaping ownership and its ordinary Plan event routing (pro-d561).
+//! All external ports use fakes.
 
 use crate::common;
 
@@ -51,11 +44,11 @@ fn setup() -> Fx {
         })
         .collect();
     fx.env.sql(&rows);
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
     .ok();
-    fx.cockpit();
     fx
 }
 
@@ -114,15 +107,6 @@ fn explore_spec(env: &TestEnv, name: &str) -> String {
     )
 }
 
-/// The five-field Spec of a `work` Job.
-fn work_spec(env: &TestEnv, name: &str) -> String {
-    spec_file(
-        env,
-        name,
-        &json!({"goal": "g", "context": "c", "touches": ["src/a.rs"], "acceptance": ["b"], "out_of_scope": []}),
-    )
-}
-
 /// `cpd job add <key> --kind <kind> --tier <tier> --spec <spec>` on `plan`, run by `manager`.
 fn add_kind(
     fx: &Fx,
@@ -176,68 +160,26 @@ fn events(fx: &Fx, kind: &str) -> Vec<Value> {
         .clone()
 }
 
-fn window_names(fx: &Fx) -> Vec<String> {
-    fx.tmux_state()
-        .map(|state| state.windows().into_iter().map(|w| w.name).collect())
-        .unwrap_or_default()
-}
-
 // ---------- plan new --shaping ----------
 
 #[test]
-fn shaping_cmds_manager_plan_new_shaping_creates_leadless_plan() {
+fn shaping_cmds_shaping_creates_paired_lead() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-
     let out = new_shaping(&fx, &manager, "ctx", "shape1");
-    assert_eq!(
-        out["plan"],
-        json!({"id": "shape1", "context": "ctx", "title": "Plan shape1", "jira": null, "phase": "shaping", "lead_session": null, "workflows": []}),
-        "{out}"
-    );
-    assert_eq!(out["phase"], json!("shaping"), "{out}");
-    assert_eq!(out["lead_session"], Value::Null, "{out}");
-
-    let (phase, lead): (String, Option<String>) = fx.env.read(|c| {
-        c.query_row(
-            "SELECT phase, lead_session FROM plans WHERE id = 'shape1'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-    });
-    assert_eq!(phase, "shaping");
-    assert_eq!(lead, None, "a shaping Plan has a null lead_session");
-    assert_eq!(
-        count(&fx, "sessions"),
-        1,
-        "only the Manager's Session exists: no Lead Session"
-    );
-}
-
-#[test]
-fn shaping_cmds_plan_new_shaping_starts_no_lead_session() {
-    let fx = setup();
-    let manager = manager_of(&fx, "ctx");
-
-    new_shaping(&fx, &manager, "ctx", "shape1");
-
+    let lead = out["lead_session"].as_str().unwrap();
+    assert_eq!(out["plan"]["lead_session"], json!(lead));
+    assert_eq!(out["phase"], json!("shaping"));
     assert_eq!(
         fx.env
-            .query::<i64>("SELECT count(*) FROM sessions WHERE plan = 'shape1'"),
-        0,
-        "a shaping Plan has no Session row"
+            .query::<String>("SELECT role FROM sessions WHERE plan = 'shape1'"),
+        "lead"
     );
     assert!(
-        !window_names(&fx).iter().any(|w| w == "park-shape1"),
-        "no Lead window: {:?}",
-        window_names(&fx)
-    );
-    assert!(
-        !fx.env
+        fx.env
             .cpd_home()
             .join("run/shape1/lead-message.md")
-            .exists(),
-        "no first message for a Lead-less Plan"
+            .exists()
     );
 }
 
@@ -326,9 +268,12 @@ fn shaping_cmds_manager_plan_new_without_flag_is_unchanged() {
 fn shaping_cmds_manager_adds_scout_to_shaping_plan() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1")["lead_session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
-    let out = add_scout(&fx, &manager, "shape1", "scan", "H2").ok();
+    let out = add_scout(&fx, &lead, "shape1", "scan", "H2").ok();
     assert_eq!(
         (
             &out["job"]["key"],
@@ -365,88 +310,9 @@ fn shaping_cmds_manager_adds_scout_to_shaping_plan() {
 
     // The Tier rules are the kind's, as for a Lead: O2 is no scout Tier.
     let spec = explore_spec(&fx.env, "bad.json");
-    let refused_run = add_kind(&fx, &manager, "shape1", "bad", "scout", "O2", &spec);
+    let refused_run = add_kind(&fx, &lead, "shape1", "bad", "scout", "O2", &spec);
     refused(&refused_run, "tier_not_allowed", 2);
     assert_eq!(count(&fx, "jobs"), 1, "a refused Tier writes nothing");
-}
-
-#[test]
-fn shaping_cmds_manager_add_non_explore_kind_is_refused() {
-    let fx = setup();
-    let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-
-    // A kind other than scout or research.
-    let work = work_spec(&fx.env, "work.json");
-    let error = refused(
-        &add_kind(&fx, &manager, "shape1", "w", "work", "S2", &work),
-        "shaping_explore_only",
-        2,
-    );
-    assert_eq!(
-        (&error["details"]["plan"], &error["details"]["kind"]),
-        (&json!("shape1"), &json!("work")),
-        "{error}"
-    );
-
-    // --workflow on an explore kind: the same refusal.
-    let spec = explore_spec(&fx.env, "s.json");
-    let error = refused(
-        &run_as(
-            &fx,
-            &manager,
-            &[
-                "job",
-                "add",
-                "s",
-                "--title",
-                "S",
-                "--tier",
-                "H2",
-                "--spec",
-                &spec,
-                "--kind",
-                "scout",
-                "--workflow",
-                "api",
-                "--plan",
-                "shape1",
-            ],
-        ),
-        "shaping_explore_only",
-        2,
-    );
-    assert_eq!(error["details"]["workflow"], json!("api"), "{error}");
-
-    // --draft stays the explore no-draft refusal.
-    refused(
-        &run_as(
-            &fx,
-            &manager,
-            &[
-                "job",
-                "add",
-                "d",
-                "--title",
-                "D",
-                "--tier",
-                "H2",
-                "--spec",
-                &spec,
-                "--kind",
-                "scout",
-                "--draft",
-                "--waiting-on",
-                "lead",
-                "--plan",
-                "shape1",
-            ],
-        ),
-        "explore_no_draft",
-        3,
-    );
-
-    assert_eq!(count(&fx, "jobs"), 0, "nothing is written");
 }
 
 #[test]
@@ -481,19 +347,10 @@ fn shaping_cmds_manager_add_to_other_context_plan_is_refused() {
     let manager2 = manager_of(&fx, "ctx2");
     new_shaping(&fx, &manager2, "ctx2", "other");
 
-    let error = refused(
+    refused(
         &add_scout(&fx, &manager, "other", "scan", "H2"),
-        "plan_other_context",
-        2,
-    );
-    assert_eq!(
-        (
-            &error["details"]["plan"],
-            &error["details"]["plan_context"],
-            &error["details"]["context"],
-        ),
-        (&json!("other"), &json!("ctx2"), &json!("ctx")),
-        "{error}"
+        "plan_has_lead",
+        3,
     );
     assert_eq!(count(&fx, "jobs"), 0, "nothing is written");
 }
@@ -502,23 +359,26 @@ fn shaping_cmds_manager_add_to_other_context_plan_is_refused() {
 fn shaping_cmds_manager_job_add_reopens_done_shaping_plan() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1")["lead_session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     fx.env
         .sql("UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'shape1';");
     assert_eq!(phase(&fx, "shape1"), "done");
 
-    add_scout(&fx, &manager, "shape1", "scan", "H2").ok();
+    add_scout(&fx, &lead, "shape1", "scan", "H2").ok();
 
     assert_eq!(
         phase(&fx, "shape1"),
-        "shaping",
-        "an explore add reopens a done Lead-less Plan to shaping"
+        "plan",
+        "an explore add reopens a done Lead Plan to plan"
     );
     let phases = events(&fx, "plan-phase");
     let last = phases.last().expect("a plan-phase Event");
     assert_eq!(
         (&last["data"]["from"], &last["data"]["to"]),
-        (&json!("done"), &json!("shaping")),
+        (&json!("done"), &json!("plan")),
         "{phases:?}"
     );
 }
@@ -529,10 +389,13 @@ fn shaping_cmds_manager_job_add_reopens_done_shaping_plan() {
 fn shaping_cmds_manager_lists_and_shows_jobs_of_shaping_plan() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan", "H2").ok();
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1")["lead_session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    add_scout(&fx, &lead, "shape1", "scan", "H2").ok();
 
-    let listed = run_as(&fx, &manager, &["job", "list", "--plan", "shape1"]).ok();
+    let listed = run_as(&fx, &lead, &["job", "list", "--plan", "shape1"]).ok();
     let jobs = listed["jobs"].as_array().expect("job list lists jobs");
     let found = jobs
         .iter()
@@ -542,7 +405,7 @@ fn shaping_cmds_manager_lists_and_shows_jobs_of_shaping_plan() {
     assert_eq!(found["status"], json!("queued"));
     assert_eq!(found["tier"], json!("H2"));
 
-    let shown = run_as(&fx, &manager, &["job", "show", "scan", "--plan", "shape1"]).ok();
+    let shown = run_as(&fx, &lead, &["job", "show", "scan", "--plan", "shape1"]).ok();
     assert_eq!(shown["job"]["key"], json!("scan"));
     assert_eq!(shown["job"]["kind"], json!("scout"));
     assert_eq!(
@@ -556,16 +419,19 @@ fn shaping_cmds_manager_lists_and_shows_jobs_of_shaping_plan() {
 fn shaping_cmds_manager_cancels_and_retries_explore_job() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan", "H2").ok();
-    add_scout(&fx, &manager, "shape1", "probe", "H2").ok();
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1")["lead_session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    add_scout(&fx, &lead, "shape1", "scan", "H2").ok();
+    add_scout(&fx, &lead, "shape1", "probe", "H2").ok();
     fx.env.sql(
         "UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = 'shape1' AND key = 'probe';",
     );
 
     let out = run_as(
         &fx,
-        &manager,
+        &lead,
         &[
             "job",
             "cancel",
@@ -586,7 +452,7 @@ fn shaping_cmds_manager_cancels_and_retries_explore_job() {
 
     let out = run_as(
         &fx,
-        &manager,
+        &lead,
         &["job", "retry", "probe", "--tier", "H2", "--plan", "shape1"],
     )
     .ok();
@@ -608,8 +474,11 @@ fn shaping_cmds_manager_cancels_and_retries_explore_job() {
 fn shaping_cmds_manager_answers_escalation_of_shaping_plan() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan", "H2").ok();
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1")["lead_session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    add_scout(&fx, &lead, "shape1", "scan", "H2").ok();
     fx.env.sql(
         "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, runner)
            VALUES ('shape1', 'scan-a1', 'scan', 1, 'H2', 'ladder', 'running', 'cpd/shape1--scan-a1', '/w', 't', 'durable');
@@ -619,7 +488,7 @@ fn shaping_cmds_manager_answers_escalation_of_shaping_plan() {
 
     run_as(
         &fx,
-        &manager,
+        &lead,
         &[
             "answer",
             "scan-a1-q1",
@@ -641,8 +510,11 @@ fn shaping_cmds_manager_answers_escalation_of_shaping_plan() {
 fn shaping_cmds_manager_attempt_commands_on_shaping_plan() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan", "H2").ok();
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1")["lead_session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    add_scout(&fx, &lead, "shape1", "scan", "H2").ok();
     // A running Attempt whose Worker Session's file is a readable pi transcript.
     let transcript = fx.env.root().join("w1.jsonl");
     fs::write(
@@ -659,14 +531,14 @@ fn shaping_cmds_manager_attempt_commands_on_shaping_plan() {
         transcript.display()
     ));
 
-    let listed = run_as(&fx, &manager, &["attempt", "list", "--plan", "shape1"]).ok();
+    let listed = run_as(&fx, &lead, &["attempt", "list", "--plan", "shape1"]).ok();
     let attempts = listed["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 1, "{listed}");
     assert_eq!(attempts[0]["id"], json!("scan-a1"));
 
     let shown = run_as(
         &fx,
-        &manager,
+        &lead,
         &["attempt", "show", "scan-a1", "--plan", "shape1"],
     )
     .ok();
@@ -674,7 +546,7 @@ fn shaping_cmds_manager_attempt_commands_on_shaping_plan() {
 
     let read = run_as(
         &fx,
-        &manager,
+        &lead,
         &["attempt", "read", "scan-a1", "--plan", "shape1"],
     )
     .ok();
@@ -682,7 +554,7 @@ fn shaping_cmds_manager_attempt_commands_on_shaping_plan() {
 
     let aborted = run_as(
         &fx,
-        &manager,
+        &lead,
         &["attempt", "abort", "scan-a1", "--plan", "shape1"],
     )
     .ok();

@@ -120,7 +120,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `supersedes_unlinked` | 3 | `context decide` or `context note` whose text names, after `supersedes`, `overrules` or `replaces`, a record in force of the Context that `--supersedes` does not list (§3.5, the prose check); `details: {ids}`, the unlisted ids in text order; nothing is written |
 | `curation_not_pending` | 3 | `context retire` (§3.17) named a record that has no `pending` retirement: none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
 | `explore_pending` | 3 | `plan phase plan` (§4.4) while a scout or research Job of the Plan is `queued`, `running` or `failed`; `details` `{plan, jobs}`, `jobs` the sorted keys of those Jobs; nothing is written (pro-d374) |
-| `shaping_manager_only` | 2 | `plan new --shaping` (§4.1) run by anyone but the Context's live Manager (a Lead, a Worker or the User's cockpit): only a Manager creates a Lead-less shaping Plan (air-d19, air-d22); `details.caller` is the caller's role, or `null` when the caller is the User at a terminal; nothing is written |
+| `shaping_manager_only` | 2 | `plan new --shaping` (§4.1) run by anyone but the Context's live Manager (a Lead, a Worker or the User's cockpit): only a Context Manager creates a paired shaping Plan (air-d19, air-d22); `details.caller` is the caller's role, or `null` when the caller is the User at a terminal; nothing is written |
 | `plan_has_lead` | 3 | a Manager ran a shaping-Plan command (`job add`, `job list`, `job show`, `job cancel`, `job retry`, `attempt list`, `attempt show`, `attempt read`, `attempt abort` or `answer`; §4.1, §5.1 to §5.4, §6.2, §6.3, §6.5, §8.2) on a Plan that has a Lead (`lead_session` not null): a Manager never runs a Lead's command on it; `details.plan`; nothing is written (air-d19, air-d22) |
 | `plan_other_context` | 2 | a Manager ran one of those commands on a shaping Plan of another Context; `details` `{plan, plan_context, context}`, `plan_context` the Plan's Context and `context` the Manager's; nothing is written (air-d19, air-d22) |
 | `shaping_explore_only` | 2 | `job add` (§5.1) on a shaping Plan (`lead_session` null, phase `shaping` or `done`) with `--kind` other than `scout` or `research`, or with `--workflow`: a shaping Plan holds only explore Jobs; `details` `{plan, kind}` or `{plan, workflow}`; nothing is written (air-d19, air-d22) |
@@ -1192,7 +1192,7 @@ cpd plan new <id> --context <c> --title <text> [--jira <key>] [--brief-file <fil
 
 A Plan has no repo (R34, A12): its Workflows are added later with `workflow add` (§9.4) and its Lead starts in the User's home directory, whatever directory `plan new` runs from (contract §2.2, pro-d343). `--repo` and `--base` are gone: either is `usage` (exit 2). `--name` is gone too: it is `usage` (exit 2). The Lead's name is its agent key, `<context>:<plan>` (contract §2.2 "Agent key").
 
-**`--shaping`** (air-d19, air-d22; A1, A2). The Context's live Manager creates a **Lead-less** Plan: `lead_session` null, phase `shaping`, no Lead Session row, no pane, no first message and no `run/<id>/lead-message.md`. The Manager adds the Plan's explore Jobs and is their subscriber (the paragraph "A Manager on a shaping Plan" below). Only a Manager may run it: a Lead, a Worker or the User's cockpit with `--shaping` is refused `shaping_manager_only` (exit 2). With `--shaping`, `--brief-file`, `--by-user` and `--runner` are refused `usage` (exit 2): a shaping Plan has no Lead to brief, register by-user or run. `plan new` without `--shaping` is unchanged.
+**`--shaping`** (pro-d561). The Context’s live Manager creates a Plan in `shaping` paired with its Lead, provisioned as for `plan new`. The Lead owns its Jobs. Other callers are refused `shaping_manager_only`. The usual brief, runner and by-user options apply.
 
 | Flag | Meaning |
 |---|---|
@@ -1203,7 +1203,7 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
 | `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.11); omit it and the Lead starts with its first message, as today |
 | `--runner <pi|durable>` | the new Lead's runner; omitted, `durable` when `experimental.durable_leads` is on, else the config key `lead_runner`, default `pi` (contract §6.19 "The config keys") |
-| `--shaping` | (air-d19, air-d22) create a **Lead-less** shaping Plan, the Context's Manager only (below): no Lead Session, no pane, no first message, phase `shaping`, `lead_session` null. Refused `shaping_manager_only` for any other caller; `--brief-file`, `--by-user` and `--runner` are refused with it (`usage`) |
+| `--shaping` | Create a paired Plan and Lead in `shaping`; only the Context’s live Manager may create it (pro-d561). |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1244,12 +1244,8 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
 
 Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The cwd is not a flag and is never the caller's: a rerun from another directory is still `already` and keeps the stored `cwd`. The `--runner` flag is also one of 'the same flags': a rerun of an existing Plan with a different `--runner` is `plan_exists` (exit 3), as for a different `--title`. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
 
-**A Manager on a shaping Plan** (air-d19, air-d22; A3). A **shaping Plan** is a Lead-less Plan: `lead_session` null, phase `shaping`, or `done` once a Lead-less shaping Plan has settled. On a shaping Plan of its own Context, a Manager names the Plan with `--plan <id>` (it has no `CPD_PLAN`) and runs `job add` (explore kinds only), `job list`, `job show`, `job cancel`, `job retry`, `attempt list`, `attempt show`, `attempt read`, `attempt abort` and `answer`. Each is refused:
-- `plan_has_lead` (exit 3): the Plan has a Lead (`lead_session` not null); a Manager never runs a Lead's command on it;
-- `plan_other_context` (exit 2): the Plan belongs to another Context;
-- `shaping_explore_only` (exit 2): `job add` on a shaping Plan with `--kind` other than `scout` or `research`, or with `--workflow`, since a shaping Plan holds only explore Jobs.
+**A Manager on a shaping Plan** (pro-d561). The Manager creates the paired Plan and may rename it while shaping; the Lead owns its Jobs and Attempts. Manager Job and Attempt commands and `answer` are refused `plan_has_lead`.
 
-`job add` of an explore Job on a `done` Lead-less Plan reopens it to `shaping`, as an explore Job on a Lead's `done` Plan reopens it to `plan`. The Lead-only commands stay Lead-only and are refused for a Manager as they are today: `plan phase`, `plan lock`, `plan review`, `plan outline`, `plan render`, `plan lint` and every `workflow` command name no Manager right.
 
 ### 4.2 `plan list`
 
@@ -1914,9 +1910,9 @@ Effects: the Job's write as above; for an explore Job added in phase `dispatch`,
 
 ### Explore Jobs (`scout`, `research`)
 
-Explore Jobs (Plan `explore-roles`, R1-R9; contract §2.2 "Explore Jobs") answer one question from this machine, or also from outside it for `research` and leave one Markdown artefact and a bounded summary. Only a Lead adds one, or a Manager on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22). Together they are the explore kinds; a Job of one is an explore Job.
+Explore Jobs (Plan `explore-roles`, R1-R9; contract §2.2 "Explore Jobs") answer one question from this machine, or also from outside it for `research` and leave one Markdown artefact and a bounded summary. The Lead adds one on a paired Plan (pro-d561). Together they are the explore kinds; a Job of one is an explore Job.
 
-- **Belongs to the Plan.** No `--workflow` (`explore_workflow_forbidden`; for a Manager on a shaping Plan the same flag is `shaping_explore_only`, §1.3); `workflow_required` is not raised, also when the Plan has two or more Workflows. The Job's `workflow` is null (`plan show`, `job show`).
+- **Belongs to the Plan.** No `--workflow` (`explore_workflow_forbidden`); `workflow_required` is not raised, also when the Plan has two or more Workflows. The Job's `workflow` is null (`plan show`, `job show`).
 - **No draft, no review, no lock.** The Job is `queued` at once, with its Locked-Job fingerprint, in phase `grounding`, `plan`, `dispatch`, `deploy` or `done`; `--draft` is `explore_no_draft`. In phase `dispatch`, `deploy` or `done` the accepted add moves the Plan back to `plan` (decision pro-d429, which supersedes clause (1) of pro-d407; contract §3.1): in the same transaction, before `job-added`, `plan-phase` `{from, to: "plan"}` is appended, `done_at` is cleared when it was `done`, and `locked_at` is kept. In phase `grounding` or `plan` the add changes no phase. The Plan stays in `plan` until its Lead moves it on (`plan lock`, an approved batch of drafts or `workflow add`, §4.7, §4.8, §9.4). A refused add leaves the Plan where it was, and a rerun of an add already made (`already`) appends no second `plan-phase`. It is in no plan fingerprint and invisible to `plan review` and `plan lock` (§4.6, §4.8): adding one never invalidates an approved review.
 - **The Spec is four fields**: `goal` (the one question), `context` (where to look and what a good answer contains; it may name absolute machine paths, the repo-relative rule is waived for these kinds), `acceptance` (what the file must answer and cite) and `out_of_scope`, all required. `touches`, `tests`, `test_files` and `resources` are `spec_invalid`. cpd derives and stores `touches` = `["run/<plan>/explore/<job-key>.md"]`, the artefact, a path relative to `$CPD_HOME`; the `touches_missing` check does not run for it.
 - **Model selection:** resolve direct model and effort under [the selection contract](contract.md#9-model-selection).
@@ -1987,7 +1983,7 @@ Open/update Jobs follow the [retry and cancellation rule](contract.md#32-job-sta
 cpd job cancel <key> --reason <text> [--plan <id>]
 ```
 
-A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2118,7 +2114,7 @@ Idempotent: no. A second call finds the Job `running` and is refused `job_not_re
 cpd job list [--status <status>] [--plan <id>]
 ```
 
-A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
 `--status` is one of §3.2's statuses and may repeat. Each Job carries `urgent` (a boolean) and `kind`. Effects: none.
 
@@ -2132,7 +2128,7 @@ A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager o
 cpd job show <key> [--plan <id>]
 ```
 
-A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
 Effects: none. Output: every field of the Job (§2.2; `urgent`, a boolean; `kind` and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that is not a tenant (contract §3.4 "Tenancy": it has no Attempt yet) and that lists resources, or whose Ready turn finds no free Worker slot (it then has the entry for `workers`, contract §8.3): an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each pool it needs that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holders of contract §1.4 of the pool (`{slot, holder}`, command slots then Job tenants with `slot` null; `[]` when every pool has a free slot; the key is absent for every other Job, a retried Job included, which holds its resources). A Job in `waiting_for` is skipped, in order, by `scheduling` (contract §3.7 "the skip order"): it waits without holding anything; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by` and every Attempt with all its fields (`check_tail`, `gate_hook`, `gate_command`, `gate_exit`, `metrics`, `actual_files` and `footprint`, the values `attempt show` prints, §6.3) and its Escalations (cpd 1 §11, kept). It also has `addenda`, the addenda of `job addendum` (§5.10), oldest first: `[{"number", "attempt", "session", "created_at", "text"}]`, with `attempt` and `session` null when none was addressed, and `[]` when there are none (contract §3.4 "Addenda").
 
@@ -2359,7 +2355,7 @@ Effects, for an explore Attempt that passes:
 cpd attempt read <attempt> [--lines <n>] [--plan <id>]
 ```
 
-A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
 A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order. The source is the Worker Session's `runner`:
 - `pi`: the Worker's session file (`sessions.file`). A partial last line of a file being written is skipped.
@@ -2395,7 +2391,7 @@ cpd attempt show <attempt> [--plan <id>]
 cpd attempt list [--job <key>] [--active] [--plan <id>]
 ```
 
-A Manager may run these on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
 `show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). Its `attempt` carries `actual_files` (an array of the repo-relative paths the Attempt wrote, or null; contract §2.2, §7.3); it also carries `footprint`: null, or `{class, undeclared, untouched}` derived on read from `actual_files` and the Job's `touches` (contract 7.3 "The footprint"), null for the kinds `open`, `update`, `scout` and `research`, for a Job with no Spec and for a null `actual_files`; `list` does not. The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). An Attempt ended `aborted` (hs-a8, `attempt abort`, §6.5, contract §3.4) has `outcome` `failed` and `cause` `aborted` in both `show` and `list`. `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
 
@@ -2435,7 +2431,7 @@ Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt":
 cpd attempt abort <attempt> [--plan <id>]
 ```
 
-A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
 The Lead's abort of a running Attempt (hs-a8, the User, 2026-10-31; contract §3.4 "attempt abort"): the Lead ends a `running` Attempt `failed` / `aborted` in ONE write transaction (contract §3.4). It refuses a Worker that types it (`not_a_lead` exit 3), the same `CPD_ATTEMPT` check as `job approve-tests` (§5.9); the Attempt must be `running` (`attempt_not_running` exit 3). A Worker that needs a stopped Attempt talks to the Lead, or runs `cpd ask`.
 
@@ -2499,9 +2495,9 @@ Idempotent: no. Each call is a new Escalation; ids are never reused (§3.5).
 cpd answer <escalation> <answer> [--plan <id>]
 ```
 
-A Manager may run this on a shaping Plan of its own Context (§4.1, "A Manager on a shaping Plan"; air-d19, air-d22), refused `plan_has_lead` (exit 3) or `plan_other_context` (exit 2).
+A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
-Run by the Lead. On a Lead-less shaping Plan the Manager receives the Worker's Escalation as a `session-message` that wakes it: `Worker <agent-key> of Plan <plan> asks: "<question, first 300 characters>" (escalation <id>). Answer with: cpd answer <id> "<text>" --plan <plan>` (contract §5.3). It runs `cpd answer <id> "<text>" --plan <plan>`; the answer resolves the Escalation as it does for a Lead and the Worker's `ask` returns it. A `job-merged` message carries the summary and the artefact path, which the Manager may not read and cites in the brief of a later Plan.
+Run by the Lead. Escalations are Plan Events delivered through the Lead’s event subscription (§11).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -5473,7 +5469,7 @@ The rules of this table are the Workers' profile only. The explore-artefact rule
 
 ### 15.22a A Lead's and a Manager's explore-artefact guard (pro-d374)
 
-An explore Job's artefact is for the Worker that wrote it. A Lead gets the Job's summary, never the file (contract §2.2 "Job kinds", §5.2 `job-merged`); when the summary is not enough it adds a follow-up scout Job. A Manager gets the summary and the artefact's path in the message that wakes it for a Lead-less shaping Plan of its Context (air-d20); it may not read the file either: it cites the path in the brief of a later Plan. The adapter enforces this in pi's `tool_call` (`pi/lib/adapter.ts`), while `host.run` is set, as §15.16 does for checkouts (assumption A3, Plan `lead-grounding-guard`; the Manager's half of the guard is Plan `ctx-explore`, Workflow `pi`).
+An explore Job's artefact is for the Worker that wrote it. A Lead gets the Job's summary, never the file (contract §2.2 "Job kinds", §5.2 `job-merged`); when the summary is not enough it adds a follow-up scout Job. The adapter enforces this in pi's `tool_call` (`pi/lib/adapter.ts`), while `host.run` is set, as §15.16 does for checkouts (assumption A3, Plan `lead-grounding-guard`; the Manager's half of the guard is Plan `ctx-explore`, Workflow `pi`).
 
 **What is refused.** For a Session whose role is `lead` or `manager`; a Worker is untouched, and so are a Lead's or a Manager's `edit` and `write` calls (§15.16):
 
