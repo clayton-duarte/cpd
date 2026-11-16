@@ -19,7 +19,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | pro-d12 | Both backends: the durable-host unix socket (`$CPD_HOME/run/host/<id>.sock`) and pi-runner sessions (session JSONL + `cpd session send` + `cpd session retier`). |
 | pro-d13 | The legacy `web/` is deleted; Phase 1 starts clean. |
 | pro-d14 | Phase 1 is "make it work": correctness first; no visual design. (Recorded by the Plan; no further rule is derived from it here.) |
-| pro-d15 | Proof is manual in a browser, recorded in `web/VERIFY.md` (a later Job writes it; not this file). |
+| pro-d15 | Proof is manual in a browser, recorded in `web/README.md#manual-verification` (a later Job writes it; not this file). |
 | pro-d16 | Minimal functional visuals only: unstyled semantic HTML plus one small plain CSS file; the Figma design comes in Phase 3. |
 | pro-d17 | `web/package.json` gains exactly one dependency, `"@earendil-works/chord": "1.5.0"` (exact, no range), and `pnpm-lock.yaml` changes only for that line (pro-d377, User, 2026-11-03 EST: the freeze of this row is lifted for that one line and its lockfile change). Every other line of `web/package.json` and `pnpm-lock.yaml` is frozen: no other dependency is added or removed. The transport is Vite `server.ws` custom events, dev bench only. | **Superseded by 15.1:** the transport is the one WebSocket endpoint of §15 (ADR 0015 option B, air-d46), which adds the pinned `ws` dependency; the custom-events transport is gone. |
 | pro-d18 | (User, 2026-11-03 EST, chose in this Plan: add header and status bar slots, minimal.) The cockpit is a 5-zone frame: full-width Top Header, left full-height Context tree, centre-top Plan view, centre-bottom Chat (Chat Title on its top border, composer and chat footer at its bottom), right full-height Attention Inbox, full-width Bottom Status Bar. Phase 1 adds ONLY a Top Header with the plain text `C-P-D` (no emblem art) and a Bottom Status Bar showing the selected session's runner and state and `cpd` version (or an explicit `unknown`); the Chat Title is the `ChatHeader` already built, placed at the top of the chat zone. Pill styling, emblem art, host stats, workers summary and balloons are not Phase 1 (pro-d16: Figma in Phase 3, visuals in Phase 4). No new data source and no `wire.ts` field. **Amended by 21 (Plan `status-workers`):** the Bottom Status Bar gains the Workers segment in the TUI's exact long text, fed by the serve status pane (§20), and the workers and incident pills are clickable (§21). |
@@ -48,7 +48,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 - One attached session per browser connection. No auth. Dev bench only (`vite serve`), never `vite build` output.
 - No visual design (pro-d16).
 - **Status bar, Phase 1 (pro-d18).** No cpd version reaches the web: `CockpitSnapshot` (6.3, 5) has no version field, so the StatusBar shows `cpd: unknown`. This is a stated limitation, not a wire change (unverified source, O19). The runner and state come from the selected session's `SessionNode.ref` in `cockpit.tree` (6.11), so a selected session absent from the tree (archived, or removed by a patch) shows `none`. The header and status bar show no other data: no host stats, workers summary or balloons (pro-d16, pro-d18).
-  **Superseded by docs/ui-preview.md, Production and preview modes (item 6):** the version does reach the web (`StatusModel.version`, from `cpd --version` in `status.ts`), so the `cpd: unknown` limitation above no longer holds. It is shown as a bare `ghost` Badge, and preview mode adds an `outline` Badge `preview` and a drift pill. **Amended by 21 (Plan `status-workers`):** the Workers segment and the incident pill are live from the serve status pane (§20): the WebUI no longer reads the tmux option `@cpd_workers`, no longer runs `cpd incident.status`, and the 30 s poll of the status read is removed (§21).
+  **Superseded by docs/contract.md#37b-the-serve-process-runtime-and-port-supervision, Production and preview modes (item 6):** the version does reach the web (`StatusModel.version`, from `cpd --version` in `status.ts`), so the `cpd: unknown` limitation above no longer holds. It is shown as a bare `ghost` Badge, and preview mode adds an `outline` Badge `preview` and a drift pill. **Amended by 21 (Plan `status-workers`):** the Workers segment and the incident pill are live from the serve status pane (§20): the WebUI no longer reads the tmux option `@cpd_workers`, no longer runs `cpd incident.status`, and the 30 s poll of the status read is removed (§21).
 
 ## 2. Module map (the fixed file layout; no other source path is written)
 
@@ -1487,9 +1487,9 @@ export function StatusBar(props: { runner: Runner | null; state: string | null; 
 
 **Header DOM (pro-d18).** `<span data-emblem>C-P-D</span>`. `Shell` supplies the `<header>` wrapper.
 
-**StatusBar DOM (pro-d18).** Three `<span>` children, in this order, with no wrapper (`Shell` supplies the `<footer>`): `<span data-part="runner">Runner: <runner|none></span>`, `<span data-part="state">State: <state|none></span>`, `<span data-part="version">cpd: <version|unknown></span>`. `version` shows its value only when it is `{state:"known"}`; `null` or `{state:"unknown"}` shows `unknown`. Phase 1 has no styling and no left/right split of pills (pro-d16, pro-d18). **Superseded by docs/ui-preview.md, Production and preview modes (item 6):** the version is `<Badge variant="ghost" data-part="version">` with the bare version text, with no `cpd: ` prefix; preview mode adds `<Badge variant="outline" data-part="mode">preview</Badge>` after it and a `data-part="drift"` pill (`drift N`). **Amended by 21 (Plan `status-workers`):** the `workers` pill's text is the TUI's exact long form `workers Q<U+F0798>W<U+F0798>N/M` (separator U+F0798, not the `·` of pro-d40's table), fed by the serve status pane (§20), and the `workers` and `incident` pills are clickable (§21) — the only pills that are.
+**StatusBar DOM (pro-d18).** Three `<span>` children, in this order, with no wrapper (`Shell` supplies the `<footer>`): `<span data-part="runner">Runner: <runner|none></span>`, `<span data-part="state">State: <state|none></span>`, `<span data-part="version">cpd: <version|unknown></span>`. `version` shows its value only when it is `{state:"known"}`; `null` or `{state:"unknown"}` shows `unknown`. Phase 1 has no styling and no left/right split of pills (pro-d16, pro-d18). **Superseded by docs/contract.md#37b-the-serve-process-runtime-and-port-supervision, Production and preview modes (item 6):** the version is `<Badge variant="ghost" data-part="version">` with the bare version text, with no `cpd: ` prefix; preview mode adds `<Badge variant="outline" data-part="mode">preview</Badge>` after it and a `data-part="drift"` pill (`drift N`). **Amended by 21 (Plan `status-workers`):** the `workers` pill's text is the TUI's exact long form `workers Q<U+F0798>W<U+F0798>N/M` (separator U+F0798, not the `·` of pro-d40's table), fed by the serve status pane (§20), and the `workers` and `incident` pills are clickable (§21) — the only pills that are.
 
-**Behaviours to test (pro-d18).** Shell: with `header` and `status` given, `[data-shell]`'s first element child is the `header` and its last is `footer[aria-label="Status bar"]`, with the three panes between in order; with neither given the child list is the 3-pane list. Header: `[data-emblem]` text is `C-P-D`. StatusBar: runner `pi` shows `Runner: pi`, `null` shows `Runner: none` (likewise State); a known version `0.21.102` shows `cpd: 0.21.102`; `null` or unknown shows `cpd: unknown`. **Superseded (docs/ui-preview.md item 6):** the known version shows its bare text (`0.21.102`), without the `cpd: ` prefix.
+**Behaviours to test (pro-d18).** Shell: with `header` and `status` given, `[data-shell]`'s first element child is the `header` and its last is `footer[aria-label="Status bar"]`, with the three panes between in order; with neither given the child list is the 3-pane list. Header: `[data-emblem]` text is `C-P-D`. StatusBar: runner `pi` shows `Runner: pi`, `null` shows `Runner: none` (likewise State); a known version `0.21.102` shows `cpd: 0.21.102`; `null` or unknown shows `cpd: unknown`. **Superseded (docs/contract.md#37b-the-serve-process-runtime-and-port-supervision item 6):** the known version shows its bare text (`0.21.102`), without the `cpd: ` prefix.
 
 ### 6.8 ui-chat `web/src/ui/chat/`
 
@@ -1594,19 +1594,11 @@ DOM and behaviour:
 - **Drag and drop**: the chat dropzone (`ChatPane`, `data-chat-dropzone`) takes the drop and calls the Composer's `addFiles` once. The Composer shows `Drop to attach` while files are dragged over it (`data-drop="over"`, DESIGN-compose 1.2).
 - Image attachments are only accepted per `addFiles` (capability, count, size).
 
-#### `TierSelector.tsx`
+#### Model and effort selector
 
-```ts
-export type ConfigureHandler = (change: ConfigureChange) => void;
-export function TierSelector(props: { capabilities: Capabilities | null; footer: FooterStats | null; models: readonly ModelChoice[] | null; busy: boolean; onConfigure: ConfigureHandler; onRequestModels(): void }): JSX.Element;
-```
+Before rendering or saving a selection, apply [Model selection controls](#17-model-selection-controls).
+Use the core’s model capabilities rather than a client copy of a tier grammar.
 
-`<div data-part="tier-selector">` with three shadcn `DropdownMenu`s with radio items on `InputGroupButton`s: `aria-label="Tier"`, `"Model"`, `"Thinking level"` (DESIGN-compose 2, pro-d55). The option rules below apply to the menus:
-
-- `aria-label="Tier"`: options = `capabilities.configure.tier.options` (plus the current known tier when missing from them); value = the footer tier when known. `change` -> `onConfigure({kind:"tier", tier})`. Not disabled by `busy` (cpd applies a Tier change at the next idle).
-- `aria-label="Model"`: options = `models` (value `model`, text `name`); before they are loaded one option showing the current model (or `unknown`); the first `focus` calls `onRequestModels()` once. The trigger shows `footer.model` when it is known, which for a durable Session is the recorded model when the host reports none (6.4 Footer, pro-d465); the text `Model` appears only when that model is unknown too. `change` -> `onConfigure({kind:"model", model})`. Disabled while `busy`, with reason `A run is pending: the model changes when the session is idle` (the host refuses configure while a run is pending, scout-durable §7.4).
-- `aria-label="Thinking level"`: options = `thinkingLevels` of the model matching the footer model in `models` (plus the current level); `change` -> `onConfigure({kind:"thinking", level})`; same busy rule as Model.
-- Any menu trigger whose capability is `{supported:false, reason}` (`tier`, `model`, `thinking`) is `disabled` with `title="<reason>"`. `capabilities === null` disables all three. The lists of tiers, models and levels are as above.
 
 ### 6.10 ui-dialogs `web/src/ui/dialogs/`
 
@@ -1661,7 +1653,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 3. Typing a message and pressing Enter sends `{type:"session.submit", sessionId, clientSubmissionId, text, images:[], whenBusy:"followUp"}`, except a text of exactly `/q` or `/quit`, which the hub intercepts instead (6.6).
 4. A `session.dialog` message renders the dialog card; answering it sends `{type:"dialog.respond", sessionId, dialogId, response}`.
 5. Dropping an image file on the chat slot adds the attachment (reader returns base64) and the next submit carries it as `images:[{mimeType, dataBase64}]`.
-6. (pro-d18) Before any selection the header `[data-emblem]` reads `C-P-D` and the status bar reads `Runner: none` and `State: none`. After the snapshot holds a session with `runner "durable"` and `state "idle"` and that session is selected, the status bar reads `Runner: durable`, `State: idle` and `cpd: unknown`. **Superseded (docs/ui-preview.md item 6):** the version is shown bare when the snapshot carries it.
+6. (pro-d18) Before any selection the header `[data-emblem]` reads `C-P-D` and the status bar reads `Runner: none` and `State: none`. After the snapshot holds a session with `runner "durable"` and `state "idle"` and that session is selected, the status bar reads `Runner: durable`, `State: idle` and `cpd: unknown`. **Superseded (docs/contract.md#37b-the-serve-process-runtime-and-port-supervision item 6):** the version is shown bare when the snapshot carries it.
 
 ## 7. Error codes (typed, exhaustive)
 
@@ -1745,7 +1737,7 @@ Every unverified item of this file, listed once. A Job that needs one of them se
 | O16 | Event kind names not written in `docs/commands.md` (the core `Kind` strings were not read) | 6.3 `panesFor` | scout-cockpit §2 |
 | O17 | Whether Vite calls the plugin `closeBundle` hook on dev-server close (the plugin also listens on `httpServer` `close`) | 6.6 `plugin.ts` | vite 8.3.5 not read |
 | O18 | Live output of `cpd events follow` (not run) and its `cursor_ahead` refusal on restart | 6.3 `events.ts` | scout-cockpit §2 |
-| O19 | Source of a cpd version for the StatusBar. No cockpit read model carries one (`CockpitSnapshot`, 5). `cpd --version` is observed (scout-cockpit header, cpd 0.21.102), but no Phase 1 source reads it; whether a read command or snapshot field exists is unverified. Phase 1 shows `cpd: unknown`. **Superseded (docs/ui-preview.md item 6):** `status.ts` reads it and `StatusModel.version` carries it | 6.7 `StatusBar`, 6.11 | scout-cockpit header; the wider question is unverified |
+| O19 | Source of a cpd version for the StatusBar. No cockpit read model carries one (`CockpitSnapshot`, 5). `cpd --version` is observed (scout-cockpit header, cpd 0.21.102), but no Phase 1 source reads it; whether a read command or snapshot field exists is unverified. Phase 1 shows `cpd: unknown`. **Superseded (docs/contract.md#37b-the-serve-process-runtime-and-port-supervision item 6):** `status.ts` reads it and `StatusModel.version` carries it | 6.7 `StatusBar`, 6.11 | scout-cockpit header; the wider question is unverified |
 | O20 | The `['a']` append paths of thinking blocks (`docs['pi.live'].generation.message.content[i].thinking`) are assumed from the pi-ai thinking block shape; the live run captured text only | 6.4 frames (deltas) | `live-check.md`; `@earendil-works/pi-ai/dist/types.d.ts` |
 | O21 | The `['a']` append paths of tool-call arguments in the live message (`content[i].arguments` or `content[i].partialJson`) and how a live ToolItem's `args` are completed before its entry arrives; the live run had no tool call | 6.4 frames (L2) | `live-check.md` |
 | O22 | The host `history` command on the wire: the newest page first without `before`, entries in descending id order, `next` opaque and absent on the last page | 6.4 intro, backend (cache and window, gap fill) | `docs/contract.md` §6.17 (read); `pi-durable/dist/harness/transcript.js` (read); not run |
@@ -2052,94 +2044,6 @@ The backend supplies live tool suppression from the current tail normalizer’s 
 2. **A tail window drops live items.** A `session.window` of mode `tail` (sent by `reload`, `backend.ts:197-204`) replaces the transcript (`setTail`, `transcript.ts:41`). The live items are gone. The later deltas of the open message find no item and are ignored (`applyDelta`, `transcript.ts:69`) until its committed line arrives. The live source does not re-send the open message after a window.
 3. **Identity of `message.timestamp`** between the `message_end` object and the committed line (Job assumption A6, 12.1). If the identity fails, the live item of that message is never removed by reconcile.
 
-## 13. Cockpit stream: `cpd cockpit serve` (Plan `cpd-realtime-engine`)
-
-Normative. Plan `cpd-realtime-engine` (its Job `webcockpit-docs`) decides the five points below. Where a statement of 6.3 is marked "Amended by 13.x" or "superseded by 13.x", section 13 wins and the older statement is void.
-
-Sources: `docs/commands.md` §11a and `docs/contract.md` §5.5 on `origin/main` (commit `665c0c159`). The frames, the requests and the exit behaviour are read there and are not run here (unverified, O26). The seams are in `$CPD_HOME/run/cpd-realtime-engine/explore/scout-7.md` (cited as scout-7).
-
-Plan assumptions used here (Plan `cpd-realtime-engine`, not this file's A1 to A7): **PA1** one long-lived NDJSON process, stdin EOF exits 0; **PA2** snapshot panes equal the list commands' JSON, and snapshots are full; **PA4** the other per-request spawns stay (every `actions.ts` command, and each spawn of 6.3 that 13.6 does not replace); **PA5** the web server uses the stream while it is up and the spawn refresh while it is down or not yet ready, and the child restarts with backoff.
-
-### 13.1 Decision 1: the child (`web/src/server/cockpit/stream.ts`)
-
-- `stream.ts` owns exactly one long-lived child, `cpd cockpit serve` (no arguments; `cockpitServeArgs()` = `["cockpit","serve"]`). `stream.ts` spawns nothing. The spawn is `CockpitStreamBoundary.start(): StreamProcess` in `cli.ts`, the only module that runs `cpd` (2.1). `plugin.ts` builds the real boundary and tests fake it (A6). `StreamProcess` has the shape of `FollowProcess` (6.3) plus `write(line)` and `closeStdin()`.
-- stdin is a pipe that stays open for the child's whole life. Requests are written to it as lines.
-- stdout is split into lines as `events follow` is (`FollowProcess.onLine`, 6.3). stderr is logs only; its tail is kept for an exit message (13.9).
-- `stop()` closes stdin, then kills the child (SIGTERM). Either alone ends it: stdin EOF exits 0 (PA1). A parent that dies closes its end of stdin, so the child never outlives its parent.
-- `stream.ts` reports typed frames and the ready state. It reads no pane and builds no model; the mapping is in 13.8 and lives in `events.ts`.
-
-### 13.2 Ready state
-
-- The stream is **ready** from the child's `hello` until that child exits. Before `hello`, and between an exit and the next child's `hello`, it is not ready. Readiness belongs to one child: a new child is not ready until its own `hello`.
-
-### 13.3 Decision 2: snapshot panes and `plan_show`
-
-- The service takes the panes of a `snapshot` frame as the cockpit's panes. It keeps the parsed rows of the last applied snapshot: `contexts`, `plans`, `sessions`, `inbox`, and `cursor` (the minimum of the four `events_cursor`). The rows are parsed by the read model's own functions (`parseContextList`, `parsePlanList`, `parseSessionList`, `parseInboxList`, 6.3) and the tree and inbox are built by its own builders (`buildTree`, `buildInbox`). `events.ts` holds no copy of a parser or a builder.
-- The plan view is not a snapshot pane (the `plan` pane of a snapshot is `cpd plan list`). It is read by a `plan_show` request when a Plan is selected, answered by a `plan_show` frame, then `parsePlanShow` and `buildPlanView` as in 6.3.
-- A request carries a string id that the service chooses, unique within its child, and the plan id it asks for. A reply for a Plan that is no longer selected is dropped.
-
-### 13.4 Decision 3: coalescing
-
-- `COALESCE_MS` = 16 (one frame). It replaces 250 of 6.3 and has two uses: the spawn fallback's burst of 6.3 rule 3, and the emission of snapshot panes.
-- A `snapshot` frame validates and maps all pane candidates before storing its rows. A rejected frame leaves the last accepted raw/mapped/status state and pending coalesced update intact (#1227). The coalesced emit uses the accepted mapped value; a synchronous session-state patch refreshes that value too. If no emit is pending, one is scheduled `COALESCE_MS` later. When it fires, the tree and then the inbox are built from the rows stored at that moment and emitted once. Snapshots are full (PA2), so the latest stored snapshot is enough.
-
-### 13.5 Decision 4: the `session-state` patch
-
-- An `event` frame of kind `session-state` with a non-null `session` changes the stored row of that session: its `state` becomes `data.to`. `data.to` must be one of the five states of 3.2; otherwise it is an error (13.8) and nothing changes.
-- A session not among the stored rows is not patched. A Worker is not in the tree (scout-7 §4), and a session registered in the same batch is not stored yet.
-- The tree is rebuilt by `buildTree` over the stored rows. The dot is therefore computed by the read model's own dot rule (5.1), with `attention` taken from the stored inbox rows. The tree pane is emitted in the same tick, with no coalescing wait. Target: under 5 ms (unverified, not measured).
-- The next `snapshot` replaces the stored rows and so reconciles the patch.
-- Only `session-state` patches the panes. Every other kind waits for the snapshot that follows its batch (5.5: a batch's `event` frames come before its snapshot).
-
-### 13.6 Decision 5: fallback and readiness
-
-- While the stream is not ready, the service runs 6.3 unchanged: the `events follow` child from `followArgs(lastCursor)`, the coalesced refresh of 13.4 through `loadPanes` (spawn), and the plan pane through `loadPanes`.
-- The follow child runs while the stream is not ready. `start()` starts it as 6.3 says. The first `hello` stops it. A child's exit starts it again from `lastCursor`. `lastCursor` is the highest Event id seen from either source, so Events committed while the stream was down come back through `events follow --since`, and the next snapshot carries the state.
-- `start()` still runs `loadAll` by spawn first (6.3 rule 1), then starts the stream.
-- A `plan_show` request made while the stream is not ready, or in flight when the child exits, resolves `down` at once. The service then loads the plan by spawn.
-- **`store_too_new` heal** (pro-d452; A3). An `error` frame with a null id and `code` `store_too_new`, or a `plan_show` rejection (an `error` frame with a string id) with `code` `store_too_new`, makes the stream kill the child and respawn it at once, with no wait of 13.7. It reports no `cockpit.error`. Its pending requests, the rejected one included, resolve `down` as for a restart. If the respawned child emits `store_too_new` again before its `hello`, that error is reported as an ordinary `cpd_failed` with `details.cpdCode` `store_too_new`, and the normal backoff of 13.7 applies; that child is not healed again.
-
-### 13.7 Restart backoff
-
-| Constant | Value | Meaning |
-|---|---|---|
-| `STREAM_RESTART_BASE_MS` | 500 ms | the first restart waits this long |
-| `STREAM_RESTART_CAP_MS` | 10 000 ms | no restart waits longer |
-
-- The restart after the n-th consecutive failure waits `min(STREAM_RESTART_BASE_MS * 2^n, STREAM_RESTART_CAP_MS)`, n counted from 0: 500, 1 000, 2 000, 4 000, 8 000, 10 000, 10 000 ms, and so on. A failure is a child that exits before its first snapshot is applied.
-- n resets to 0 when a child's first snapshot is applied, not at `hello`: a child that says hello and dies at once keeps backing off. A repeated `hello` on the same child is not a new child: it is an in-place restart (13.9), and it changes neither n nor the wait.
-- The first start of the process has no wait. Each wait is a Scheduler timer (A6); `stop()` cancels it.
-- The `store_too_new` respawn of 13.6 is not a wait: it starts at once, and it does not change n.
-- Unchanged for the fallback: `SAFETY_REFRESH_MS` = 30 000 and `FOLLOW_RESTART_BASE_MS` = 1 000 with its cap of 30 000 (6.3 rule 7).
-
-### 13.8 Frame-to-pane mapping
-
-Each line is parsed once, at the edge (`parseCockpitFrame`, `stream.ts`). A line that is not one JSON object, has no string `t`, or has fields its `t` does not take, is `cpd_malformed_json` (7).
-
-| Frame (`t`) | Accepted shape | Effect on the cockpit |
-|---|---|---|
-| `hello` | `protocol` = 1 | Ready (13.2); the follow child stops (13.6). On a child that already said hello, it is an in-place restart (13.9): the stream stays ready. Any other `protocol`: `cpd_malformed_json` with `details.field` = `protocol`; the child is killed and the restart of 13.7 applies, while the spawn path serves the panes. |
-| `snapshot` | `seq` an integer; `panes` with `context`, `plan`, `session` and `inbox` (**amended by 20:** and `status`, §20.1), each an object | Parse the four panes (13.3). On success, store the rows, reset n when this is the child's first (13.7), and schedule the emit (13.4). A pane that fails to parse, or whose `ok` is not `true`, rejects the whole snapshot with the `cpd_failed` that `Cpd.json` gives for the same reply (6.3): one error update, the previous rows kept, no emit. A snapshot also clears `lastError` when its `details.cpdCode` is `store_too_new`, as it already clears `cockpit.error`. |
-| `event` | `event` is one object that `parseEventLine` (6.3) accepts | `lastCursor` = max id. Kind `session-state`: 13.5. If `panesFor` of the event puts the plan pane in the set for the selected Plan, the plan is due: its `plan_show` request is sent after the snapshot that ends the batch. Any other kind changes nothing by itself. |
-| `plan_show` | `id` matches a pending request; `value` is an object | Resolve the request: `parsePlanShow`, `buildPlanView`, and emit the plan pane if that Plan is still selected. |
-| `error` with `id` a string | `error.code`, `error.message` | Reject the pending request with `WebError("cpd_failed", message, {cpdCode: error.code})` (7). `selectPlan` keeps the previous plan and emits one error update (6.3). An `id` that matches no pending request: one error update. A `store_too_new` code: the heal of 13.6 instead, with no error update. |
-| `error` with `id` null | `error.code`, `error.message` | One error update, `cpd_failed` with `cpdCode: error.code`. The child keeps serving unless it exits (13.9). A `store_too_new` code: the heal of 13.6 instead, with no error update. |
-| anything else | none | `cpd_malformed_json`: one error update, the line skipped, the child kept (as commands.md §11a: a malformed line keeps the process serving). |
-
-### 13.9 Failure rules
-
-- A child that exits while the stream is running is not ready. Its pending requests resolve `down` (13.6), the follow child starts (13.6), and a restart follows after the wait of 13.7. An exit caused by `stop()` is not a failure and emits nothing.
-- A second `hello` on the same child is not an exit: `cpd cockpit serve` exec'd in place when its executable was replaced (commands.md §11a, pro-d450). Its pending requests resolve `down` (13.6), the stream stays ready, and `onError` is not called. No follow child starts and no restart wait applies.
-- An exit emits one error update, unless an `error` frame with a null id has already reported it: `cpd_failed` with `cpdCode` `no_json` and the message the trimmed stderr, or `cpd exited <n>` when stderr is empty (the mapping of 6.3 for a non-JSON failure). A null-id `error` frame is followed by the exit of a store error (commands.md §11a), and that frame reports it.
-- A failed write to stdin means the child is gone: it is killed and handled as an exit.
-- A malformed frame never restarts the child (13.8).
-- A child killed by the `store_too_new` heal (13.6) is a respawn, not a failure: its exit emits nothing, as the exit of `stop()` does, and its pending requests resolve `down`.
-
-### 13.10 Tests and limits
-
-- Tests run without a real process, socket, timer or `cpd` (A6). `web/src/server/cockpit/stream.test.ts` (new; fake `StreamProcess`, fake Scheduler): ready only after `hello`; the backoff sequence of 13.7 and its reset at the first snapshot; `stop()` closes stdin, kills the child, cancels the wait and emits nothing afterwards; a request is answered, rejected, or resolved `down` when not ready and when the child exits. `web/src/server/cockpit/events.test.ts` (changed): the 16 ms coalescing of snapshot panes and of the spawn burst; the panes of a snapshot equal the spawn path's panes for the same replies; a `session-state` patch emits the tree in the same tick and the next snapshot replaces it; the follow child runs only while the stream is not ready.
-- Limits, stated plainly: the live output of `cpd cockpit serve` is unverified (O26); the 5 ms target is unmeasured; `seq` is informational, because one pipe keeps frames in order; no `hello` timeout is defined, so a child that never says `hello` stays not ready, with the spawn path serving the panes and no restart (unverified, O26).
-  - **Amended by 15.2 (Plan `webui-ws`): `seq` is no longer only informational** — the serve-stream watchdog compares it (a `seq` that stops advancing is one of its two stall signals, §15.2). One pipe still keeps frames in order; the watchdog reads `seq`, it does not reorder anything.
 
 ## 14. Amendments air-n13, air-n15, air-d28: the Context tree's live refresh and the Plan pane's empty state (Plan `toast-fix`)
 
@@ -2158,7 +2062,7 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 
 ## 15. One WebSocket transport, the heartbeat and the serve-stream watchdog (Plan `webui-ws`)
 
-Normative. ADR 0015 option B (air-d46) decides the three points below; docs/contract.md §5.5 "The WebUI transport and the serve-stream watchdog" and web/ELECTRON.md "WebSocket transport" carry the same statements. Where a statement of §4, 6.3, 6.6 or 13 is marked "Amended by 15.x", section 15 wins and the older statement is void.
+Normative. ADR 0015 option B (air-d46) decides the three points below; docs/contract.md §5.5 "The WebUI transport and the serve-stream watchdog" and docs/contract.md#37b-the-serve-process-runtime-and-port-supervision "WebSocket transport" carry the same statements. Where a statement of §4, 6.3, 6.6 or 13 is marked "Amended by 15.x", section 15 wins and the older statement is void.
 
 **Owner amendment, 2026-11-14:** The LAN authentication policy in
 [WebUI access](../docs/architecture/webui-access.md) supersedes the historical
@@ -2169,21 +2073,19 @@ The Origin allowlist is a separate browser check, with HTTPS permitted for the
 same local/LAN hosts on 3333, 33333, or the default HTTPS port. Historical
 amendments below describe their original decisions, not the current access policy.
 
-### 15.1 The endpoint, the Origin check and the client transport (air-d46)
+### 15.1 The endpoint, Origin check and access policy
 
-- **Production static-file failures (#1133).** A failed asset or SPA fallback read is contained to its HTTP response and logged. Before headers are sent it returns 500; after headers it terminates the partial response. Client disconnection closes the file reader, including while it is opening. HEAD sends no file body. These failures must not terminate the WebUI server or unrelated WebSocket clients.
-- **Accepted socket errors (#1136).** A WebSocket error is reported through the endpoint's error callback and closes that client's hub, timers and socket exactly once. It must not escape as an unhandled EventEmitter error or interrupt another client. Repeated error/close events after cleanup are harmless.
-- **One endpoint.** One WebSocket endpoint, path `/cpd-ws`, on the pinned `ws` package (<https://github.com/websockets/ws>), wrapping the one `newConnection(send)` factory (6.6): one hub per accepted socket, one JSON text frame per wire message both ways (§4). The Electron main process binds it on `127.0.0.1` on a port the OS chooses (bind port 0); the Vite dev server hosts the same endpoint same-origin on its httpServer (6.6, amended by 15.1), replacing the `cpd:c2s`/`cpd:s2c` hot route. No test opens a real port (A6): the server socket is injected like the durable client's `SocketFactory` (6.4).
-- **How the renderer learns the URL.** The desktop renderer reads the resulting `ws://127.0.0.1:<port>/cpd-ws` from the preload `contextBridge` — one read-only member of `window.cpdElectron` (`webSocketUrl`), handed over once at mount. No IPC channel carries WebUI data frames; `web/src/electron/transport.ts` (`createElectronTransport`) and the per-sender IPC hub wiring are deleted, and so is the dev-only hot transport of `web/src/main.tsx`. The browser build connects same-origin `/cpd-ws` on the Vite dev server. A remote thin client reaches the endpoint through `ssh -L` (ADR 0015 §Comparison, row R3).
-- **The Origin check.** No token. At connect, before any hub is created, the endpoint accepts a connection whose `Origin` header is absent, `null`, or exactly `file://` — the origin the production Electron renderer sends, because the desktop main process loads it with `loadFile` (a `file://` page serializes `Origin: file://` on the WebSocket handshake) — or whose host is a loopback (`localhost`, `127.0.0.1`, `[::1]`); every other Origin is rejected and no hub is created for it. Accepting `file://` is as local as accepting `null`: only a page loaded from this machine's disk can send it, so no foreign `http(s)` origin slips in. **Amended by pro-d543** for ports 3333 and 33333: the accepted set is widened to LAN hosts and narrowed to those two ports, as "LAN origins" below states.
-- **The client transport.** `createWebSocketTransport` implements the unchanged `Transport` interface (6.1): `connect()` begins one attempt, `open` arrives as `onStatus("open")`, `send` throws `WebError("internal")` when not open, `close` is final. A socket `close` or `error` — including a heartbeat failure (15.2) — is a real `closed` status, so the renderer's existing backoff and re-subscribe run (6.2): every reconnect resyncs by full `cockpit.snapshot`, no delta protocol and no `seq` resume. The transport carries the client side of the heartbeat and no reconnect logic.
+The browser connects to the same-origin `/cpd-ws` endpoint. Production and the
+UI-only preview follow the [runtime contract](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision).
+The preview forwards to production on the same host and owns no backend or
+store. One accepted socket creates one hub; closing it disposes that hub.
 
-- **Fixed ports (pro-d541).** The production WebUI server (built renderer and `/cpd-ws`) is a supervised engine service on `0.0.0.0:3333`. The preview Vite server is bound to `0.0.0.0:33333` with `strictPort`. Both are described in docs/ui-preview.md, "WebUI ports", and web/ELECTRON.md, "WebUI ports". The production page is served from `http://localhost:3333`, so its `/cpd-ws` connection is same-origin. The frames and the path do not change. **Amended by pro-d552 (b19):** the page served on 3333 is the browser build from `web/dist`, not the Electron renderer; see "Browser entry on 3333" below.
-- **LAN origins on the fixed ports (pro-d543; amends "The Origin check" above).** On ports 3333 and 33333, the endpoint accepts a connection whose `Origin` host is one of: `localhost`, a loopback address (`127.0.0.1`, `[::1]`); an RFC 1918 private IPv4 address (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`); an IPv6 unique-local address (`fc00::/7`); or a `.local` mDNS hostname. The `Origin` port must be exactly 3333 or 33333, so an `Origin` with no explicit port is rejected. The scheme must be plain `http`; an `https` Origin is rejected. Absent, `null` and `file://` Origins are accepted as above. Every other Origin is rejected before any hub is created. Loopback on any other port, which the earlier rule accepted, is no longer accepted. There is no token and no TLS, by decision. This is not access control: the `Origin` header is set by a browser, and any non-browser client can send any `Origin`, so a LAN peer that is not a browser is not stopped by this rule. That risk is accepted by the decision and stated here. Status: decided; as of this amendment the code accepts loopback on any port and no LAN host (`web/src/server/ws.ts`, `acceptsOrigin`). **Amended by pro-d552 (b19):** the IPv6 ULA host rule is tightened, see "Browser entry on 3333" below.
-- **Browser entry on 3333 and the IPv6 ULA rule (pro-d552, b19; amends "Fixed ports (pro-d541)" and "LAN origins on the fixed ports (pro-d543)" above).** *Entry point:* the production server on `0.0.0.0:3333` serves the browser build, whose output is `web/dist`: `GET /` returns its `index.html`, which loads the browser entry `main.tsx`. It serves `/cpd-ws` on the same port and origin. The browser entry does not use the Electron preload bridge (`window.cpdElectron`, `webSocketUrl`); it connects to `/cpd-ws` on its own origin. CPD.app keeps `electron.html`, loaded with `loadFile`; the two entries are not interchangeable. *IPv6 ULA verification:* an IPv6 ULA Origin is accepted only when its host is an IPv6 address literal in brackets (for example `[fd12:3456::1]`), parsed as an address, whose first 7 bits are `1111110` (in `fc00::/7`). A hostname that only begins with `fc` or `fd` (for example `fd.evil.com` or `fc-attacker.example`) is not an address literal and is rejected; the host is never matched on its text prefix. Status: decided; as of this amendment the code does not do this: `serve.ts` serves `electron.html` from `dist-electron/renderer` (`findStaticDir`), and `ws.ts` `isIpv6Ula` accepts any host starting with `fc` or `fd` (`ws.ts:110-116`, `:166`). The implementing change brings the code in line.
-- **Port in use fails loud (pro-d542).** A server that must bind 3333 or 33333 while another process holds that port exits non-zero and never falls back to another port. Before it exits, it names the holder by process name and PID. The holder is read with `lsof -nP -iTCP:<port> -sTCP:LISTEN`, and with `ss -H -ltnp 'sport = :<port>'` when `lsof` is not available. If neither names the holder, the exit still names the port. Status: decided. The production server has this check (`web/src/server/port-holder.ts`, called from `serve.ts` on `EADDRINUSE`); the engine's check is in "Engine supervision of the fixed ports" below.
-- **Engine supervision of the fixed ports (pro-d541, pro-d542).** The cpd engine supervises both WebUI servers as child node services: the production server (`web/src/server/serve.ts`, browser entry, `0.0.0.0:3333`) on every machine, and the preview Vite server (`web/vite.config.ts`, `0.0.0.0:33333`, `strictPort`) when the preview worktree exists. The engine restarts a service that crashes, and restarts it once after a payload install, which `cpd install` signals with the marker `run/install-restart.json`. A service that crashes more than 3 times in any 10-minute window is latched `stopped` and the engine raises an `error` Event; a restart after an install is not counted. Before a service starts, the engine checks its port: it reads the holder with `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fpcn`, falls back to `ss -H -ltnp 'sport = :<port>'`, and refuses to start while the port is held. The refusal exits non-zero and names the holder's process name and PID, or the port alone when neither tool names it. It never falls back to another port. Assumption, not a decision record: the restart bound adopts the bound the engine already applies to durable hosts (`engine/src/watch/hosts.rs`). Status: decided; as of this amendment the engine does not supervise either server (no code under `engine/` starts, probes or restarts a web server). The implementing change brings the code in line. Details: docs/architecture/webui-supervision.md.
-- **Takeover of a same-service port holder (Lead answer, Job `webui-adopt-docs`, escalation `webui-adopt-docs-a1-q2` option (b); supersedes the refusal of "Engine supervision of the fixed ports" above for the holders named here).** The engine supervises 3333 and 33333 with the same two services and the same restart bounds. Before a service starts, the engine reads the holder of its port with the lsof and ss rules above, and reads the holder's command line (`ps -o command= -p <pid>`). A holder is **the same service** when its command line names that service: for the production server on 3333, `web/src/server/serve.ts` or `serve-prod.mjs` (the stopgap); for the preview server on 33333, `vite` run in the preview worktree. A same-service holder is stale or unmanaged, and the engine replaces it: it sends the holder `SIGTERM`, waits up to 10 seconds for the port to be free, and then starts the service. The engine does not adopt a holder, and it sends no `SIGKILL`. If the port is still held after the wait, or the signal is refused, the takeover fails with an `error` Event naming the holder, and the next tick tries again. Any other holder, and a holder whose command line cannot be read, is never terminated: the service does not start, and the `error` Event names it by process name and PID, or the port alone when neither tool names it. The engine never falls back to another port. A service that is refused or whose takeover fails is **not latched** `stopped`: it is checked again at every tick, and its `error` Event follows the rule of `docs/contract.md` §3.7 (one per code until it clears, repeated at most once per `watch.error_repeat_seconds`). The crash-loop latch above (the fourth crash in 10 minutes) is the only latch. A successful takeover writes one line to `run/watch.log` naming the replaced PID and its command line, and no Event. Status: decided by the Lead's answer; as of this amendment the code does not do this (`engine/src/watch/webui.rs` never terminates a holder and latches a holder it refuses). The implementing Job `webui-adopt-impl` brings the code in line. Details: docs/architecture/webui-supervision.md.
+Binding, browser credentials, trusted Origins and LAN HTTPS follow
+[WebUI access](../docs/architecture/webui-access.md). Validate access before
+creating a hub. An Origin allowlist alone is not authentication. Production
+and preview use fixed ports 3333 and 33333; a held port fails without fallback.
+A second start leaves the existing service alone and identifies the holder
+when its identity is available.
 
 ### 15.2 The heartbeat and the stall watchdog (air-d46)
 
@@ -2212,16 +2114,27 @@ amendments below describe their original decisions, not the current access polic
 - Tests run without a real process, socket, timer or `cpd` (A6): the server socket and the client `WebSocket` are injected fakes driven by `emit*` helpers, the heartbeat and the watchdog run on the injected `Scheduler`, and no test opens a real port.
 - Limits, stated plainly: the browser's automatic pong answering is the platform's, not the code's (unverified in a real browser); the constants above are the code's named constants, not configuration.
 
-### 15.5 The preview dev server on port 33333 (Job `app-preview-docs`)
+### 15.5 UI-only preview
 
-Normative. CPD.app is retired and the browser is the official WebUI interface (Job `app-preview-docs`, citing pro-d567; that decision is not in this repository, so the citation is unverified here). This section states what the preview dev server on 33333 must do for a browser. Nothing here changes the frames of §4, the Origin rule of 15.1 or the Electron renderer.
+The preview serves a branch's browser UI on port 33333 and forwards its
+WebSocket to production on the same host, under the [runtime contract](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision).
+It starts no agent or engine and opens no store. Access follows the same
+[policy](../docs/architecture/webui-access.md) as production.
 
-- **Port and binding.** The dev server binds `0.0.0.0:33333` with `strictPort: true` (`web/vite.config.ts`). It never moves to another port. A port held by another process fails loud and names the holder, as 15.1 "Port in use fails loud" states; its supervision is as 15.1 "Engine supervision of the fixed ports" and the takeover rule after it states.
-- **What it serves.** The dev server runs in the preview worktree, `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` (31.1, docs/ui-preview.md), and serves that checkout's `web/` source. When the worktree is synced to `origin/main` (28.1), a change Vite can apply hot-reloads; otherwise the server restarts, which is a new process with a new WebUI token file (27.2).
-- **Entries.** `http://localhost:33333/` loads `web/index.html` and the browser entry `main.tsx`: the browser WebUI. `http://localhost:33333/electron.html` is the Electron renderer that the preview window loads (`CPD_ELECTRON_DEV_URL`); it is not the browser entry (pro-d552, 15.1).
-- **Same-origin `/cpd-ws`.** The page connects its WebSocket to `/cpd-ws` on its own origin: `ws://localhost:33333/cpd-ws`, or `ws://<LAN host>:33333/cpd-ws` from a LAN browser. There is no proxy process and no second port. The Vite plugin (`web/src/server/plugin.ts`, `configureServer`) hosts the endpoint on the dev server's own httpServer, on the path `/cpd-ws` only, through a `noServer` upgrade. The frames of §4 and the Origin rule of 15.1 for port 33333 apply unchanged, so a LAN browser's `http://<LAN host>:33333` Origin is accepted by the LAN rule.
-- **Hot module reloading.** Vite's own HMR socket runs on the same server and port and serves React Fast Refresh. A UI or CSS edit reloads without a rebuild. Edits to main, preload and server code still need `preview-web.sh reload` (docs/ui-preview.md, the `on` command). The `/cpd-ws` upgrade filter leaves Vite's HMR upgrade untouched.
-- **Status and limits.** Decided by this amendment. The code does the above as read from `web/vite.config.ts:105` and the upgrade hook in `web/src/server/plugin.ts`. It is read from source, not run: the browser's HMR and its `/cpd-ws` handshake on 33333 are unverified in a real browser. No test opens a port (A6).
+
+### 15.6 WebUI version skew
+
+Compare the backend’s reported integer protocol with the protocol the WebUI was
+built for whenever backend version information is refreshed (pro-d556). A
+mismatch in either direction marks the version badge `data-alert="true"` and
+shows one actionable cockpit error toast naming both protocols. Offer the
+manual install or upgrade path that aligns the backend and browser build; do
+not upgrade automatically.
+
+A failed version read or a non-integer/missing protocol is unknown, not a match.
+Show the version as unknown and explain that protocol compatibility could not
+be verified. The version badge remains `data-part="version"`. Obtain this
+metadata through the core interface; the browser does not spawn a CLI process.
 
 ## 16. Amendments air-d44, air-d43: the error toast standard and the image-only message (Plan `toast-fix`)
 
@@ -2238,49 +2151,28 @@ Normative. Plan `toast-fix` decides the two points below after the WebUI bugs ai
 - A chat message that carries one or more images and no text is valid and is delivered: it means the User asks the agent to look at the image and find the problem. `invalid_submission` stays only for a submit with no text, no images and no files; `PI_SEND_TEXT_MAX` still applies to the text that is sent (11.3).
 - The Composer and the pi backend take it as any other submission: the images are written to the attachments directory as 11.3 says, the text sent is the marker lines alone (`[Attached image: <path>]` and `[Attached file: <path>]`), with no leading blank line (11.3, amended above; b15), and the submission is echoed, queued and delivered like any other.
 
-## 18. The web-to-CLI argv contract (Plan `desktop-e2e`; air-d54, air-d57)
 
-Normative for every web module that builds a `cpd` command line. The full statement — the rule, the `cpd argv-check` command interface and the Gate test — is **docs/contract.md §5.6 "The web-to-CLI argv contract"**; where the two differ, docs/contract.md wins (this file's preamble rule, section 10 excepted).
+## 17. Model selection controls
 
-- **One shared argv module.** No web code spawns `cpd` with hand-built argv: every command line is built by `web/src/server/cpd-argv.ts`, which exposes the discriminated union `CpdCommand` (one variant per cpd command the web sends) and `toArgv(cmd: CpdCommand): string[]` — the argv after the program name. Every spawn flavour (the `cpdExec.run`, `follow.start` and `stream` boundaries of `web/src/server/plugin.ts`, and the Electron paths `web/src/electron/update/`, `pty.ts`, `pty-tabs.ts`) consumes only `toArgv` output; the call-site modules (`web/src/server/cockpit/`, `web/src/server/pi/backend.ts`, `web/src/server/durable/backend.ts`, and the Electron paths) construct `CpdCommand` values, never their own arrays.
-- **The Worker count's argv is in the contract (Plan `settings-workers`, air-d69).** The Agent Tiers dialog's save (17, 19) sends `cpd config concurrency set <n>` (commands.md §14.2c) as the `CpdCommand` variant `{ readonly kind: "config.concurrency.set"; readonly n: number }`, whose `toArgv` returns `["config", "concurrency", "set", String(n)]`. The builder's enumeration list `allCpdCommands()` carries the variant, so the Gate test below covers the argv with no change to the test: it enumerates every variant, and an argv with no variant has no test.
-- **The Gate test.** `web/src/server/cockpit/argv-contract.test.ts` builds every `CpdCommand` variant from `cpd-argv.ts` alone, spawns one `cpd argv-check` process, feeds the argv arrays on stdin, and fails on any parse error (docs/contract.md §5.6 states the command's stdin/stdout/exit interface exactly). It runs in the Gate (`pnpm run verify`, step `verify:web`), so a CLI grammar change that breaks a web argv fails the Gate before merge.
+The UI displays and edits direct model and effort selections per role, under
+[core §9](../docs/contract.md#9-model-selection). Offer only supported efforts
+for the selected model; represent models without effort settings explicitly.
+Show configured and observed selections separately, including unknown runtime
+selection. Role authority does not depend on the selected model.
 
-## 17. The Agent Tiers Save sends all four role Tiers and toasts a refusal (Plan `toast-fix`)
-
-Normative. Plan `toast-fix` decides the two points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the Settings of `web/src/ui/DESIGN.md`) and its Save: a Save of one or two roles was refused by `cpd config tiers set` with `the following required arguments were not provided:`, and the dialog rendered that refusal as an inline red line (`data-part="settings-error"`) instead of the cockpit error toast of 16.1.
-
-### 17.1 The Save sends all four role Tiers
-
-- The Save runs `cpd config tiers set` with **all four** role Tiers — `--auxiliar`, `--worker`, `--lead` and `--manager`, the values the dialog shows, whether or not the User changed them — because `cpd config tiers set` accepts a save only with all four role Tiers (its `--help` usage line is `cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>`).
-- The rest of the save keeps its TUI order: the experimental switches are set one by one, then `cpd session retier --all` runs when a Tier value differs from the read; a refusal stops the save at the first failing step. **Amended by 19.2 (Plan `settings-workers`):** when the Worker count changed, `cpd config concurrency set <n>` runs right after the Tiers write, before the switches.
-
-### 17.2 A Save refusal is shown through the cockpit error toast
-
-- A Save refusal — a `settings.saved` with `ok: false` (§4) — is shown **once in the cockpit error toast** (the error Alert of 11.7, the toast surface of 16.1), with the whole error message: the CLI's refusal text, in full, uncut.
-- The dialog renders no inline error and no inline red line: the `data-part="settings-error"` line of `SettingsDialog.tsx` is gone. A failed Save leaves the dialog open with the values the User typed, and the error lives in the toast only.
+Saving validates the complete owner selection under [the resolver contract](../docs/contract.md#owner-role-selection-resolver-contract) and writes it atomically; role-by-role fallback and implicit changes to other roles are not permitted. A refusal appears through the
+cockpit error toast (§16.1), and must not appear as a successful save. The UI
+contains no model-letter ladder, role-strength range or tier preset editor.
 
 
-## 19. The Agent Tiers dialog shows and saves the Worker concurrency (Plan `settings-workers`; air-d69)
+## 19. Worker concurrency settings
 
-Normative. Plan `settings-workers` decides the points below for the Agent Tiers dialog (`web/src/ui/dialogs/SettingsDialog.tsx`, the WebUI half of the settings surface of air-d69; the TUI half is commands.md §15 and docs/contract.md's TUI settings section). `web/src/server/cockpit/settings.ts` is the server module that reads and saves; `web/src/protocol/cockpit.ts` holds `SettingsModel` and `SettingsChanges` (§4); `cpd config concurrency set <n>` (commands.md §14.2c) is the one write path, shared with the TUI (§17.1's argv is untouched).
+The settings dialog displays and edits the machine-wide Worker concurrency.
+Validate the count under the core configuration contract before writing; show
+a refusal in the cockpit error toast. Lowering the count does not stop running
+Attempts; new dispatch waits until the limit permits it. Concurrency is
+independent of model selection (§17).
 
-### 19.1 The settings payload carries `concurrency`
-
-- `SettingsModel` gains `concurrency: number`: the machine-wide Worker count (config `concurrency`, docs/contract.md §8.2, commands.md §14.2c). It comes from the **same read as the Tiers**: the top-level `concurrency` key of the `cpd config` JSON (docs/commands.md §14.2's example carries it), so there is **no second read argv** and no new `CpdCommand` variant for the read — `readSettings` (settings.ts) reads it from the reply of `toArgv({kind:"config.read"})` it already holds. A reply whose `concurrency` is not an integer in 1 to 16 inclusive is refused `cpd_malformed_json` naming the field `concurrency` (the same `bad(field)` refusal the Tier keys get, §6.3's error mapping).
-- `SettingsChanges` gains `concurrency?: number`: present only when the User changed the value. The wire boundary parses it once (§4.3): an integer 1 to 16 inclusive, else `invalid_message` with `details.field` `concurrency` — no clamp, no silent default (air-d70).
-- **Where the field is shown:** in the Agent Tiers dialog, inside the **"Models + Tiers" section, after the four role-Tier inputs** (the config's `concurrency` is the machine-wide Attempt limit, the count the StatusBar's workers pill shows after the `/` of its `workers Q·R·T/M` text, `data-part="workers"`). The field is a numeric input with the accessible label `concurrency` (`aria-label="concurrency"`, the role inputs' `aria-label="<role> tier"` pattern), prefilled with the read's value. A value outside 1 to 16 marks the input invalid (`aria-invalid`, the same mechanism the Tier inputs use) and disables Save; the value is never clamped (air-d70).
-
-### 19.2 The Save writes all four role Tiers and then the count
-
-- The Save keeps §17.1's order and adds the count right after the Tiers: `cpd config tiers set` with all four role Tiers (when any Tier changed), then **`cpd config concurrency set <n>` (when the count changed)**, then the experimental switches one by one, then `cpd session retier --all` when a Tier changed. A count that equals the read's value writes nothing.
-- The count's argv goes through the **shared argv builder** (18): the variant `{ readonly kind: "config.concurrency.set"; readonly n: number }` of the `CpdCommand` union, whose `toArgv` returns `["config", "concurrency", "set", String(n)]`. No call site builds the array itself; `saveSettings` constructs the `CpdCommand` value and calls `toArgv`.
-
-### 19.3 Refusals: the range, the toast, and what a lowered count stops
-
-- **The range and its refusal (air-d70).** The accepted range is **1 to 16 inclusive**. A value outside it is refused loudly — `config_invalid` (`details.key` `concurrency`), no clamp, no silent default — both by the command (commands.md §14.2c) and, a hand-edited `config.toml` no exception, when the file is loaded (docs/contract.md §8.2). The refusal reaches the web as any CLI refusal does (`cpd_failed` with the CLI's message, §6.3's mapping) and is shown like any Save refusal (17.2).
-- **A refused save stops the remaining writes and is shown as the error toast (air-d44), never inline.** The first failing write stops the save: the writes after it do not run (the same first-refusal rule §17.1 states for the switches), the dialog stays open with the values the User typed, and the whole CLI refusal text appears **once in the cockpit error toast** (the toast surface of 16.1) — never as an inline line in the dialog (the `data-part="settings-error"` paragraph of 17.2 stays gone). A successful save still closes the dialog.
-- **Lowering the count stops nothing (air-d71).** A save that lowers `concurrency` below the number of running Workers stops nothing: the engine reads the count from the config file on each tick, so the set takes effect without a restart, and it gates **new starts only** — the running tenants keep their slots to the end and the urgent one-beyond-`concurrency` rule is unchanged (docs/contract.md §3.7 E3, §8.2). Nothing in the web waits on or re-reads the count after the save; the workers pill (its `/M`, `data-part="workers"`) picks the new value up on the engine's next tick.
 
 ## 20. The cockpit status pane on the serve stream (Plan `status-workers`)
 
@@ -2411,13 +2303,6 @@ This section supersedes 6.2 (selection as store state written by `connection.sel
 - Toasts select nothing: the error toast's actions are `Send to …` and Dismiss (16.1). The breadcrumb is not a selection path: `web/src/ui/components/breadcrumb.tsx` is imported only by tests, and the header is removed (DESIGN 3a). No breadcrumb is migrated.
 - Enforcement is a test, not prose: web-tests `router.test.tsx` ("navigates route when selecting agent from tree inbox and manager view") drives each entry point and asserts the resulting route.
 
-### 22.6 Electron and dev/preview
-
-- Production loads `renderer/electron.html` with `loadFile` (`src/electron/boot.ts:94-97`, `main.ts:708`), so the window opens at `#/` and the route is set by the app. Dev and preview load the Vite URL with `loadURL`; the hash works there unchanged. No main-process change is part of this section.
-- **SIGUSR1, unpackaged.** `reloadIgnoringCache()` (`boot.ts:76`) keeps the fragment, so the agent is restored after the reload.
-- **SIGUSR1, packaged.** `app.relaunch(); app.exit(0)` (`boot.ts:63-67`) starts from the entry with no fragment, so the route is lost and the app opens `/`. This is a known limit. Restoring it needs the fragment passed through `loadFile` options, which `BootDeps.loadFile` does not take today; that is not part of this section.
-- Unverified in this repo: that Electron's `will-navigate` does not fire for in-page hash changes. The claim comes from the Electron typings (`node_modules/electron/electron.d.ts:18605`). Job `web-impl` checks it with the Electron e2e harness before the change merges.
-
 ### 22.7 Not-found recovery (D3)
 
 - **When.** (a) A parameter fails the agent-key parser (22.2). (b) After the first snapshot, the key resolves to no live agent (22.3). (c) No route matches the path: the root's `notFoundComponent` renders.
@@ -2500,43 +2385,33 @@ Normative. The status line of §23 ("not built") is superseded: the generator ex
 - Name clash, live: the three known violations of §24.3 are in the code now. Owner and order are a Lead decision.
 - `Tier` and `Effort` are not generated. Plan `webui-tier-efforts` cannot satisfy §24.1 until the generator exports them. Lead decision: which Job exports them.
 
-## 25. Core is single source of truth for tier catalog and grammar (Plan `webui-tier-efforts`; directives pro-d513, pro-d514; bug b6)
-
-Normative. Directives pro-d513 and pro-d514 decide the points below: core is the single source of truth for the tier catalog, valid rungs, ladder order, and role ranges. Web maintains no copy of tier grammar constants or local ladder math.
-
-### 24.1 Tier catalog read from core
-
-- Core provides `cpd config tiers list` (docs/commands.md §14.2a), outputting JSON with:
-  - `tiers`: array of valid Tier objects in ladder order with `tier`, `letter`, `effort`, `model`
-  - `ranges`: object mapping roles (decide, auxiliar, worker, lead, manager) to `{floor, ceiling, allowed: [tier, ...]}`
-- The web server (`web/src/server/cockpit/settings.ts`) queries the tier catalog from core and includes it in settings/wire data passed to WebUI.
-- `readSettings` validates configured role tiers solely by membership in the catalog returned by core, failing loud with `cpd_malformed_json` for unknown tiers.
-
-### 24.2 Deletion of local tier constants and ladder math in web
-
-- `web/src/protocol/tier.ts` exports no tier grammar constants (`MODEL_LETTERS`, `EFFORTS`, `TIER_COUNT`) or ladder math (`parseTier`, `tierIndex`, `tierAt`).
-- `web/src/ui/dialogs/SettingsDialog.tsx` derives available model and effort options and performs coherent boundary linking directly from the catalog and role ranges returned by core, rather than hardcoded arrays or local ladder indexing.
-- Core's ladder order (J < G < H < S < O, efforts 0 < 1 < X < 2 < 3 < 4) and role defaults/ranges are defined in `core/src/config/tier.rs` and documented in docs/contract.md §9.
 
 ## 26. Direct WebSocket connection to core and the pi session stream (Plan `webui-core-ws`; Job `webui-core-ws-docs`)
 
 Normative. Sources: docs/architecture/pi-native-core.md §5 and §7 Plan 4; pro-d522, pro-d527 (WebUI connects to core directly), pro-d528, pro-d541 (port 3333); docs/contract.md §5.8 (core's `/cpd-ws` and `run/core.sock`) and §6.21 (the pi live-stream socket). The Lead's answer to escalation `webui-core-ws-docs-a1-q1` decides §26.1. Where this section and §5, §13, §18 of this file, or docs/contract.md §5.5 and §5.6 disagree, this section wins (recency; those sections are superseded at §26.3 and their text is not edited).
 
-### 26.1 The data connection: direct to core `/cpd-ws`
+### 26.1 The core data connection
 
-- **The endpoint.** The WebUI opens one WebSocket to core, `ws://127.0.0.1:<port>/cpd-ws`, the endpoint of docs/contract.md §5.8. Core binds `127.0.0.1` only, on a port the OS chooses. There is no proxy on the data path: the WebUI does not connect to port 3333 for data.
-- **Where the port comes from.** The Lead's answer (escalation `webui-core-ws-docs-a1-q1`): the engine records the bound port in `$CPD_HOME/run/core.port`, and the WebUI reads it from there. The answer also allows an environment variable; this section defines one source only, `run/core.port`. **Open, flagged:** docs/contract.md §5.8 open point 2 ("How a client learns the WebSocket port") is still open there, and does not name `run/core.port`. The core-ws-engine Job must write the file and §5.8 must be amended to say so; this section does not amend §5.8.
-- **Port 3333.** Port 3333 is the WebUI production HTTP and static server only (pro-d541: a supervised Node service under the engine, bound on `0.0.0.0:3333`, serving the renderer). Under the Lead's answer it does **not** carry `/cpd-ws`: pro-d541's clause that it serves `/cpd-ws` is superseded by that answer (recency).
-- **Who hands over the URL.** The page cannot read a file, so the process that serves the page reads `run/core.port` and gives the renderer the `ws://127.0.0.1:<port>/cpd-ws` URL on load. The Lead's answer does not name the hand-over; this is an **inference** that the implementation Job must confirm. In Electron the preload `contextBridge` carries the URL (§15.1, one read-only member, no IPC data channel), as before.
-- **Origin.** The Origin rule of ADR 0015 point 1 applies unchanged (docs/contract.md §5.8): an absent, `null`, `file://` or loopback Origin is accepted; any other is refused before a connection's state is created. Consequence: the page loaded from `http://127.0.0.1:3333` or `http://localhost:3333` is accepted; a page loaded from another machine's address (for example `http://<host>:3333` over the LAN) is refused. This is a fact of the rule, not a new rule.
-- **Framing.** One JSON text frame per message, as §5.8. The renderer speaks core's two requests, with a `{"id", "method", "params"}` request and an `{"id", "result", "error"}` reply: `snapshot` and `events.subscribe`. Core then sends one `{"method": "event", "params": {"event": <Event>}}` notification per Event.
-- **The handshake and the reconnect** are §5.8's: the client sends `snapshot`, renders it, keeps the returned `cursor`, and sends `events.subscribe` with that cursor. On every reconnect it does the same with the last cursor it processed. This replaces §15.1's "every reconnect resyncs by full `cockpit.snapshot`" for the core connection, because §5.8 is the later record (pro-d527). The transport still carries no reconnect logic of its own (§15.1); the renderer's existing backoff runs.
-- **Events into the store.** Each `event` notification is an Event row (the shape of `cpd events follow`, docs/contract.md §5.2). The renderer's store applies it through the reducer, as it applies a `cockpit.patch` today (§4).
-
-**Open, not fixed by this section:**
-1. The content of `snapshot` (docs/contract.md §5.8 leaves it to this Plan).
-2. The mapping of core's `snapshot` and `event` messages onto the renderer's `cockpit.snapshot` and `cockpit.patch` wire messages (§4). Until the implementation Job fixes it, the store's shapes are unchanged.
-3. Whether core's `/cpd-ws` answers the `ping` and `pong` heartbeat of §15.2. docs/contract.md §5.8 defines no heartbeat.
+- **Endpoint and access.** The browser uses same-origin `/cpd-ws` under the
+  [runtime contract](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision)
+  and [access policy](../docs/architecture/webui-access.md). Production uses
+  3333; the preview forwards to production on the same host. A browser is never
+  given a server-local filesystem path or a loopback URL naming another machine.
+- **One authority.** Read models and actions use the core domain rules. The web
+  does not spawn CLI processes or own a competing store. A private core socket
+  or discovery file is an implementation boundary, not a second public origin.
+- **Snapshot and replay.** On connection, obtain the current cockpit read models
+  (§5) and their event cursor, render them, then subscribe from that cursor.
+  Reconnect from the last processed cursor under the core replay rules (§5.8 of
+  the core contract); a gap requires a fresh snapshot, never silent lost state.
+- **Framing.** The core event profile uses JSON request/reply frames and `event`
+  notifications. The renderer maps those to its read models through its reducer.
+  These read/subscription messages are not a complete inventory of domain
+  actions: authenticated actions follow the same core command authority.
+- **Liveness.** The profile must satisfy the heartbeat, disconnect and reconnect
+  behavior of §15.2 and the banner/outbox rules of §34. It must publish the codec
+  mapping for core frames and renderer models before implementation, rather than
+  depending on a retired child stream or Electron bridge.
 
 ### 26.2 pi session transcript streaming into the WebUI reactive store
 
@@ -2566,7 +2441,7 @@ The core WebSocket connection and session streaming pipeline are tested and veri
 
 Both test suites pass cleanly under Vitest.
 
-## 27. The WebUI token per server: the CPD.app and preview servers (Plan `webui-preview-sync`; bug b13)
+## 27. Per-process WebUI tokens
 
 Normative. The Lead chose per-server tokens for bug b13 (Plan `webui-preview-sync`, Job `webui-token-docs`). docs/contract.md §6.16 "The WebUI token, per server (b13)" states the rule; this section states the WebUI side of its lifecycle. Where they differ, §6.16 wins.
 
@@ -2575,19 +2450,19 @@ The durable host verifier now reads the per-PID directory on every submit (#1140
 ### 27.1 Who writes a token
 
 - **Existing same-PID file (#1139).** A boot replaces an existing file for its actual process PID with a fresh token at mode 0600. It never invents a different PID to avoid that file: verifiers require a live server identity. Tests representing separate servers supply distinct PIDs and fake their liveness; production servers retain their real process identity.
-- Each WebUI server writes its own token once, at its start: the Electron main process (`web/src/electron/main.ts`, the WebUI backend that serves the Composer) and the Vite server of the WebUI Preview (`web/src/server/plugin.ts`, `configureServer`). Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
-- The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The Electron main process's runs in `before-quit`. Neither removes a file of another pid.
+- Each WebUI server writes its own token once, at its start: the production browser backend and the preview server. Both call the one writer, `writeWebuiToken` in `web/src/server/webui-token.ts`, with their own process id. The writer creates `$CPD_HOME/run/webui-tokens/<pid>.token` (32 random bytes as hex, mode 0600), sweeps the files of dead pids in that directory, and returns the token and a `remove()` that removes only that server's file.
+- The Vite server's `remove()` runs in its close (`closeAll`, `plugin.ts`). The production server removes its own token during shutdown. Neither removes a file of another pid.
 
 ### 27.2 Lifecycle cases
 
 | Event | Effect on the files | Effect on the tokens |
 |---|---|---|
-| A second server starts while another runs (CPD.app and the preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
+| A second server starts while another runs (production and preview) | The new server writes its own file; the other's file is untouched | Both verify; neither invalidates the other |
 | One server quits (`before-quit` or `closeAll`) | Only its own file is removed | The other server's token still verifies |
-| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running CPD.app server is unaffected |
-| A server exits without its close (crash, or `app.exit(0)` of the watchdog's rollback relaunch, `web/ELECTRON.md`) | The file stays until the next start sweeps it | Its token is not accepted once its pid is dead |
+| The preview Vite server restarts, including the restart a User's switch between the WebUI and WebUI Preview views causes | The restarted process has a new pid and writes a new file; the old file is removed by its close, or swept by the next start if the close did not run | The running production server is unaffected |
+| A server exits without its close (crash, or `app.exit(0)` of the watchdog's rollback relaunch, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`) | The file stays until the next start sweeps it | Its token is not accepted once its pid is dead |
 | The packaged app relaunches after an update (pro-d502) | A new process, a new file | As a restart |
-| SIGUSR1 reloads the window in place (`web/ELECTRON.md`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
+| SIGUSR1 reloads the window in place (`docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, dev instances) | The same process keeps its file; nothing is written | Unchanged |
 
 ### 27.3 Verifiers
 
@@ -2596,26 +2471,26 @@ The verifiers read the directory at each check, as docs/contract.md §6.16 says:
 ### 27.4 Status and limits
 
 - Status: decided by the Lead for bug b13; as of this amendment the code still writes and reads the single file `run/webui-token`. Job `webui-token-impl` makes the code match this section. Until it lands, the statements above describe the target, not the running code.
-- Stale documents: `web/ELECTRON.md` ("WebUI token") and `docs/ui-preview.md` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
+- Stale documents: `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` ("WebUI token") and `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` ("WebUI token (b3)") still describe the single file. They are outside this Job's files and are updated with the implementation.
 - Limits, as §6.16 states them: a pid reused by an unrelated process after a crash, before the next start sweeps its file, is accepted until the sweep; a same-user process can read the files (the residual boundary of §6.16).
 
 ---
 
-## 27. cpd notices are attributed to cpd, never to the User (bug b12)
+## 27a. cpd notices are attributed to cpd, never to the User (bug b12)
 
 Normative. Bug b12 decides the points below. Where this section and §10.1 differ, this section stands: its rule for §10.1(a) (a `session-message` with `data.from` null is a `UserItem`) holds only for a message the User sent. The attribution rule and its open point are docs/contract.md §2.2 "Attribution of cpd's notices"; where the two differ, docs/contract.md wins.
 
-### 27.1 No cpd notice renders as "You"
+### 27a.1 No cpd notice renders as "You"
 
 - A `session-message` that cpd wrote itself (the bug wake `Bug <id> is open`, the breach alert `Bug <id> breached`, and every other message of docs/contract.md §2.2 "Attribution of cpd's notices") is a cpd fold row, never a `UserItem`: it has no `You` label and does not set `facts.lastRole` to `"user"`.
 - Only a message the User sent is a `UserItem`, with its `You · HH:MM` row (6.8). The running code does not meet this yet: until the wire marker of docs/contract.md §2.2 is decided, a from-null message cannot be told apart from the User's, and §10.1(a) maps every one of them to a `UserItem`.
 
-### 27.2 The cpd row
+### 27a.2 The cpd row
 
 - The row is the fold of §10.1(b): `FoldItem` with `foldKind` `"cpd"`, `defaultOpen` false, `body` the message text, and `title` its first line cut to `FOLD_TITLE_MAX`. Its DOM is the `FoldRow` of 6.8 with `data-fold="cpd"`.
 - No text in the row says the User sent it.
 
-### 27.3 Limits
+### 27a.3 Limits
 
 - Stated plainly: the running code is unchanged by this section. The claim that it maps a cpd notice to the User is read from the source (`web/src/server/pi/jsonl.ts:301`, `pi/lib/render.ts:62`), not seen in a running browser (unverified).
 - The marker is not decided here (docs/contract.md §2.2, open point). Until it is, the rule of 27.1 cannot be implemented, and the stated limitation of §10.1 stands.
@@ -2634,10 +2509,6 @@ Normative. docs/contract.md §3.7 "The preview worktree on install" (bug b11, pr
 - A conflict in the re-apply keeps the saved patch whole, leaves the preview on `origin/main` without it, and reports an error (docs/contract.md §3.7: an `error` Event or an Inbox item). The WebUI shows that error as a cpd notice, attributed to cpd (§27), never to the User.
 - The preview's content is then `origin/main`, not the User's edits. The patch stays on disk until the User applies or removes it; nothing is discarded.
 
-### 28.3 Status and limits
-
-- The running code does not do this yet. `web/src/electron/update/checkout.ts` fast-forwards or rebases and removes only the dirty paths that `origin/main` supersedes (docs/ui-preview.md, "Live sync"), and `web/src/electron/drift.ts` stashes edits only on `reject`. Neither saves a patch, resets, or re-applies one. This is read from the source; no install was run to see it (unverified).
-- The Inbox kind and the patch's location are not decided here (open point, docs/contract.md §3.7).
 
 ## 29. Favicon: build-time generated ICO and SVG (Plan `webui-ext-links`; pro-d99, pro-d544)
 
@@ -2645,7 +2516,7 @@ Normative for Job `web-impl`. Record: pro-d99 and pro-d544 decide that the WebUI
 
 ### 29.1 Source and outputs
 
-- The source is `web/build/icon/cpd-icon.svg`: a self-contained SVG with a 1024 by 1024 `viewBox`, the Electron app icon. It is the only favicon source. No copy of it is committed under `web/`, because a committed copy is the hand-kept copy that pro-d99 forbids.
+- The source is `web/build/icon/cpd-icon.svg`: a self-contained SVG with a 1024 by 1024 `viewBox`, the source app icon. It is the only favicon source. No copy of it is committed under `web/`, because a committed copy is the hand-kept copy that pro-d99 forbids.
 - The outputs are generated, never committed:
   - `favicon.svg`: the source bytes, served as the SVG favicon.
   - `favicon.ico`: the fallback. One ICO file with PNG-encoded entries at 16, 32 and 48 px, rasterised from the source. The sizes are a Phase choice of this section.
@@ -2673,14 +2544,12 @@ The `<head>` of `web/index.html` gets these two links after the `<title>`, in th
 
 The SVG is the preferred icon. The ICO is the fallback for a browser that does not take an SVG favicon. A browser requests `/favicon.ico` even without a link, so the ICO path is served either way.
 
-`web/electron.html` is the Electron renderer entry, not `web/index.html`, and it gets no icon link in this section. The Electron app icon comes from electron-builder (`web/electron-builder.yml`).
 
 ### 29.4 Serving
 
 - Dev (`vite`, port 5173, `strictPort`): `GET /favicon.svg` answers 200 with `image/svg+xml`, and `GET /favicon.ico` answers 200 with `image/x-icon`.
 - Build (`vite build`): `dist/favicon.svg` and `dist/favicon.ico` sit at the output root, so a static server of `dist/` answers the same paths with 200.
 - Tests (Job `web-tests`, `web/src/ui/favicon.test.ts`), each with no real server, socket or file watcher (A6):
-  - `index.html` has the two links of 29.3, read as text, the pattern of `src/electron/electron-html.test.ts`.
   - The generator's ICO has the header and the entry count of 29.1, and its SVG is the source bytes.
   - The dev middleware answers the two paths with 200 and the content types of 29.4, against a fake `ViteDevServer`.
   - The build emits both files, against a fake plugin context.
@@ -2696,37 +2565,37 @@ The SVG is the preferred icon. The ICO is the fallback for a browser that does n
 2. The preview servers on ports 3333 and 33333 are outside `web/` (`scripts/preview-web.sh`, not read). Unverified whether they serve the favicon paths. If they do not, `/favicon.ico` answers 404 there.
 3. The icon at 16 and 32 px (29.5).
 
-## 28. Workflow dependency fields on WorkflowView (Plan `plan-dag-edges`; pro-d100, pro-d513, pro-d514, pro-d551)
+## 28a. Workflow dependency fields on WorkflowView (Plan `plan-dag-edges`; pro-d100, pro-d513, pro-d514, pro-d551)
 
 Normative for the target. **Status at this commit: not built.** `WorkflowView` (5.2) has no `base_workflow` yet, and `buildPlanView` does not copy it. The Job `web-impl` makes this section true. Core already sends both fields; no core change is part of this section.
 
-### 28.1 The field
+### 28a.1 The field
 
 - `WorkflowView.base_workflow: string | null` (`web/src/protocol/cockpit.ts`), mapped in `buildPlanView` (`web/src/server/cockpit/readmodel.ts`) from the `base_workflow` key of each `workflows[]` object of `cpd plan show`. The mapping is direct: the value passes through unchanged, and `null` stays `null`. The client never derives it from `base`.
 - The name is snake_case, as core sends it, so no rename layer sits between core and the view. The other `WorkflowView` fields are camelCase (`jobKeys`). This is a deliberate deviation for this one field, not a precedent.
 - `base` keeps its meaning: the branch string (`main`, or a Lead Branch). `base_workflow` is a different value and is never compared with a branch name.
 
-### 28.2 Value (verified by reading core)
+### 28a.2 Value (verified by reading core)
 
 - Format: `<plan>/<key>`, for example `pay-1/api`. Never a bare key.
 - Core derives it; nothing is stored. The `plan show` query selects `(SELECT q.plan || '/' || q.key FROM workflows q WHERE q.repo = workflows.repo AND q.lead_branch = workflows.base)` (`core/src/plan/show.rs:31`, emitted at `show.rs:43`). It is `null` when the Workflow is not stacked.
 - Limits, stated plainly: the subquery is not filtered by Plan, so the value may name a Workflow of another Plan. It has no `ORDER BY`, so when several Workflows match, the one returned is not specified. Both are facts of the SQL; the consequences were not run (unverified).
 
-### 28.3 Needs (verified by reading core)
+### 28a.3 Needs (verified by reading core)
 
 - `WorkflowView.needs` lists the keys of Workflows of the same Plan, sorted, from `workflow_needs` (`core/src/plan/prs.rs:122`, `load_needs`). These are Workflow keys, not branch names and not `<plan>/<key>` strings.
 
-### 28.4 Dependency sources
+### 28a.4 Dependency sources
 
 - The only inputs to Workflow-to-Workflow edges are `base_workflow` and `needs`. A dependency is never inferred from a branch name or from the `base` string (pro-d513).
 - The client matches `base_workflow` to a card by composing `<planId>/<key>` from the Plan it renders. This matches the identifier format core sends. It is not a branch-name inference.
 - An upstream that is not a card of the rendered Plan draws no edge, and it is not an error. A stack onto another Plan's Workflow is a valid case. The rule matches the Job rule for `needs` (DESIGN-panes 1e(ii) rule 1).
 
-### 28.5 Supersedes A6 for this field
+### 28a.5 Supersedes A6 for this field
 
 - DESIGN-panes 0 (A6) says nothing under `web/src/protocol/**` changes. That is superseded for `WorkflowView.base_workflow` by this section (recency: pro-d100, pro-d513, pro-d514, pro-d551). A6 still holds for every other field.
 
-### 28.6 Where it is drawn
+### 28a.6 Where it is drawn
 
 DESIGN-panes 1e(iv) (edges, topological order, legend) and DESIGN 5.5. Pinned, once built, by `web/src/ui/cockpit/PlanViewDag.test.tsx` (Job `web-tests`).
 
@@ -2749,15 +2618,16 @@ Normative. Job `owners-docs` decides the points below from decisions pro-d513 an
 
 - Design. Read from the source at this commit (unverified at run time): core has the function (`core/src/policy/known.rs`); the cockpit serve snapshot and the `/cpd-ws` listener do not yet carry `owners` (`core/src/cockpit/mod.rs` has no such pane; no `core/` source names `cpd-ws`); the web still reads the directory itself (`web/src/server/plugin.ts`, `knownOwners`).
 
-## 31. Install convergence: the preview worktree, the prod assets and CPD.app (Plan `ports-everywhere`; pro-d545, pro-d553)
+## 31. Install convergence
 
-Normative target. The rules of one `cpd install --root <checkout>` on every machine, the part that is macOS only, and what the code does today. `docs/architecture/install-convergence.md` states the same with the reasons; where they differ, this section wins for the web contract and `docs/commands.md` §14.4 for the command. Recency: pro-d553 (2026-11-11) supersedes pro-d504 and pro-d505 (2026-11-10) on whether install installs CPD.app.
+Install converges the preview worktree and production browser assets on every
+host. CPD.app and Electron installation are retired (User, 2026-11-14).
+These are requirements; implementation conformance is unverified.
 
 ### 31.1 Preview worktree
 
 - When `${CPD_WEB_PREVIEW_WORKTREE:-<repo parent>/cpd.preview.web}` is missing, install creates it: `git worktree add -B preview/web <path> origin/main`, then `pnpm install --frozen-lockfile` in it. On a checkout at `~/projects/cpd` that path is `~/projects/cpd.preview.web`, on branch `preview/web`.
 - When it exists, install does not create it, and syncs it to `origin/main` as §28.1 states.
-- Today: creation is in `scripts/preview-web.sh` (`on` and `serve_only`). `cpd install` only syncs an existing worktree (`sync_preview_worktree`, `core/src/install/mod.rs`). Unverified: that install creates nothing on a machine that lacks the worktree (read from source, not run).
 
 ### 31.2 Prod browser static assets
 
@@ -2770,31 +2640,26 @@ for client routes keep their existing behavior. This is lexical containment,
 not a new symlink-isolation policy. See [issue #1123](https://github.com/clayton-duarte/cpd/issues/1123)
 for reproduction and the OWASP path-traversal reference.
 
-- Install builds `<root>/web/dist` from the checkout on every machine: `pnpm --dir <root> --filter cpd-web-client run build` (`vite build`). The production server on `0.0.0.0:3333` serves it (`docs/architecture/webui-network-ports.md`).
-- Today: install builds only `web/dist-electron` (step 7a, `build:electron`). No install step runs `vite build`.
+- Install builds `<root>/web/dist` from the checkout on every machine: `pnpm --dir <root> --filter cpd-web-client run build` (`vite build`). The production server on port 3333 serves it under the WebUI access policy (`docs/architecture/webui-access.md`).
 
-### 31.3 CPD.app, macOS only
+### 31.4 Idempotence
 
-- On macOS, install installs shell release `app-v0.1.0` to `/Applications/CPD.app`. On Linux it installs no shell (the homeserver gets none; pro-d553).
-- The shell is the GitHub Release, not built from the checkout: `scripts/release-shell.sh` builds it and `gh release create app-v0.1.0` publishes it (§14.4b of `docs/commands.md`).
-- Today: install does not install CPD.app. `cpd desktop` (`docs/commands.md` §14.4a) does: when the bundle is missing it runs `gh release download` for the latest release, not the tag `app-v0.1.0`, clears quarantine and opens the app (`core/src/app/mod.rs`, `install_and_open_release`).
+A rerun on a converged machine changes nothing. A failed browser build or
+preview-worktree creation is reported as an install failure; an incomplete
+installation must not report success.
 
-### 31.4 Idempotence and open points
 
-- A rerun on a converged machine changes nothing (`docs/commands.md` §14.4: install is idempotent). Assumption of this section, not in any record: a shell already at `app-v0.1.0` is not reinstalled.
-- Open, not decided here: whether install opens CPD.app after it installs it; what install does when `/Applications/CPD.app` is at another version; whether a failed worktree creation or prod build fails the install's exit or only prints.
-
-## 31. `cpd doctor` cross-machine check: target contract (Plan `ports-everywhere`; Job `doctor-cross-machine-docs`)
+## 31a. `cpd doctor` cross-machine check: target contract (Plan `ports-everywhere`; Job `doctor-cross-machine-docs`)
 
 **Status: target, not implemented.** As of this section, no code runs this check: `engine/src/doctor/mod.rs` runs only local checks. The Lead's answer on this Job (`doctor-cross-machine-docs-a1-q1`) makes this the contract that the next Jobs (`doctor-cross-machine-tests`, which writes red tests from this section, then `doctor-cross-machine-impl`) build to. Every rule below is a Phase choice of this section unless it cites a source. Architecture overview and output example: `docs/architecture/doctor-cross-machine.md`.
 
-### 31.1 Scope
+### 31a.1 Scope
 
-- `cpd doctor` gains one check, `cross_machine`, that probes the WebUI ports of the other machines in the fleet over HTTP: port 3333 (production WebUI server, §30, `docs/architecture/webui-network-ports.md`) and port 33333 (preview Vite server).
+- `cpd doctor` gains one check, `cross_machine`, that probes the WebUI ports of the other machines in the fleet over HTTP: port 3333 (production WebUI server, §30, `docs/architecture/webui-access.md`) and port 33333 (preview Vite server).
 - It is an HTTP reachability probe only. It does not open `/cpd-ws`, does not send an `Origin` header and does not authenticate. The Origin rule of §15.1 is access control for browsers and is not involved.
 - Reachability means that something answered HTTP on that host and port. It does not show that the answer comes from cpd, nor that the service is healthy.
 
-### 31.2 Fleet configuration
+### 31a.2 Fleet configuration
 
 - The fleet is read from `$CPD_HOME/config.toml` only (`docs/commands.md` §14.2 `config`). `cpd` reads no other file for it: no dotfiles registry, no SSH config and no DNS discovery. Decision of this section: explicit over implicit.
 - Shape (target, a new `[fleet.<machine>]` table; `docs/contract.md` §8.1 does not list it yet, which is the impl Job's to add):
@@ -2813,7 +2678,7 @@ for reproduction and the OWASP path-traversal reference.
 - The entry for the local `machine` is refused, not skipped: `config_invalid` with `details.key` = `fleet.<machine>`. An unknown key inside an entry is `config_invalid`, as for every table.
 - `fleet` absent or empty: the `cross_machine` check is not in the report at all. Existing reports do not change.
 
-### 31.3 Probes
+### 31a.3 Probes
 
 - For each fleet machine, sorted by name, and each port in `[3333, 33333]` (fixed, not configurable: pro-d541): one `GET http://<host>:<port>/`, HTTP/1.1, no `Origin`, no credentials, redirects not followed.
 - Deadline 10 s per probe, the same as the doctor's other probes (§14.1). All probes run concurrently, so the check takes at most about 10 s.
@@ -2830,7 +2695,7 @@ for reproduction and the OWASP path-traversal reference.
 
 - Probes are read-only. The check writes nothing and changes no state, so it is idempotent.
 
-### 31.4 Result
+### 31a.4 Result
 
 - `name`: `cross_machine`. `severity`: `warn`. Decision of this section: a machine that is asleep or off is an environment fact, not a local fault, so the check never makes the result `doctor_failed` (§14.1 already says `warn` never fails it).
 - `ok`: `true` only when every probe is reachable.
@@ -2840,12 +2705,12 @@ for reproduction and the OWASP path-traversal reference.
 - `expected`: `"every fleet machine answers on 3333 and 33333"`.
 - `message`, only when `ok` is false: `"<n> of <m> fleet probes unreachable: <machine>:<port> <reason>, ..."` in the same order as `found`.
 
-### 31.5 Refusals and errors
+### 31a.5 Refusals and errors
 
 - A malformed `[fleet]` table is `config_invalid` from the `config` check, as §14.1 already says for `config`. The `cross_machine` check does not run when `config` fails; it is then `not_checked`, like the other config-dependent checks.
 - A probe failure is never a doctor error: it is a `found` entry with `reachable: false`. Only a bug in the check itself is an error.
 
-### 31.6 Open points (not decided here)
+### 31a.6 Open points (not decided here)
 
 - Whether the probe should run in the engine's tick as well as in `cpd doctor`. Not decided; the doctor is the only caller in this section.
 - Whether `host` should accept a DNS name that resolves to several addresses and probe each. Not decided; one address is what the probe uses today (the OS resolver's first answer).
@@ -2955,6 +2820,26 @@ Decision pro-d584: for a review verdict of `changes` or `reject`, the feedback i
 - **`reject` with feedback** (33.6): whether the wire `reject` carries `feedback`, and how the WebUI collects it. Not decided.
 - **Host-held feedback file location** (33.5): whether the relative `feedback-<review>.md` resolves in `cpd`. Unverified.
 
+### 33.8 Approval dialogs
+
+Four dialogs stop a session until the User answers: `cpd_secret_approve`, `cpd_external_approve`, `cpd_host_approve` and `ask_user_question` (decision pro-d580). Each one is an Inbox item while it waits, and each is answered in the Inbox or in the WebUI.
+
+**Status: decided, not yet built** at base commit `b9b4aaec6`. Today the engine's `dialogs` rule (`core/src/inbox/rules.rs`) labels a waiting session `<who> asks you`, and a `dialog` row offers only Snooze and Dismiss. The rules below are the target.
+
+- **The Inbox item.** While a session waits on one of the four dialogs, the engine opens one `dialog` item for it at engine step `inbox` (contract §2.2 "Inbox item"), labelled `<agent> waits for your approval: <what>`. `<agent>` is the waiting session and `<what>` is what the dialog asks the User to decide. The item closes when the session stops waiting on that dialog, by an answer or by the dialog ending.
+- **Dual resolution (assumption A2).** An answer in the Inbox and an answer in the WebUI reach the same held dialog. The host holds one request per dialog (`pi/durable-host/held.ts`), and the first answer wins; the other surface then sees the dialog resolved and its item closes.
+- **The WebUI composer (assumption A3).** While a session waits on a dialog, the WebUI replaces the message composer with the dialog card, and restores the composer when the dialog resolves. The swap is already in `web/src/ui/ChatPane.tsx`, which draws the card in place of the composer whenever a dialog is open.
+
+**Approval response contract.** Requests with purpose `secret_approve`,
+`host_approve` or `external_approve` use the normal interactive question card
+with the explicit options `Allow once` and `Deny`. Identify an approval from
+its typed purpose, never from its title. Preserve that purpose by dialog ID.
+The response to the host is `ui_response {id, value: "Allow once" | "Deny"}`,
+rather than the ordinary question's `answer` payload. Only selection of the
+actual `Allow once` option authorizes the action; denial, custom text, no answer
+or cancellation yields `Deny`. An ordinary product question does not gain
+approval semantics by containing those words.
+
 ## 34. PWA shell: service worker, offline cache, engine banner, outbox, dedup, and HTTPS (Plan `pwa-shell`; Job `pwa-docs`)
 
 This section states the contract for the PWA shell: offline behavior, server deduplication, engine status banner, and static asset caching. The sections below describe the wire types, server-side dedup, outbox state machine, banner state machine, and HTTPS provisioning (deferred to pro-d571).
@@ -3015,9 +2900,9 @@ The banner displays the top-level connection and engine state, separate from the
 
 | Precedence | Condition | Banner kind | Fields |
 |---|---|---|---|
-| 1 | WebSocket not `open` | `reconnecting` | none |
-| 2 | WebSocket not `open` | `server-unreachable` | `since` = last-seen timestamp (ISO) or `engineDownSince` when present |
-| 3 | `InboxModel.engineRunning === false` AND socket is `open` | `engine-down` | `since: engineDownSince` (ISO, from server) |
+| 1 | WebSocket not `open` and no last-seen timestamp | `reconnecting` | none |
+| 2 | WebSocket not `open` and a last-seen timestamp exists | `server-unreachable` | `since` = last-seen timestamp (ISO) or `engineDownSince` when present |
+| 3 | `InboxModel.engineRunning === false` AND socket is `open` AND `engineRestartReason !== "install"` | `engine-down` | `since: engineDownSince` (ISO, from server) |
 | 4 | `InboxModel.engineRunning === false` AND socket is `open` AND `engineRestartReason === "install"` | `engine-restarting` | `reason: "install"`, `since: engineDownSince` (ISO) |
 | 5 | none of the above | none | (no banner) |
 
@@ -3048,10 +2933,10 @@ Outbox entry state transitions:
 | From | To | Trigger | Action |
 |---|---|---|---|
 | `queued` | `sending` | User submits (or replay starts) | Send `session.submit`, `cockpit.action`, or `dialog.respond` to server |
-| `sending` | (deleted) | `session.submitAck`, `action.result`, or `session.dialogResolved` arrives (success or 4xx) | Remove from store; update UI (pending submission row removed or marked sent) |
-| `sending` | `queued` | `session.error` or network error (5xx-like) | Move back to `queued` for next replay |
-| `sending` | `failed` | `session.error` with error code set | Mark `state:"failed"`, set `error` field; display to user (optional: inline in chat or as a toast, TBD) |
-| `failed` | (manual) | User clears/retries | Client-side action to retry or remove (TBD); move back to `queued` and replay |
+| `sending` | (deleted) | Successful `session.submitAck`, `action.result`, or `session.dialogResolved` | Remove from store and confirm success in the UI |
+| `sending` | `queued` | Retryable server failure or network error | Move back to `queued` for next replay |
+| `sending` | `failed` | Invalid or otherwise non-retryable action | Retain payload and error visibly for User retry or discard (User, 2026-11-14) |
+| `failed` | `queued` or (deleted) | User retries or discards | Retry explicitly requeues; discard removes the entry. Neither happens automatically |
 
 **Submitted while offline** (outbox usage): When `state.connection` is `"closed"` or `"reconnecting"`, a user submission via the Composer, a dialog response, or a cockpit action is not sent immediately. Instead:
 
@@ -3065,7 +2950,7 @@ Outbox entry state transitions:
 1. For each entry, change `state` to `sending`.
 2. Send the corresponding message (`session.submit`, `cockpit.action`, or `dialog.respond`).
 3. Wait for the server response (ack or result).
-4. On success (ack with `queued: false` or result with `ok: true`) or client error (`ok: false` with 4xx), delete the entry.
+4. On success, delete the entry. On an invalid or non-retryable rejection, retain it as visibly failed with its payload and error until the User retries or discards it.
 5. On server error (5xx-like) or network error, move back to `queued` for the next retry.
 
 ### 34.6 Exact wire contract for outbox and banner fields (A3, A4, pro-d591, pro-d568)
@@ -3098,7 +2983,6 @@ export interface InboxModel {
 
 **A4:** Offline queue covers composer submissions (`session.submit`), dialog responses (`dialog.respond`), and cockpit actions (`cockpit.action` of `inbox.*`, `pr.*`, `session.retier`, `plan.reject`, `context.retire`, `engine.start` kinds). Server dedup by id (clientSubmissionId, actionId, dialogId), persisted across server restarts (at most 1000 entries, LRU eviction). Replay order is FIFO by creation time.
 
-**A5:** Electron (global `window.cpdElectron` defined) registers no service worker and shows the same banner and outbox. Electron runs cpd locally via IPC; no offline benefit from a service worker. The banner still displays connection state (for parity with the browser) even though Electron's connection to the local cpd is typically very fast.
 
 ### 34.8 Out of scope
 
@@ -3106,7 +2990,6 @@ The following are decided elsewhere or deferred:
 
 - **Service-worker implementation:** PWA shell defines the contract and wire types only. The SW itself (fetch event handler, cache strategy, offline fallback to `/index.html`) is not written here.
 - **HTTPS provisioning on LAN:** mkcert cert generation, device-specific CA installation, iOS profile and full-trust setup, DNS SAN and IP SAN configuration. Deferred to pro-d571.
-- **Electron IPC bridge:** Electron's preload and main-process setup is outside web/. Electron bridge location is documented in scout-seams.md §7.
 - **IndexedDB implementation and schema:** The outbox store's full implementation (create, schema, indexed columns for ordering) is deferred to pro-d591.
 - **Dedup persistence layer:** The WebUI service owns one shared store persisted atomically in `$CPD_HOME/run/webui-dedup.json`. Successful session entries retain their acknowledgement for replay across connections and restarts. Failed actions are forgotten so a manual retry executes again. Browser request IDs use `crypto.randomUUID()` so a page reload cannot reuse an earlier outbox ID.
 

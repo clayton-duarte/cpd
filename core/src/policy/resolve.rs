@@ -191,7 +191,7 @@ fn entries(dir: &std::path::Path) -> Result<Vec<PathBuf>, crate::error::CpdError
 }
 
 /// Every entry of `$CPD_HOME/policy/` is checked by name, in one walk (sorted, the first bad one is
-/// `policy_invalid`): `host.toml`; a directory with a valid owner login for a name that holds only
+/// `policy_invalid`): `host.toml`, `default.toml`; a directory with a valid owner login for a name that holds only
 /// `owner.toml` and `<repo>.toml` files with valid repo names. A directory with any of those and no
 /// `owner.toml` is the old layout's. Names starting with `.` are ignored.
 pub fn check_file_names(home: &CpdHome) -> Result<(), crate::error::CpdError> {
@@ -199,11 +199,11 @@ pub fn check_file_names(home: &CpdHome) -> Result<(), crate::error::CpdError> {
     for entry in entries(&policy_dir(home))? {
         let name = entry.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !is_dir(&entry) {
-            if name != MACHINE_FILE {
+            if name != MACHINE_FILE && name != "default.toml" {
                 return Err(policy_invalid(
                     &entry,
                     None,
-                    "expected host.toml or an <owner>/ directory",
+                    "expected host.toml, default.toml or an <owner>/ directory",
                 ));
             }
             continue;
@@ -212,7 +212,7 @@ pub fn check_file_names(home: &CpdHome) -> Result<(), crate::error::CpdError> {
             return Err(policy_invalid(
                 &entry,
                 None,
-                "the directory name is not a valid owner login (expected host.toml or an <owner>/ directory)",
+                "the directory name is not a valid owner login (expected host.toml, default.toml or an <owner>/ directory)",
             ));
         }
         let files = entries(&entry)?;

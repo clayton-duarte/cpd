@@ -28,9 +28,9 @@ pub struct Ready {
     pub skipped: Option<u32>,
     /// `jobs.seq`: the queue order, unique.
     pub seq: u32,
-    /// Whether the Job is already a tenant (a retry): it competes for no pool and starts whenever it is Ready.
+    /// Whether the Job already owns its named resources (a retry). Its new Attempt still needs `workers`.
     pub tenant: bool,
-    /// Indices into the pools slice: the resources the Job needs, `workers` included. Never empty, no repeats.
+    /// Indices into the pools slice: `workers` is pool 0. Never empty, no repeats.
     pub needs: Vec<usize>,
 }
 
@@ -39,13 +39,13 @@ pub struct Ready {
 pub struct Schedule {
     /// The ids of the Jobs to start, in the order of the walk.
     pub start: Vec<u32>,
-    /// The ids of the Jobs skipped this tick, in the order of the walk: a Job that is no tenant and that missed a pool.
+    /// The ids of the Jobs skipped this tick, in the order of the walk: a Job that missed a required slot.
     /// Nothing is reserved for them.
     pub skipped: Vec<u32>,
 }
 
-/// Walks `ready` in the order urgent > skipped > queue. A Job that is a tenant starts. Any other Job starts when every pool it
-/// needs has a slot it may take (a non-urgent Job takes `free`, an urgent one `free` then `urgent_free`), taking one slot of
+/// Walks `ready` in the order urgent > skipped > queue. A retry retains its named resources but reacquires `workers`.
+/// Every Job starts when each pool it needs has a slot (a non-urgent Job takes `free`, an urgent one `free` then `urgent_free`), taking one slot of
 /// each, all or none; else it is skipped, takes nothing and reserves nothing, and the walk goes on to the next Job.
 pub fn schedule(pools: &[Pool], ready: &[Ready]) -> Schedule {
     let mut order: Vec<&Ready> = ready.iter().collect();
@@ -58,15 +58,12 @@ pub fn schedule(pools: &[Pool], ready: &[Ready]) -> Schedule {
     let mut left: Vec<Pool> = pools.to_vec();
     let mut out = Schedule::default();
     for job in order {
-        if job.tenant {
-            out.start.push(job.id);
-            continue;
-        }
+        let needs = job.needs.iter().copied().filter(|&p| !job.tenant || p == 0);
         let may_take = |p: usize, left: &[Pool]| {
             left[p].free + if job.urgent { left[p].urgent_free } else { 0 }
         };
-        if job.needs.iter().all(|&p| may_take(p, &left) > 0) {
-            for &p in &job.needs {
+        if needs.clone().all(|p| may_take(p, &left) > 0) {
+            for p in needs {
                 if left[p].free > 0 {
                     left[p].free -= 1;
                 } else {

@@ -167,9 +167,9 @@ test("Exploring keeps the step and command and points to spec-files for the refu
   const line = lineOf(lead, "#### Exploring");
   const bad: string[] = [];
   if (words(e) > 220) bad.push(`cpd-lead/SKILL.md:${line}: Exploring has ${words(e)} words, at most 220`);
-  if (!e.includes('cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --kind scout|research')) bad.push(`cpd-lead/SKILL.md:${line}: Exploring lacks the job add --kind command`);
+  if (!e.includes('cpd job add <k> --title "<title>" --spec <file.json> --kind scout|research')) bad.push(`cpd-lead/SKILL.md:${line}: Exploring lacks the job add --kind command`);
   if (!e.includes("references/spec-files.md#explore-jobs")) bad.push(`cpd-lead/SKILL.md:${line}: Exploring lacks the link to references/spec-files.md#explore-jobs`);
-  const codes = ["explore_workflow_forbidden", "explore_no_draft", "explore_needs_mixed", "tier_not_allowed", "illegal_phase"];
+  const codes = ["explore_workflow_forbidden", "explore_no_draft", "explore_needs_mixed", "illegal_phase"];
   for (const c of codes) if (e.includes(c)) bad.push(`cpd-lead/SKILL.md:${lineOf(lead, c)}: Exploring names ${c}`);
   const x = section(specFiles, "## Explore Jobs");
   for (const c of codes) if (!x.includes(c)) bad.push(`spec-files.md ## Explore Jobs lacks ${c}`);
@@ -319,19 +319,21 @@ test("no sleep command and no opens only when you do clause in the skills", () =
   assert.deepEqual(opens, [], `opens only when you do:\n${opens.join("\n")}`);
 });
 
-test("Failed Jobs states the Gate retry once in its table row", () => {
+test("Failed Jobs links retry selection and states the Gate retry limit once", () => {
   const sec = section(lead, "#### Failed Jobs");
   const bullets = lineHits(sec, /^- A `gate_failed` Attempt was already retried once/);
   assert.deepEqual(bullets, [], `repeated bullet:\n${bullets.join("\n")}`);
   const row = sec.split("\n").find((l) => l.startsWith("| `gate_failed`"))!;
-  assert.ok(row && /retry/.test(row), `gate_failed row states the retry: ${row}`);
+  assert.ok(row && /retry/i.test(row), `gate_failed row states the retry: ${row}`);
+  assert.match(sec, /Gate failure permits one automatic retry subject to the retry-effort policy/);
+  assert.match(sec, /contract\.md#retry-effort/);
 });
 
 test("Rules merges the adjacent bullets and drops the ask only sentence and parenthesis misplacement", () => {
   const sec = section(lead, "## Rules");
   const split = lineHits(sec, /^- \*\*Ask the User directly\.\*\*/);
   assert.deepEqual(split, [], `bullet not merged into Resolve first:\n${split.join("\n")}`);
-  assert.ok(/^- \*\*Resolve first, ask second\.\*\*/m.test(sec), "Resolve first bullet stays");
+  assert.match(sec, /follow \[Escalations\]\(#escalations\)/, "Rules point to escalation handling");
   const sentence = lineHits(sec, /Ask the User only for decisions you cannot derive/);
   assert.deepEqual(sentence, [], `sentence stays:\n${sentence.join("\n")}`);
   const forbidden = sec.split("\n").filter((l) => l.includes("agent_forbidden"));
@@ -428,12 +430,12 @@ test("cpd-lead sends codebase reads to scout Jobs", () => {
   assert.deepEqual(bad, [], bad.join("\n"));
 });
 
-test("cpd-lead: a new User request on a done Plan is handled in the Plan, grounded by an explore Job, never routed to the Manager", () => {
+test("cpd-lead: a new User request on a done Plan is handled in the Plan, grounded by an explore Job, with decisions following escalation routing", () => {
   const sec = section(lead, "### Documenting, Red testing, Implementing, Verifying");
   const para = sec.split(/\n\s*\n/).flatMap((p) => p.split(/\n(?=- )/)).find((p) => p.replace(/^- /, "").startsWith("**A new request on a done Plan"));
   assert.ok(para, "no bullet or paragraph starting with **A new request on a done Plan");
   for (const token of ["scout", "research", "cpd workflow add", "dispatch"]) assert.ok(para.includes(token), `the done-Plan paragraph lacks ${token}`);
-  assert.match(para, /never[^.]*Manager|Manager[^.]*never/i, "the paragraph must refuse routing the request to the Manager");
+  assert.match(para, /Unresolved decisions follow \[Escalations\]\(#escalations\)/);
 });
 
 test("cpd-lead: Exploring lists done among the phases an explore Job may be added in", () => {
@@ -471,28 +473,21 @@ test("waiting work is queued with needs and missing information is a scout or re
   for (const t of ["--needs", "scout", "research", "ask_user_question", "cpd_plan_review"]) assert.ok(b.includes(t), `the Register rule lacks ${t}`);
 });
 
-test("Manager owns product decisions and Lead clarifies implementation with User", () => {
-  const qRef = files("cpd-lead").find((f) => f.name.endsWith("references/questions.md"))!.text;
-
-  // cpd-manager/SKILL.md
-  assert.match(manager, /product decision/i, "Manager must settle product decisions");
-  assert.match(manager, /what and why/i, "Manager must define what and why (requirements, behaviour, scope, product trade-offs)");
-  assert.match(manager, /PRD/i, "Manager must deliver them as the PRD (product decisions only, no implementation)");
-  assert.match(manager, /product gap/i, "Manager settles product gaps reported by Leads");
-  assert.match(manager, /never answers? a Worker('s)? [eE]scalation|never answers? [eE]scalations? from Workers?/i, "Manager never answers a Worker's Escalation");
-  assert.doesNotMatch(manager, /Leave the User's answers to the User\. Leads ask the User directly/i, "Manager must remove 'Leave the User's answers to the User. Leads ask the User directly'");
-  assert.doesNotMatch(manager, /relay between them/i, "Manager must remove 'relay between them'");
-
-  // cpd-lead/SKILL.md
-  assert.match(lead, /clarif(y|ies) implementation and operational details with the User/i, "Lead clarifies implementation and operational details with the User");
-  assert.match(lead, /interview until every Workflow's public seam, error case and acceptance check can be written into a Spec without a guess/i, "Lead keeps the interview completion criteria");
-  assert.match(lead, /product gap[^\n]*Manager|session send[^\n]*Manager/i, "Lead sends product gaps to Manager via session send, not to the User");
-  assert.match(lead, /answers? Workers?('s)? [eE]scalations?|Worker('s)? [eE]scalation/i, "Lead answers Workers' Escalations");
-
-  // cpd-lead/references/questions.md
-  assert.match(qRef, /implementation and operational (details|choices)/i, "questions.md states Lead asks implementation and operational choices");
-  assert.match(qRef, /product decisions? (are )?settled by (the )?Manager/i, "questions.md states product decisions settled by Manager");
+test("Manager and Lead delegate question routing to the canonical contract", () => {
+  const routing = section(docText("contract.md"), "##### Escalation routing");
+  assert.match(manager, /contract\.md#escalation-routing/);
+  assert.match(section(lead, "#### Escalations"), /contract\.md#escalation-routing/);
+  assert.match(manager, /PRD/);
+  assert.match(manager, /product decision gap/);
+  assert.match(routing, /requirements, behavior, scope or a product trade-off/);
+  assert.match(routing, /Worker → Lead/);
+  assert.match(routing, /Lead → Manager → User/);
+  assert.match(routing, /Lead → User directly, using `ask_user_question`/);
+  const questions = files("cpd-lead").find((f) => f.name.endsWith("references/questions.md"))!.text;
+  assert.match(questions, /implementation and operational choices/);
+  assert.match(questions, /product decisions are settled by the Manager/);
 });
+
 
 test("cpd-lead and cpd-manager link CONTEXT.md for the three layers table", () => {
   for (const [name, text] of [["cpd-lead", lead], ["cpd-manager", manager]] as const) {

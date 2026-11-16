@@ -49,6 +49,35 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
     if kind == Some(ScopeKind::Machine) {
         table.remove(MCP);
     }
+    if kind == Some(ScopeKind::Owner)
+        && let Some(value) = table.remove("role_selection")
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct OwnerRoles {
+            provider: String,
+            manager: super::RoleSelection,
+            lead: super::RoleSelection,
+            worker: super::RoleSelection,
+        }
+        let roles: OwnerRoles = value.try_into().map_err(|e: toml::de::Error| {
+            policy_invalid(file, Some("role_selection"), e.message())
+        })?;
+        for role in [&roles.manager, &roles.lead, &roles.worker] {
+            if super::model::model_ref(&role.model).is_err()
+                || role
+                    .model
+                    .split_once('/')
+                    .is_none_or(|(p, _)| p != roles.provider)
+            {
+                return Err(policy_invalid(
+                    file,
+                    Some("role_selection"),
+                    "invalid model or provider mismatch",
+                ));
+            }
+        }
+    }
     // `[hooks]` is read from the text, which keeps the file order of a block's commands (a `Table` sorts keys).
     let hooks = table
         .remove(HOOKS)

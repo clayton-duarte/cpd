@@ -916,3 +916,48 @@ mod tests {
         }
     }
 }
+
+/// A configured model and Pi effort for a role.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleSelection {
+    pub model: String,
+    pub effort: u8,
+}
+
+/// The three role selections supplied by a policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleSelections {
+    pub manager: RoleSelection,
+    pub lead: RoleSelection,
+    pub worker: RoleSelection,
+}
+
+/// Pi capability evidence supplied by the caller.
+pub trait SelectionCapabilities {
+    fn supports(&self, model: &str, effort: u8) -> bool;
+    fn evidence(&self, model: &str, effort: u8) -> Result<bool, CapabilityError> {
+        Ok(self.supports(model, effort))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CapabilityError {
+    Unavailable,
+    UnknownModel,
+}
+
+/// Load and validate an owner's complete role selection.
+pub fn resolve_owner_role_selection(
+    home: &crate::home::CpdHome,
+    key: &PolicyKey,
+    capabilities: &dyn SelectionCapabilities,
+) -> Result<RoleSelections, CpdError> {
+    model::resolve_direct(home, key, capabilities)
+}
+
+#[cfg(test)]
+mod production_selection_tests;
+
+#[cfg(test)]
+mod review_compat_tests;

@@ -2,7 +2,7 @@
 
 Status: **the expected behaviour** of an authored pull request from open to merged, and the invariants the GitHub SWR pass and the update Job queue must keep. It is the contract the executable scenario tests (`workflow::pr_lifecycle_scenario`, Job `autonomy-tests`) pin. It is a design page, not a test run: each transition's "At HEAD" column records what the code does as **read** in `core/`, `engine/` and `docs/`, and is marked where it was not run.
 
-Decisions: pro-d554 (behind-base is not the User's concern; only a conflict matters, and the Workflow resolves it), pro-d518 (the Inbox shows a pull request only when a human is needed), pro-d549 (the Workflow is the plan; its Jobs are registered at once). Bugs: b31 and b32 (the Lead is not woken on comments; a ready PR stays `waiting`), b33 (the SWR pass drops feedback), b34 (a behind-base compare failure writes NULL, and no update is queued). Related: [swr-github.md](swr-github.md) (the one-document pass), [attention-inbox.md](attention-inbox.md) (the `pr-ready` item), [contract §7.6](../contract.md) ("Pull requests and the PR rebase") and [§3.8](../contract.md) (Workflow statuses).
+Decisions: pro-d554 (behind-base is not the User's concern; only a conflict matters, and the Workflow resolves it), pro-d518 (the Inbox shows a pull request only when a human is needed), pro-d549 (the Workflow is the plan; its Jobs are registered at once). Bugs: b31 and b32 (the Lead is not woken on comments; a ready PR stays `waiting`), b33 (the SWR pass drops feedback), b34 (a behind-base compare failure writes NULL, and no update is queued). Related: [swr-github.md](swr-github.md) (the one-document pass), [attention-inbox.md](../contract.md#inbox-item) (the `pr-ready` item), [contract §7.6](../contract.md) ("Pull requests and the PR rebase") and [§3.8](../contract.md) (Workflow statuses).
 
 ## 1. The nine transitions
 
@@ -64,6 +64,6 @@ Each gap is read in code. None is run, and the scout's store counts are not re-m
 
 - [contract.md](../contract.md) — §3.8 (Workflow statuses), §7.6 (the poll, rule 3 of "Ready, never a draft"), §7.7 (update Job), §9.8a (`pr reply`), §9.10 (`pr merge`).
 - [swr-github.md](swr-github.md) — §1 (containment), §4 (the pass), §9 (outbox ops), §10 (guarantees).
-- [attention-inbox.md](attention-inbox.md) — the `pr-ready` item.
+- [attention-inbox.md](../contract.md#inbox-item) — the `pr-ready` item.
 - Records: pro-d554 (2026-11-11 UTC), pro-d518 (2026-11-10 UTC), pro-d549 (2026-11-10 UTC), pro-n442.
 - Code read at HEAD: `core/src/pr/poll.rs`, `core/src/pr/pulls.rs`, `core/src/pr/postable.rs`, `core/src/pr/swr_read.rs`, `core/src/swr/source/github.rs`, `core/src/inbox/pr.rs`, `core/src/job/open.rs`.
