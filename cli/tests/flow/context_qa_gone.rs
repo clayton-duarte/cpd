@@ -4,8 +4,6 @@
 
 use crate::common;
 
-use std::fs;
-
 use common::fx::Fx;
 use common::refused;
 
@@ -13,13 +11,12 @@ const CTX: &str = "building-cpd";
 
 /// A machine `hs` with Context `building-cpd` holding decision hs-d1 and note hs-n1.
 fn fx() -> Fx {
-    let fx = Fx::new();
-    fs::create_dir_all(fx.env.cpd_home()).unwrap();
-    fs::write(
-        fx.env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\n",
-    )
-    .unwrap();
+    let fx = Fx::with_ports();
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",
