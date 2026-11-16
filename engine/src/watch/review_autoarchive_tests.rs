@@ -20,6 +20,13 @@ fn archived(fx: &mut Fx) -> Option<String> {
 fn review_autoarchive_regression_closed_and_merged_archive_without_delay() {
     for state in ["closed", "merged"] {
         let mut fx = fixture(state);
+        fx.fixture("INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at) VALUES ('normal-lead','lead','ctx','normal','Lead','/','O3','idle','t','t'); INSERT INTO plans (id,context,title,phase,lead_session,created_at,locked_at,done_at) VALUES ('normal','ctx','Normal','done','normal-lead','t','t','t');");
+        super::archive_leads::run(&mut fx.engine);
+        let normal: Option<String> = fx.query("SELECT archived_at FROM plans WHERE id='normal'");
+        assert!(
+            normal.is_none(),
+            "non-codereview plans retain normal delays"
+        );
         review_tick(&mut fx);
         assert!(
             archived(&mut fx).is_some(),
