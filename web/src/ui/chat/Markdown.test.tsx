@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { readFileSync } from "node:fs";
-const typesetCss = readFileSync(new URL("../../lib/typeset.css", import.meta.url), "utf8");
+const typesetCss = readFileSync("src/lib/typeset.css", "utf8");
 import { createRoot } from "react-dom/client";
 import type { Components } from "react-markdown";
 import "../../testing/render.tsx";
