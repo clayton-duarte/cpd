@@ -10,6 +10,7 @@ The levels (Jira's words, as an analogy), the cpd objects and their roles are in
 
 ## Docs
 
+- [CPD essence analysis](docs/essence.md): approved analysis copied verbatim from `/tmp/cpd-cpd-simplification/essence-analysis.md` (analysis grounded in `f0bab4a`; not canonical authority)
 - [Manifesto draft](docs/manifesto.md): purpose and principles
 - [docs/mark.md](docs/mark.md): the mark φ and its logo
 - [CONTEXT.md](CONTEXT.md): the vocabulary
