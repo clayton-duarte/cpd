@@ -21,16 +21,19 @@ Legacy fixed/calendar policies remain supported for other adopters.
 - Source commit: `3634051354021725dc611be4cabff3c6c06a0cc9`.
 - Source base: merged skills daily-pacing change from main.
 - CPD worktree: `/home/clayton/projects/cpd-reset-pacing`.
-- CPD branch: `feat/reset-based-pacing`, stacked on CPD #1362 head
-  `0631f36da25699c4fbd27ef9363cded647535cc4`.
+- CPD branch: `feat/reset-based-pacing`, rebased onto main
+  `7a5a740da` after confirming CPD #1362 merged.
 - Original CPD worktree is untouched; its local main was behind remote main.
 - Consumer snapshot is copied from the exact source commit, with updated hashes.
 - Config selects `reset_pacing: true`; documentation records supersession.
 
-Neither branch was pushed; no issue or PR was created. Source review/merge must
-precede consumer publication. Refresh the source pin if review/merge changes its
-revision, and reconcile CPD with current main/#1362 before publishing.
-Do not merge either change autonomously.
+The User then explicitly requested: “no only locally, open a PR and make that
+official”. Narrow publication authorization is recorded at
+[#1115](https://github.com/clayton-duarte/cpd/issues/1115#issuecomment-6920525764).
+Source PR: [skills #9](https://github.com/clayton-duarte/skills/pull/9).
+The consumer is published as a dependent draft for review, not activation.
+Source review/merge must precede consumer readiness/merge. Refresh the source
+pin if review/merge changes its revision. Do not merge either change autonomously.
 
 ## Validation
 
@@ -54,10 +57,12 @@ Account available; spend control not reached.
 The modified CPD status command computed reserve `91.09446808862434%`,
 spendable `0%`, `allowed: false`, `run_required: true`, both creation flags false.
 Counts were 0 issues/2 PRs today; null cardinal caps. No run descriptor was
-created or revived. Stop reason: requested implementation is prepared locally;
-the live allowance refuses QA and guarded publication. Reauthenticate only if
+created or revived. The live allowance refuses general QA; the subsequent User
+instruction narrowly authorized publication of these policy changes, not a run
+or budget reset. Reauthenticate only if
 the reusable official login is actually unavailable, not on ordinary restarts.
 
-Next safe action: User review of local changes. Obtain fresh telemetry before
-any later QA/publication and preserve explicit current-window run authority;
-do not bypass the guard to create review resources while it refuses creation.
+Next safe action: User review/merge of source PR, then refresh the consumer pin
+as needed and mark the CPD PR ready. Obtain fresh telemetry before any later QA
+and preserve explicit current-window run authority. This narrow publication
+instruction is not authority for further QA findings/PRs or automatic rollover.

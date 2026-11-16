@@ -8,8 +8,10 @@ source of truth. [tools/repo-qa.upstream.json](../tools/repo-qa.upstream.json) r
 the immutable upstream commit, package path and SHA-256 of every package file.
 The reset-pacing pin is source `3634051354021725dc611be4cabff3c6c06a0cc9`,
 prepared on `feat/reset-based-pacing` in the canonical skills repo. This consumer
-update is local preparation only: source review/merge must precede consumer
-publication, and the pin must be refreshed if the reviewed source revision changes.
+update depends on [skills #9](https://github.com/clayton-duarte/skills/pull/9).
+The User explicitly requested publication of both policy proposals; the consumer
+remains draft until source review/merge, and its pin must be refreshed if the
+reviewed source revision changes.
 CPD tests reject changed, added, removed or
 non-file entries that differ from that snapshot.
 
