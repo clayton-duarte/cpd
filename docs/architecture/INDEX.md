@@ -13,6 +13,7 @@ current guidance.
 
 ## Design and operational references
 
+- [Accepted architectural assessment](accepted-assessment.md)
 - [cpd doctor cross-machine probing](doctor-cross-machine.md)
 - [The model input cap](model-input-cap.md)
 - [CLI and WebUI argv parity](parity.md)
