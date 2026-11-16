@@ -890,7 +890,7 @@ test("cpd-lead merges the base only on a conflict; ready is its own Gate and no 
   assert.doesNotMatch(lead, /contains (the|its) base|if it moved/i);
 });
 
-test("cpd-manager pins the exact CLI of context decide, plan new, session send and job retry", () => {
+test("cpd-manager pins the exact CLI of context decide, plan new and session send", () => {
   const rules = section(skillFiles("cpd-manager")[0]!.text, "## Rules");
   const lines = rules.split("\n");
   const head = lines.indexOf("- **Exact CLI syntax (never guess flags or subcommands):**");
@@ -904,9 +904,8 @@ test("cpd-manager pins the exact CLI of context decide, plan new, session send a
     { words: "context decide", flags: ["--context"] },
     { words: "plan new", flags: ["--context", "--title", "--brief-file"] },
     { words: "session send", flags: ["--unblocks"] },
-    { words: "job retry", flags: ["--plan", "--tier"] },
   ];
-  assert.equal(subs.length, expected.length, "exactly four sub-bullets");
+  assert.equal(subs.length, expected.length, "exactly three sub-bullets");
   const syn = synopses();
   expected.forEach((e, i) => {
     const span = /^  - `(cpd [^`]+)`/.exec(subs[i]!)?.[1];
@@ -919,7 +918,19 @@ test("cpd-manager pins the exact CLI of context decide, plan new, session send a
   });
   assert.ok(subs[0]!.includes("positional") && subs[0]!.includes("NO `--title` or `--body`"));
   assert.ok(subs[2]!.includes("always required") && subs[2]!.includes("broadcast"));
-  assert.ok(subs[3]!.includes("always required"));
+});
+
+test("cpd-manager delegates shaping exploration to the Lead, whose commands refuse the Manager", () => {
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  const shaping = section(manager, "## 2. Plans");
+  assert.match(shaping, /Create a shaping Plan with `cpd plan new <id> --context <c> --title "<t>" --shaping`\. It creates the Plan and its Lead together\./);
+  assert.match(shaping, /You may shape your Context's Plan while it is in `shaping`; its Lead owns Jobs, Attempts, answers and Workflow commands, including explore Jobs\./);
+  assert.match(shaping, /Delegate an exploration question to that Lead with `cpd session send <context>:<plan> "<question>" --unblocks "<reason>"`; the Lead dispatches and manages the exploration and hands its finding back to you\./);
+  assert.match(shaping, /Your shaping authority ends when the Plan leaves `shaping`\./);
+  assert.doesNotMatch(manager, /`cpd job retry(?:\s|`)/, "the Manager must not be taught a Lead-only retry");
+
+  const boundary = section(commandsDoc, "### 4.1 `plan new`");
+  assert.match(boundary, /on a Lead-bearing Plan the explore Job commands \(`job add`, `job list`, `job show`, `job cancel`, `job retry`\), Attempt commands \(`attempt list`, `attempt show`, `attempt read`, `attempt abort`\) and `answer` remain Lead-only and are refused to the Manager as `plan_has_lead` \(exit 3\)/);
 });
 
 test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four-step bug report protocol", () => {
