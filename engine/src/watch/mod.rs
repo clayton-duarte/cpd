@@ -446,3 +446,6 @@ mod ensure_when_free_tests {
         assert!(fakes.spawn.launches().is_empty());
     }
 }
+
+#[cfg(test)]
+mod review_autoarchive_tests;

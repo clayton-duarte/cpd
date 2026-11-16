@@ -42,6 +42,8 @@ macro_rules! nothing_open {
 /// A Lead's Plan is finished when the Plan is `done` and nothing of it is live or open, and its Lead has no open,
 /// undismissed Inbox item (snoozed or not), and no Job of the Plan is `failed`. E13 ([`ready_sql`]) and both selections of E14 ([`super::archive_leads`]) share it, so the two cannot drift.
 /// Both queries alias the Session `s` and its Plan `p`, and bind no parameter.
+pub(super) const LEAD_NOTHING_OPEN: &str = nothing_open!();
+
 pub(super) const LEAD_FINISHED: &str = concat!("\n       p.phase = 'done'", nothing_open!());
 
 /// pro-d416 (A2): E13 also sleeps the Lead of an open `codereview` Plan that awaits changes (E14 does not archive it).

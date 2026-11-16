@@ -65,3 +65,6 @@ mod team_tests;
 mod tier_tests;
 #[cfg(test)]
 mod unread_rows_tests;
+
+#[cfg(test)]
+mod review_autoarchive_tests;
