@@ -10,6 +10,17 @@ distillation. Each run still needs the User's explicit start/resume instruction.
 
 ## User decisions
 
+Latest authorization correction (2026-11-16):
+[recorded User instruction](https://github.com/clayton-duarte/cpd/issues/1115#issuecomment-6921840796)
+authorizes daily 3 a.m. Toronto cron wakes of this same OpenCode session on
+homeserver. The User called manual weekly reauthorization a bug: the authorized
+cron and available live allowance suffice. CPD selects `standing_authorization`;
+weekly resets require fresh usage and reserve computation, not another approval.
+Optional immutable run records remain audit/cap scopes, not permission gates.
+Preserve exclusivity, scope/attribution, finite caps, telemetry/account controls
+and User review/merge. This supersedes earlier one-week-only authority rules for
+this recurring operator, not other consumers' default policy.
+
 Latest budget decision (2026-11-16): the User approved continuous pacing from
 the official reset timestamp, replacing the weekday reserve schedule and Sunday
 8 p.m. release hold. Reserve `100 * (resets_at - now) / (10080 * 60 seconds)`;

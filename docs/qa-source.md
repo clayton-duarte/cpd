@@ -6,10 +6,13 @@ Migration tracking: [#1152](https://github.com/clayton-duarte/cpd/issues/1152).
 CPD's `tools/repo-qa` is a pinned, unmodified consumer snapshot, not another
 source of truth. [tools/repo-qa.upstream.json](../tools/repo-qa.upstream.json) records
 the immutable upstream commit, package path and SHA-256 of every package file.
-The reset-pacing source is merged in
-[skills #9](https://github.com/clayton-duarte/skills/pull/9); the manifest pins its
-merge commit. The entire package matches that merged tree byte-for-byte.
-The source dependency is satisfied; CPD still requires User review and merge.
+Reset pacing merged in [skills #9](https://github.com/clayton-duarte/skills/pull/9).
+This standing-authorization update pins the canonical merge revision
+from merged [skills #10](https://github.com/clayton-duarte/skills/pull/10) in the manifest.
+The package is an exact source snapshot, not a consumer-only
+patch. All 15 package files match the merged source tree byte-for-byte.
+The source dependency is satisfied; CPD review/merge is still required before
+activating the daily schedule.
 CPD tests reject changed, added, removed or
 non-file entries that differ from that snapshot.
 

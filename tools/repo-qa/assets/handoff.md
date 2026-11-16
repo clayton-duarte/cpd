@@ -14,6 +14,8 @@
   latest CI/review status and unfinished upkeep:
 - Human-input questions/labels; no open question is silently decided:
 - Authorized weekly window/reset and immutable run start (if configured):
+- Standing authorization reference and scheduler enabled/disabled state (if configured);
+  weekly window is audit only in this mode, not a request for renewed approval:
 - Account meter, if supplied: source/time, remaining percent before/after,
   resolution/uncertainty, unrelated usage; never infer a precise token amount:
 - Stop reason and next safe action; User review/merge remains pending:

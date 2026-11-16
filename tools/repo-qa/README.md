@@ -85,7 +85,7 @@ base independently per repository; it need not be `main`.
 For an explicitly authorized daily reset, record the instruction, then use the
 same `QA_BATCH=YYYY-MM-DD-reset-N` on every command. The date uses the configured
 timezone. A stale/empty/malformed batch fails before API calls. A reset does not
-reset a run's own cap. Without `--run`, count-only mode applies daily/batch caps; weekly mode refuses creation until a descriptor is supplied. Therefore
+reset a run's own cap. Without `--run`, count-only mode applies daily/batch caps; default weekly mode refuses creation until a descriptor is supplied (unless standing authorization below is configured). Therefore
 always pass the descriptor for a bounded run.
 
 Status exposes `counts` (today's active daily/reset allowance), `day_counts`
@@ -179,9 +179,11 @@ platform improvement would be a read-only native allowance tool; no such tool
 is exposed to this agent. Cloud model access and a separate workspace CLI login
 must not be assumed to share quota-read authorization.
 
-The reader pins the first observed weekly reset. It stops and removes its snapshot
+Default single-window authority (unless standing authorization below is configured):
+the reader pins the first observed weekly reset. It stops and removes its snapshot
 when that window expires or a subsequent response changes it. A new window needs
-explicit User authorization; persistent authentication does not renew QA authority.
+explicit User authorization by default; standing authorization below can instead
+authorize recurring work across windows. Cached login is not authority.
 Live reads may differ by one second due to reset-time rounding; tolerate that
 rounding while keeping the reader expiry at the earliest observed boundary.
 The guard refreshes status after GitHub pagination and rejects a window change
@@ -238,10 +240,46 @@ No assumed reset weekday, local timezone, DST adjustment or Sunday release hold
 applies in this mode. Run the reader with `--min-remaining 0`; the JS guard
 computes the reserve on each check, including after pagination and before writes.
 Fresh telemetry (at most 60 seconds), account availability, spend controls and
-explicit authorization for each new weekly window still apply. Expired or
+the configured run or standing authorization policy still apply. Expired or
 changed resets refuse work; a new reading never renews an old run's authority.
 This policy does not start a QA run or install a scheduler. Rounded telemetry and
 in-flight work still prevent a guaranteed exact stopping percentage.
+
+## Standing authorization for scheduled QA
+
+When the User explicitly authorizes recurring scheduled work across weekly resets,
+record that decision durably and set a top-level config field:
+
+```json
+"standing_authorization": "https://example.invalid/recorded-user-decision"
+```
+
+This requires a live `weekly_allowance` policy. It replaces the default weekly
+approval requirement, **not** allowance checks. Scheduled wakes may create after
+a reset once a fresh authenticated sample is above the computed reserve and the
+account is available; no new approval or descriptor is required just because
+the week changed. Status exposes the standing reference and `run_required: false`.
+Do not enable it without recorded User authorization. Remove it when authority
+is revoked, and disable the scheduler.
+
+Optional run descriptors remain immutable audit/cap scopes. Their start may
+precede the current window in standing mode; finite caps and all attributed
+counts still apply. Never rename a run, reset a batch or change scope to regain
+allowance. The default descriptor-bound policy is unchanged for other adopters.
+Weekly audit records can name the official reset without becoming permission
+gates. A cron entry is an authorized trigger, not evidence of remaining budget.
+
+The reader remains telemetry-only. Prefer fresh `--once` reads at each significant
+stage and before/after long checks. A continuous reader still removes its sample
+on rollover; restart it and recheck the guard without asking for another approval
+under standing authority. A reset change **during** one status/write operation
+still aborts that operation: obtain fresh telemetry before a new attempt; inspect
+remote state before retrying a potentially completed write.
+
+Scheduling is adopter-specific, not installed by this kit. A safe trigger targets
+the intended existing session, skips overlapping work, preserves private cached
+login, records delivery/failures, and never grants blanket tool permissions or
+merging authority. Permission prompts and unavailable credentials remain blockers.
 
 ## Legacy calendar daily pacing of a weekly allowance
 

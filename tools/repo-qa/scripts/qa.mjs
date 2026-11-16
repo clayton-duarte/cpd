@@ -89,7 +89,7 @@ export function readWeeklyUsage(policy, now = new Date(), read = () => {
 }
 
 export function validateConfig(value) {
-  fields(value, ["version", "scope", "timezone", "limits", "repositories", "weekly_allowance"], "config");
+  fields(value, ["version", "scope", "timezone", "limits", "repositories", "weekly_allowance", "standing_authorization"], "config");
   if (value.version !== 1 || !id(value.scope) || !nonempty(value.timezone)) throw new Error("Config needs version 1, a scope identifier and an IANA timezone");
   new Intl.DateTimeFormat("en-CA", { timeZone: value.timezone });
   if (!Array.isArray(value.repositories) || value.repositories.length === 0) throw new Error("Config needs a repository allowlist");
@@ -101,8 +101,12 @@ export function validateConfig(value) {
   });
   if (new Set(repos.map((r) => r.name.toLowerCase())).size !== repos.length) throw new Error("Duplicate repository in config");
   const weekly = value.weekly_allowance === undefined ? null : validateWeeklyPolicy(value.weekly_allowance);
+  if (value.standing_authorization !== undefined && (!nonempty(value.standing_authorization) || weekly === null)) {
+    throw new Error("Standing authorization needs a recorded User reference and a live weekly allowance policy");
+  }
   if (value.limits === null && weekly === null) throw new Error("Null cardinal limits require a weekly allowance policy");
-  return Object.freeze({ weekly_allowance: weekly, version: 1, scope: value.scope, timezone: value.timezone, limits: value.limits === null ? null : limits(value.limits), repositories: Object.freeze(repos) });
+  return Object.freeze({ weekly_allowance: weekly, standing_authorization: value.standing_authorization ?? null,
+    version: 1, scope: value.scope, timezone: value.timezone, limits: value.limits === null ? null : limits(value.limits), repositories: Object.freeze(repos) });
 }
 
 export function validateRun(value, now = new Date()) {
@@ -121,8 +125,8 @@ export function github(args, input) {
   }));
 }
 
-function assertRunWindow(run, weekly) {
-  if (run === null || weekly === null) return;
+function assertRunWindow(run, weekly, standing) {
+  if (run === null || weekly === null || standing !== null) return;
   const start = Date.parse(run.started_at);
   const reset = Date.parse(weekly.resets_at);
   if (start < reset - weekly.window_minutes * 60_000 || start >= reset) {
@@ -149,7 +153,7 @@ export function createGuard(input, { readUsage, clock = () => new Date() } = {})
       throw new Error("QA_BATCH must be a dated batch identifier for today's configured timezone");
     }
     const run = runInput === null ? null : validateRun(runInput, now);
-    assertRunWindow(run, weekly);
+    assertRunWindow(run, weekly, config.standing_authorization);
     // A conservative two-day day lookback; long runs extend it to their start.
     // Floor before subtracting a second because GitHub creation timestamps have second precision.
     const runStart = run === null ? Infinity : Math.floor(Date.parse(run.started_at) / 1000) * 1000 - 1000;
@@ -184,11 +188,11 @@ export function createGuard(input, { readUsage, clock = () => new Date() } = {})
     }
     if (weekly !== null) {
       const fresh = readWeeklyUsage(config.weekly_allowance, clock(), readUsage);
-      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(weekly.resets_at)) > 1000) throw new Error("Weekly window changed; explicit authorization is required");
-      assertRunWindow(run, fresh);
+      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(weekly.resets_at)) > 1000) throw new Error("Weekly window changed; refresh telemetry and recheck authorization policy");
+      assertRunWindow(run, fresh, config.standing_authorization);
       weekly = fresh;
     }
-    const runRequired = weekly !== null && run === null;
+    const runRequired = weekly !== null && run === null && config.standing_authorization === null;
     const dailyRemaining = remaining(config.limits, counts);
     const runRemaining = run === null ? null : remaining(run.limits, runCounts);
     const effective = Object.fromEntries(["issues", "prs"].map((k) => {
@@ -196,7 +200,8 @@ export function createGuard(input, { readUsage, clock = () => new Date() } = {})
       return [k, n === Infinity ? null : n];
     }));
     return { scope: config.scope, day: today, timezone: config.timezone, batch, repositories: REPOS,
-      weekly_allowance: weekly, run_required: runRequired, counts, day_counts: dayCounts, limits: config.limits, daily_remaining: dailyRemaining,
+      weekly_allowance: weekly, standing_authorization: config.standing_authorization,
+      run_required: runRequired, counts, day_counts: dayCounts, limits: config.limits, daily_remaining: dailyRemaining,
       run: run === null ? null : { ...run, counts: runCounts, remaining: runRemaining }, remaining: effective,
       can_create_issue: !runRequired && (weekly?.allowed ?? true) && (effective.issues === null || effective.issues > 0),
       can_create_pr: !runRequired && (weekly?.allowed ?? true) && (effective.prs === null || effective.prs > 0) };
@@ -237,8 +242,8 @@ export function createGuard(input, { readUsage, clock = () => new Date() } = {})
     }
     if (budget.weekly_allowance !== null) {
       const fresh = readWeeklyUsage(config.weekly_allowance, clock(), readUsage);
-      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(budget.weekly_allowance.resets_at)) > 1000) throw new Error("Weekly window changed; explicit authorization is required");
-      assertRunWindow(budget.run, fresh);
+      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(budget.weekly_allowance.resets_at)) > 1000) throw new Error("Weekly window changed; refresh telemetry and recheck authorization policy");
+      assertRunWindow(budget.run, fresh, config.standing_authorization);
       budget.weekly_allowance = fresh;
       budget.can_create_issue &&= fresh.allowed;
       budget.can_create_pr &&= fresh.allowed;
@@ -263,8 +268,8 @@ export function createGuard(input, { readUsage, clock = () => new Date() } = {})
     if (!(command === "issue" ? budget.can_create_issue : budget.can_create_pr)) return { exit: 3, result: { ...budget, refused: command } };
     if (config.weekly_allowance !== null) {
       const fresh = readWeeklyUsage(config.weekly_allowance, clock(), readUsage);
-      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(budget.weekly_allowance.resets_at)) > 1000) throw new Error("Weekly window changed; explicit authorization is required");
-      assertRunWindow(budget.run, fresh);
+      if (Math.abs(Date.parse(fresh.resets_at) - Date.parse(budget.weekly_allowance.resets_at)) > 1000) throw new Error("Weekly window changed; refresh telemetry and recheck authorization policy");
+      assertRunWindow(budget.run, fresh, config.standing_authorization);
       if (!fresh.allowed) return { exit: 3, result: { refused: command, reason: "weekly allowance" } };
     }
     const markers = [MARKER, ...(batch === null ? [] : [batchMarker(batch)]), ...(descriptor === null ? [] : [runMarker(descriptor.id)])];

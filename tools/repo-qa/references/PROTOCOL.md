@@ -7,6 +7,14 @@ commands, accounting and the bootstrap prompt; [research](RESEARCH.md) records
 the patterns behind this Protocol. Repo policy and User decisions stay in the
 project's own decision record. No chat history is required to execute it.
 
+An explicit User decision may authorize recurring scheduled QA through the
+README's `standing_authorization` policy. In that mode the authorized scheduler
+and live allowance suffice across weekly resets; do not request weekly approval.
+Descriptor/window approval requirements below describe the default mode.
+Standing authority never bypasses telemetry, budget, scope, exclusive-operator,
+finite-cap or User-review/merge checks. Record official weekly windows for audit,
+not as new permission gates.
+
 ## Definition of quality
 
 Quality means delivering documented intended behavior correctly, reliably,
@@ -223,7 +231,7 @@ or calendar floor. Reserve the fraction of the official 10,080-minute window
 still remaining: `100 * (resets_at - now) / (10080 * 60 seconds)`. Stop at or
 below it; unused allowance carries forward. Release is continuous, with no
 weekday assumptions, midnight allocations or Sunday hold. Fresh authenticated
-telemetry, account/spend controls and explicit new-window run authorization
+telemetry, account/spend controls and the configured single-window or standing authorization
 remain mandatory. Use reader `--min-remaining 0`; no scheduler is installed.
 
 ### Legacy optional weekly calendar pacing
