@@ -173,7 +173,7 @@ fn result(changed: &[Object], closed: Vec<String>) -> Output {
 
 /// `in_chat_slot` when a Lead of `sessions` holds the chat slot: checked
 /// before any pane is closed, so a refusal leaves everything as it was.
-pub(crate) fn refuse_chat_slot(
+pub fn refuse_chat_slot(
     store: &mut Store,
     tmux: &Tmux,
     cockpit: &str,

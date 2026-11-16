@@ -167,6 +167,12 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
         .with("expected", head)
         .with("actual", actual));
     }
+    let plan = std::env::var("CPD_PLAN")
+        .ok()
+        .and_then(|v| PlanId::parse(&v).ok());
+    if let Some(plan) = &plan {
+        main.read(|conn| check_subject(conn, plan, &format!("pr:{repo}#{number}")))?;
+    }
     let patch = match args.event.as_str() {
         "APPROVE" => Some(json!({"review_decision": "approved"})),
         _ => Some(json!({"review_decision": "changes_requested"})),
@@ -181,9 +187,6 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
     )?;
     let review = json!({"event": args.event, "commit_id": head, "queued": true});
 
-    let plan = std::env::var("CPD_PLAN")
-        .ok()
-        .and_then(|v| PlanId::parse(&v).ok());
     let reaction = if slack.is_none() && plan.is_none() {
         Value::Null
     } else {
@@ -197,11 +200,7 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
                         None => None,
                     };
                     if let Some(plan) = &plan {
-                        if args.event == "APPROVE" {
-                            finish_plan(tx, plan)?;
-                        } else {
-                            request_changes(tx, plan)?;
-                        }
+                        track_submit(tx, plan, &format!("{repo}#{number}"), &args.event)?;
                     }
                     Ok(queued)
                 })
@@ -224,7 +223,7 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
 }
 
 /// Finishes a `codereview` Plan (FR10): `grounding → done` with `locked_at` and `done_at` the transaction's time, and a quiet `plan-done`.
-pub(crate) fn finish_plan(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
+pub fn finish_plan(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
     let moved = tx.execute(
         "UPDATE plans SET phase = 'done', locked_at = (SELECT at FROM txns WHERE id = cpd_txn()), done_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND phase <> 'done'",
@@ -250,6 +249,48 @@ fn request_changes(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
         [plan.as_str()],
     )?;
     Ok(())
+}
+
+fn check_subject(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    subject: &str,
+) -> Result<(), CpdError> {
+    let conflict: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM plans WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND pr_subject IS NOT NULL AND pr_subject <> ?2)",
+        [plan.as_str(), subject], |r| r.get(0))?;
+    if conflict {
+        return Err(usage(format!(
+            "Plan {plan} tracks a different pull request than {subject}."
+        )));
+    }
+    Ok(())
+}
+
+fn track_submit(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    pull: &str,
+    verdict: &str,
+) -> Result<(), CpdError> {
+    let subject = format!("pr:{pull}");
+    check_subject(tx, plan, &subject)?;
+    tx.execute("UPDATE plans SET pr_subject = ?2 WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND pr_subject IS NULL", [plan.as_str(), &subject])?;
+    if verdict == "APPROVE" {
+        finish_plan(tx, plan)
+    } else {
+        request_changes(tx, plan)
+    }
+}
+
+#[cfg(test)]
+pub(super) fn submit_plan_tracking_stub(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    pull: &str,
+    verdict: &str,
+) -> Result<(), CpdError> {
+    track_submit(tx, plan, pull, verdict)
 }
 
 #[cfg(test)]
