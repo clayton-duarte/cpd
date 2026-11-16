@@ -2410,7 +2410,7 @@ CREATE INDEX events_session ON events(session, id);
 -- ---------- Inbox items (§2.2) ----------
 CREATE TABLE inbox_items (
   id            INTEGER PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug')),  -- drafts-parked: hs-d731, hs-d733 (the migration that adds it is named by the PR that builds the kind); refusal-alert: migration 20261108T0600-refusal-alert-kind (Plan `agent-refusals`, §2.2, §3.7 refusal-threshold); models-changed: migration 20261102T1200-models-changed (pro-d13, pro-d16); deploy: migration 20261102T0900-deploy-kind (pro-d100); curate-retire, curate-docs: migration curation (hs-d549, hs-d551; `curate-docs` history only since pro-d327, the CHECK keeps it); the last four: migration 0013; loop-guard: migration loop-guard (hs-d552, hs-d571); review-waiting removed by migration drop-plannotator (hs-d738); pr-closed: migration `<YYYYMMDDTHHMM>-pr-closed-kind` (Plan closed-unmerged, §4.5); bug: migration `20261109T2108-bug-protocol-breach` (air-d104, §4.5)
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug', 'green-unmerged')),  -- drafts-parked: hs-d731, hs-d733 (the migration that adds it is named by the PR that builds the kind); refusal-alert: migration 20261108T0600-refusal-alert-kind (Plan `agent-refusals`, §2.2, §3.7 refusal-threshold); models-changed: migration 20261102T1200-models-changed (pro-d13, pro-d16); deploy: migration 20261102T0900-deploy-kind (pro-d100); curate-retire, curate-docs: migration curation (hs-d549, hs-d551; `curate-docs` history only since pro-d327, the CHECK keeps it); the last four: migration 0013; loop-guard: migration loop-guard (hs-d552, hs-d571); review-waiting removed by migration drop-plannotator (hs-d738); pr-closed: migration `<YYYYMMDDTHHMM>-pr-closed-kind` (Plan closed-unmerged, §4.5); bug: migration `20261109T2108-bug-protocol-breach` (air-d104, §4.5)
   urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'blue', 'cyan', 'white')),
   subject       TEXT NOT NULL CHECK (length(subject) >= 1),
   context       TEXT REFERENCES contexts(id),
@@ -2433,6 +2433,27 @@ CREATE TABLE inbox_items (
 ) STRICT;
 CREATE UNIQUE INDEX inbox_items_open ON inbox_items(kind, subject, urgency) WHERE closed_at IS NULL;
 CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
+
+CREATE TABLE green_unmerged_periods (
+  pull_request INTEGER PRIMARY KEY REFERENCES pull_requests(id),
+  since INTEGER NOT NULL,
+  alerted INTEGER NOT NULL CHECK (alerted IN (0, 1)),
+  manager_told INTEGER NOT NULL DEFAULT 0 CHECK (manager_told IN (0, 1))
+) STRICT;
+
+-- A non-green observation breaks the period even if it returns to green before the next tick.
+CREATE TRIGGER green_unmerged_pr_reset AFTER UPDATE OF checks, state ON pull_requests
+WHEN NEW.state != 'open' OR NEW.checks != 'passed'
+BEGIN
+  DELETE FROM green_unmerged_periods WHERE pull_request = NEW.id;
+END;
+CREATE TRIGGER green_unmerged_workflow_reset AFTER UPDATE OF status, pull_request ON workflows
+WHEN OLD.pull_request IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM workflows WHERE pull_request = OLD.pull_request AND status = 'open'
+)
+BEGIN
+  DELETE FROM green_unmerged_periods WHERE pull_request = OLD.pull_request;
+END;
 
 -- ---------- PR posts (pro-d64, pro-d65, pro-d117; Plan pr-post; migration pr-posts, then pr-auto-merge, which adds the last two columns with ALTER TABLE ADD COLUMN; the CHECK tying them is the auto_merge column's own; the repeat bump (pro-d382, §4.4 "The repeat bump") adds last_posted_at the same way) ----------
 CREATE TABLE pr_posts (
@@ -6310,7 +6331,9 @@ cpd 1 hard-coded `verify.sh`; now the repo's policy names the paths. It runs at 
 
 Each command here works on **one PR** (R34, A14), selected by `--workflow <key>` (§1.3), except `pr poll`, which has no `--pr`: it polls every open pull request of the User at once (hs-d96), and `pr merge-green`, which takes `<owner>/<repo>#<n>` directly (commands.md §9.10a). Each PR has its own Gate run and its own pull request on its repo's GitHub. `gh` runs with cwd = the PR's Lead worktree, so it addresses the PR's repo; `pr poll`'s calls (`gh api graphql`) address no repo.
 
-**The Manager's merge protocol** (air-d100, air-d118; D13). For each green pull request the User names, the cpd Context's Manager runs `cpd pr merge-green <owner>/<repo>#<n>` (commands.md §9.10a). The command updates the branch with `gh pr update-branch`, waits for both the Gate and e2e to pass on the new head, then squash-merges with `gh pr merge --squash`. The User does not hand-merge these PRs. An engine-tick check alerts the Manager and the User when a green PR remains unmerged for 30 minutes.
+**The Manager's merge protocol** (air-d100, air-d118; D13). For each green pull request the User names, the cpd Context's Manager runs `cpd pr merge-green <owner>/<repo>#<n>` (commands.md §9.10a). The command updates the branch with `gh pr update-branch`, waits for both the Gate and e2e to pass on the new head, then squash-merges with `gh pr merge --squash`. The User does not hand-merge these PRs.
+
+**The 30-minute green-PR alert** (A1/A2; commands.md §9.10a). On each engine tick, cpd checks open pull requests owned by cpd Workflows. A PR qualifies while its required checks are green continuously for 30 minutes. Once that condition holds, cpd alerts both the Manager and the User once for that continuous green period. The Manager reports readiness to the User; the alert does not authorize a merge. The alert clears when the PR is no longer green, or is closed or merged. If it becomes green again, a new 30-minute period starts.
 
 **The merge precondition (the up-to-date rule).** `cpd pr merge` — and every cpd merge path, each of which is this one command: the TUI's Dispatch-column merge and merge menu (§13.2), the WebUI's merge, and the Inbox `pr-ready` item's merge action — merges only when **every required check (repo policy `pr.required_checks`, `['gate']` for this repo) passed on the pull request's head** (the one persisted evaluation of commands.md §9.10, air-d48) **and the head contains the current default-branch head, read fresh at merge time**. The containment is read fresh twice: once at the command's enqueue, to refuse and arm, and again in the drain immediately before `gh pr merge`, so a base that moved in between is not merged behind it (both reads are reads, never a write). A pull request whose base is not the default branch (a stacked pull request, §2.2) is not subject to the rule. When the head is behind the default branch, the merge is refused `head_behind_main` (exit 3) with the message `behind main, updated, waiting for gate`; cpd queues no `update` Job (pro-d519: a head behind main is not auto-updated; the Lead merges the default branch into the Lead Branch and publishes it with `pr push`, §7.6) and arms an automatic merge that fires once the required checks pass on a head that contains main; the armed intent is cleared when the pull request merges, is closed, or the User cancels it. The `expected_head_oid` guard (commands.md §9.10) is unchanged by the rule. A pull request with no cpd Workflow (no `workflows` row points to it) is refused only: there is no Workflow to arm a merge for, and nothing is armed. The gate's placement in the command's steps, its `details` and its enqueue behaviour for the github Workflow are commands.md §9.10.
 

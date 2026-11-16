@@ -3357,7 +3357,7 @@ cpd pr merge-green <owner>/<repo>#<n>
 
 Runs the Manager's merge protocol for a green pull request the User names (air-d100, air-d118; D13; contract §7.6). It updates the branch with `gh pr update-branch`, waits until both the Gate and e2e pass on the updated head, then squash-merges with `gh pr merge --squash`. The checks must pass on the new head; a green result from the old head is not sufficient. Execution follows [Final merge authority](contract.md#final-merge-authority).
 
-**The green-PR check:** on each engine tick, cpd checks for a green PR that has remained unmerged for 30 minutes and alerts both the Manager and the User. The Manager reports readiness to the User; the alert does not authorize a merge.
+**The green-PR alert:** on each engine tick, cpd checks open pull requests owned by cpd Workflows whose required checks are green continuously for 30 minutes. When that condition holds, cpd alerts both the Manager and the User once for that continuous green period. The Manager reports readiness to the User; the alert does not authorize a merge. The alert clears when the PR is no longer green, or is closed or merged. If it becomes green again, a new 30-minute period starts.
 
 **Refusal:** when the cached `checks` of the pull request is not `passed`, the command is refused `checks_not_green` (exit 3) before any `gh` write (no `update-branch`, no `merge`).
 

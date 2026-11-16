@@ -448,4 +448,8 @@ mod ensure_when_free_tests {
 }
 
 #[cfg(test)]
+mod green_unmerged_tests;
+#[cfg(test)]
 mod review_autoarchive_tests;
+
+mod green_unmerged;

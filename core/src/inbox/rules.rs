@@ -79,7 +79,41 @@ pub fn conditions_on(
             config.watch.refusal_alert_threshold,
         )
     })?);
+    all.extend(store.read(green_unmerged)?);
     Ok(all)
+}
+
+fn green_unmerged(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let mut stmt = conn.prepare("SELECT p.id, p.repo, p.number, p.url FROM green_unmerged_periods g JOIN pull_requests p ON p.id = g.pull_request WHERE g.alerted = 1 AND p.state = 'open' AND p.checks = 'passed' AND EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = p.id AND w.status = 'open')")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, repo, number, url)| Condition {
+            kind: Kind::GreenUnmerged,
+            urgency: Urgency::Yellow,
+            subject: format!("green-unmerged:{id}"),
+            label: format!("{repo}#{number} green for 30 minutes"),
+            url: Some(url),
+            context: None,
+            plan: None,
+            job: None,
+            session: None,
+            record: None,
+            event: None,
+            opened_at: None,
+            head_oid: None,
+            reviewed_oid: None,
+        })
+        .collect())
 }
 
 /// [`conditions`] at `now` with `loop_guard_turns` (§8.2) and the team review rule's inputs given; `None` switches that kind off.

@@ -281,7 +281,7 @@ impl Engine {
     /// E12–E16 and E25 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 26] = [
+        let steps: [fn(&mut Engine); 27] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -296,6 +296,7 @@ impl Engine {
             parked::run,
             closed::run,
             bug_guard::run,
+            super::green_unmerged::run,
             refusal_alert::run,
             inbox::run,
             distill::run,
