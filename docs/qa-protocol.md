@@ -8,10 +8,10 @@ in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pi
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
 
-Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](../tools/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/SKILL.md) and
-[adoption guide](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](../tools/repo-qa/SKILL.md) and
+[adoption guide](../tools/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -69,15 +69,16 @@ Historical `docs/research/quality.md` is a lead list, not current proof.
 ## Budget configuration and commands
 
 [qa.config.json](../qa.config.json) is the canonical executable policy for this
-shared CPD/dotfiles/skills group: **no cardinal caps; reserve `d * 100 / 7` percent
-of the weekly allowance**, with Monday `d=6`, Tuesday `5`, through Sunday `0`.
+shared CPD/dotfiles/skills group: **no cardinal caps; reserve
+`100 * (official resets_at - now) / (10080 * 60 seconds)` percent
+of the weekly allowance**, using the authenticated weekly window.
 Stop at or below the reserve, or when fresh usage cannot be verified. Unused
-allocation carries forward. Sunday can use all remaining old-week allowance
-until the actual reset. After a confirmed reset, hold the new balance until
-**8 p.m. America/Toronto**, then make Monday's allocation available through
-Monday (85.7% floor). This User decision (2026-11-16) supersedes the fixed 50%
-floor and former 20/10 count policy. Use full precision; percentages here are
-rounded for display. Configured PR base remains `main` in all three repos.
+allocation carries forward. Allocation releases continuously, not at midnight.
+There is no assumed reset weekday or Sunday 8 p.m. release hold; DST does not
+change elapsed-time pacing. A new window still requires explicit User run
+authorization. This User decision (2026-11-16) supersedes calendar daily pacing,
+the fixed 50% floor and former 20/10 count policy. Use full precision for decisions.
+Configured PR base remains `main` in all three repos.
 CPD remains the product priority; skills changes maintain the shared toolkit.
 One serialized creator covers the group. Other agents must not overlap it under
 a second config/scope. New agents' grouping/caps need explicit owner agreement;
@@ -107,7 +108,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers. The current run has null cardinal caps, fresh live usage (maximum60 seconds), and no reset batch.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [canonical kit README](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/README.md) defines fields, exit codes and limits.
+The [pinned canonical kit README](../tools/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 
@@ -176,7 +177,7 @@ The original memory-only reader lost its login when its process ended. The User
 rejected repeated sign-ins. [Source PR3](https://github.com/clayton-duarte/skills/pull/3)
 adds an explicit private credential directory outside Git and one-shot reads.
 Use the kit README's persistent-auth commands with `--min-remaining 0` for
-daily pacing; ordinary checks omit `--login`. The reader publishes telemetry
+reset pacing; ordinary checks omit `--login`. The reader publishes telemetry
 and the guard computes the changing floor.
 The official CLI owns refresh. Never overwrite the cloud-managed login or commit
 credentials. Initial device authorization is only needed when the private cache
@@ -184,8 +185,10 @@ has no usable login; revocation or loss of that volume can require authorization
 This authenticates allowance reads and does not start a new QA run or reset limits.
 The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fresh
 reading was66% remaining; that historical number is not a gate for later work.
-Source PR3 supplied persistent authentication; User-merged PR6 added proactive PR upkeep. This consumer pins merged source revision `c751d328c58498c66ca457d615da2966a9060215` for daily pacing. The User
-merged skills #8; CPD adoption remains subject to User review and merge.
+Source PR3 supplied persistent authentication; User-merged PR6 added proactive
+PR upkeep. Skills #8 supplied the previous calendar policy. The current
+reset-pacing pin and its satisfied source-review dependency are recorded in
+[qa-source.md](qa-source.md); CPD adoption still requires User review and merge.
 
 
 ## Proactive PR upkeep
@@ -212,16 +215,14 @@ Weekly creation requires the same immutable `--run` descriptor. Its recorded sta
 ## 2026-11-16 pacing and interpretation
 
 The formula is a cumulative remaining reserve, not a strict daily spending cap.
-With no Monday use, Tuesday can spend 28.6%. Sunday zero is permission to use
-what remains, not a requirement to spend it or a promise of exact exhaustion.
-The real reset (expected around Sunday 7 p.m.) ends the old week's balance;
-8 p.m. is the conservative release time for the new allocation, not a fabricated
-reset timestamp. Current usage by other sessions reduces headroom too. Status
+Halfway through the actual weekly window the reserve is 50%. The official
+reset ends the old week's balance; no hardcoded weekday or release hour changes
+that boundary. Current usage by other sessions reduces headroom too. Status
 reports the computed `min_remaining_percent` and `spendable_percent`.
 
 The static reader threshold must be zero for this mode. Missing or stale data,
-account unavailability, spend controls, unexpected reset weekday and expired
+account unavailability, spend controls, invalid/expired telemetry and expired
 run authority still refuse work. No new loop, scheduler, login, deployment or
 automatic weekly authorization is started by this policy update.
 
-Merged source: [skills #8](https://github.com/clayton-duarte/skills/pull/8).
+Previous calendar source: [skills #8](https://github.com/clayton-duarte/skills/pull/8).

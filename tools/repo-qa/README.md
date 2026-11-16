@@ -214,7 +214,36 @@ Polling and rounded account percentages cannot reserve the cost of the final
 response or exclude concurrent consumers; this is a sampled stop policy, not an
 exact usage ceiling. The reader alone cannot interrupt a running model response.
 
-## Calendar daily pacing of a weekly allowance
+## Continuous pacing from the official reset
+
+With explicit User approval, configure:
+
+```json
+"weekly_allowance": {
+  "reset_pacing": true,
+  "max_age_seconds": 60
+}
+```
+
+Do not combine this with `min_remaining_percent` or `daily_pacing`.
+The reserve is `100 * (resets_at - now) / (10080 * 60 seconds)`, using the
+authenticated Codex weekly reset and its validated 10,080-minute duration.
+Spendable allowance is `max(0, live_remaining_percent - reserve)`. Stop at or
+below the reserve. Use full precision for decisions, rounding only for display.
+The allowance releases continuously rather than at midnight: halfway through
+the window the reserve is 50%; at its start it is 100%. Unspent allowance carries
+forward. All account activity consumes the same balance.
+
+No assumed reset weekday, local timezone, DST adjustment or Sunday release hold
+applies in this mode. Run the reader with `--min-remaining 0`; the JS guard
+computes the reserve on each check, including after pagination and before writes.
+Fresh telemetry (at most 60 seconds), account availability, spend controls and
+explicit authorization for each new weekly window still apply. Expired or
+changed resets refuse work; a new reading never renews an old run's authority.
+This policy does not start a QA run or install a scheduler. Rounded telemetry and
+in-flight work still prevent a guaranteed exact stopping percentage.
+
+## Legacy calendar daily pacing of a weekly allowance
 
 Instead of a fixed percentage floor, a User may configure:
 

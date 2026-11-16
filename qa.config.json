@@ -18,10 +18,7 @@
     }
   ],
   "weekly_allowance": {
-    "daily_pacing": {
-      "timezone": "America/Toronto",
-      "sunday_release_hour": 20
-    },
+    "reset_pacing": true,
     "max_age_seconds": 60
   }
 }

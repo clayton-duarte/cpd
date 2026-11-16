@@ -216,7 +216,17 @@ operational details. A fresh agent must be able to reproduce the workflow from
 the package, profile, config and GitHub handoff without previous chat memory.
 
 
-### Optional weekly calendar pacing
+### Optional reset-based pacing
+
+A User may configure the README's `reset_pacing: true` policy instead of a fixed
+or calendar floor. Reserve the fraction of the official 10,080-minute window
+still remaining: `100 * (resets_at - now) / (10080 * 60 seconds)`. Stop at or
+below it; unused allowance carries forward. Release is continuous, with no
+weekday assumptions, midnight allocations or Sunday hold. Fresh authenticated
+telemetry, account/spend controls and explicit new-window run authorization
+remain mandatory. Use reader `--min-remaining 0`; no scheduler is installed.
+
+### Legacy optional weekly calendar pacing
 
 A User may replace a fixed weekly floor with the README's `daily_pacing` policy.
 The remaining reserve is `d * 100 / 7`, Monday `d=6` through Sunday `0`; stop at

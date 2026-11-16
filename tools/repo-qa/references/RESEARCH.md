@@ -133,3 +133,15 @@ carryover, and the final pre-write check. Existing fixed-floor consumers retain
 their configuration and inclusive threshold behavior. New paced consumers stop
 at the floor because no headroom remains. Run authorization and rollover
 protection are unchanged.
+
+## Official-reset pacing (2026-11-16)
+
+The User subsequently approved replacing CPD's weekday allocations and Sunday
+release hold with continuous pacing from the authenticated reset timestamp.
+The official app-server reset/duration fields already used for run-window
+validation also define the reserve: remaining elapsed milliseconds divided by
+10,080 minutes, times 100. This is an owner budget policy, not a provider rule.
+No date library or external scheduler is needed. UTC timestamp arithmetic avoids
+weekday and DST assumptions; keep legacy calendar/fixed modes for other consumers.
+Tests cover exact boundaries, arbitrary reset weekdays, DST, account refusals,
+freshness, reset rollover, old-run rejection and pre-write revalidation.
