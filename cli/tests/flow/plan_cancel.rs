@@ -8,11 +8,11 @@ use crate::common;
 use std::path::Path;
 
 use common::fx::Fx;
-use common::{refused, Run};
+use common::{Run, refused};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::store::Store;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ---------- fixtures ----------
 

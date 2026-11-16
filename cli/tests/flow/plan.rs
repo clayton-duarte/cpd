@@ -8,13 +8,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
-use common::{refused, Run, TestEnv};
+use common::{Run, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
 use cpd_core::ids::PlanId;
 use cpd_core::store::{Store, WriteTxn};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 // ---------- fixtures ----------
@@ -648,10 +648,12 @@ fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() 
         .ok();
     assert_eq!(full["records"][0]["text"], text);
     assert!(full["records"][0].get("short").is_none());
-    assert!(full["markdown"]
-        .as_str()
-        .unwrap()
-        .contains("second paragraph"));
+    assert!(
+        full["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("second paragraph")
+    );
 
     // The Lead's first message: header, the full brief, then the pointer line; its own brief not listed twice.
     let message = fs::read_to_string(home(&fx.env).lead_message(&pid("pay"))).unwrap();
@@ -1770,9 +1772,11 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
     assert_eq!(r2["review"]["id"], "r2");
     assert_ne!(r2["review"]["fingerprint"], fingerprint);
     assert_eq!(fs::read_to_string(&summary_path).unwrap(), r1);
-    assert!(fs::read_to_string(home(&fx.env).plan_md(&pid("pay")))
-        .unwrap()
-        .contains("A new goal."));
+    assert!(
+        fs::read_to_string(home(&fx.env).plan_md(&pid("pay")))
+            .unwrap()
+            .contains("A new goal.")
+    );
     assert_eq!(inproc::show(&fx, "pay")["review"]["id"], "r2");
     refused(
         &fx.cpd(&["plan", "review", "--title", "Review title"]),
@@ -2081,9 +2085,11 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
         .cpd(&["plan", "decide", "r2", "--reject", "--plan", "pay"])
         .ok();
     assert!(out.get("jobs").is_none(), "{out}");
-    assert!(inproc::events(&fx, "plan-review").last().unwrap()["data"]
-        .get("jobs")
-        .is_none());
+    assert!(
+        inproc::events(&fx, "plan-review").last().unwrap()["data"]
+            .get("jobs")
+            .is_none()
+    );
     assert_eq!(
         (job_status(&fx.env, "c"), job_status(&fx.env, "d")),
         ("draft".into(), "draft".into())
@@ -2179,9 +2185,11 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
         (&json!(false), &json!("cpd plan review"))
     );
     assert!(out.get("jobs").is_none(), "{out}");
-    assert!(inproc::events(&fx, "plan-review").last().unwrap()["data"]
-        .get("jobs")
-        .is_none());
+    assert!(
+        inproc::events(&fx, "plan-review").last().unwrap()["data"]
+            .get("jobs")
+            .is_none()
+    );
     assert_eq!(job_status(&fx.env, "e"), "draft");
 }
 
@@ -2669,10 +2677,12 @@ fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["data"]["code"], "push_failed");
     assert_eq!(errors[0]["data"]["source"], "plan lock");
-    assert!(errors[0]["data"]["details"]["stderr"]
-        .as_str()
-        .unwrap()
-        .contains("refused by hook"));
+    assert!(
+        errors[0]["data"]["details"]["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("refused by hook")
+    );
 }
 
 #[test]
@@ -3149,9 +3159,11 @@ fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_
     );
     let session_events = inproc::events(&fx, "session-archived");
     assert_eq!(session_events.len(), 2);
-    assert!(session_events
-        .iter()
-        .all(|e| e["data"] == json!({"archived": true}) && e["plan"] == "pay"));
+    assert!(
+        session_events
+            .iter()
+            .all(|e| e["data"] == json!({"archived": true}) && e["plan"] == "pay")
+    );
     let at = inproc::show(&fx, "pay")["plan"]["archived_at"].clone();
     assert!(at.is_string());
     assert_eq!(
