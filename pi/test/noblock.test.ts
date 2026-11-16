@@ -246,6 +246,21 @@ test("a Worker's bash call without timeout keeps timeout undefined", async (t) =
   assert.equal("timeout" in input, false);
 });
 
+test("command substitution cannot hide a foreground wait behind a background timeout", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  for (const command of [
+    "echo $(timeout 1800 scripts/cargo.sh build &)",
+    "echo `timeout 1800 scripts/cargo.sh build &`",
+    "echo $(timeout 1800 scripts/cargo.sh build > /tmp/build.log 2>&1 &)",
+    "echo $(echo $(timeout 1800 cmd &))",
+  ]) {
+    const result = await call(f, { command, timeout: 25 });
+    assert.equal(result?.block, true, command);
+    assert.match(result?.reason ?? "", /refused: timeout 1800/);
+  }
+});
+
 test("bounded background timeout is allowed", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
