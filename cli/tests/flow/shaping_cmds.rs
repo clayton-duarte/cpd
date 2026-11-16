@@ -1,4 +1,4 @@
-//! `plan new --shaping` and the Manager's rights on a Lead-less shaping Plan (commands.md §4.1 "A Manager on a
+//! `plan new --shaping` and paired ownership of a shaping Plan (commands.md §4.1 "A Manager on a
 //! shaping Plan", §5.1–§5.4, §6.2–§6.5, §8.2; contract §2.2 "Explore Jobs", §3.1 "The Context's Manager"; air-d19,
 //! air-d22; assumptions A1–A4).
 //!
