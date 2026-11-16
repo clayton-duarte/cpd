@@ -226,3 +226,53 @@ it("places an outage banner in a separate layout row before pane controls", () =
   act(() => transport.emitMessage(snapshot));
   expect(container.querySelector('[data-part="engine-banner-row"]')).toBeNull();
 });
+it("Resume operates on the stopped selected session and reports errors", async () => {
+  const { transport, container } = start();
+  attach(transport, container);
+  const resume = () => Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent?.trim() === "Resume");
+  expect(resume()).toBeUndefined();
+  for (const state of ["working", "blocked"]) {
+    act(() => transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref: { ...ref, state }, footer } }));
+    expect(resume()).toBeUndefined();
+  }
+  act(() => transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref: null, footer } }));
+  expect(resume()).toBeUndefined();
+  act(() => transport.emitMessage({ type: "session.attached", sessionId: "s1", capabilities, title: "My chat", meta: { ref: { ...ref, id: "different-ref-id", state: "stopped" }, footer } }));
+  expect(resume()).toBeDefined();
+  transport.sent.length = 0;
+  await act(async () => { resume()!.click(); });
+  const sent = transport.sent.filter((m): m is { type: string; actionId: string; action: unknown } => typeof m === "object" && m !== null && (m as { type?: string }).type === "cockpit.action");
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ action: { kind: "session.resume", sessionId: "s1" } });
+  act(() => transport.emitMessage({ type: "action.result", actionId: sent[0]!.actionId, ok: false, error: { code: "cpd_failed", message: "resume refused: stopped session unavailable" } }));
+  expect(container.textContent).toContain("resume refused: stopped session unavailable");
+  expect(resume()).toBeDefined();
+  act(() => transport.emitMessage({ ...snapshot, tree: { ...snapshot.tree, cursor: 2 } }));
+  expect(resume()).toBeUndefined();
+});
+
+it("offers Resume for an unattached stopped tree selection", () => {
+  const { transport, container } = start();
+  const manager = { ...node, ref: { ...ref, id: "s2", key: "ctx", role: "manager", state: "idle" }, planId: null };
+  const treeWith = (sessions: unknown[]) => ({ ...snapshot.tree, contexts: [{ ...snapshot.tree.contexts[0]!, sessions: [manager], plans: [{ ...snapshot.tree.contexts[0]!.plans[0]!, sessions }] }] });
+  const stopped = { ...node, ref: { ...ref, state: "stopped" } };
+  act(() => transport.emitMessage({ ...snapshot, tree: treeWith([stopped]) }));
+  act(() => container.querySelector<HTMLButtonElement>('button[data-select="plan"]')!.click());
+  act(() => transport.emitMessage({ type: "session.error", sessionId: "s1", error: { code: "host_unreachable", message: "host offline" } }));
+  const resume = () => container.querySelector<HTMLButtonElement>('button[data-action="resume"]');
+  expect(resume()).not.toBeNull();
+  transport.sent.length = 0;
+  act(() => resume()!.click());
+  const sent = transport.sent.find((m): m is { type: string; actionId: string; action: unknown } => typeof m === "object" && m !== null && (m as { type?: string }).type === "cockpit.action");
+  expect(sent).toMatchObject({ action: { kind: "session.resume", sessionId: "s1" } });
+  act(() => transport.emitMessage({ type: "action.result", actionId: sent!.actionId, ok: false, error: { code: "cpd_failed", message: "resume failed" } }));
+  expect(container.querySelector('[data-part="cockpit-error-toast"]')?.textContent).toContain("resume failed");
+  act(() => transport.emitMessage({ ...snapshot, tree: treeWith([node]) }));
+  expect(resume()).toBeNull();
+  act(() => transport.emitMessage({ ...snapshot, tree: treeWith([]) }));
+  expect(resume()).toBeNull();
+  act(() => transport.emitMessage({ ...snapshot, tree: treeWith([stopped]) }));
+  expect(resume()).not.toBeNull();
+  act(() => container.querySelector<HTMLButtonElement>('button[data-select="context"]')!.click());
+  expect(resume()).toBeNull();
+});

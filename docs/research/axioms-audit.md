@@ -16,7 +16,7 @@ Fourteen Jobs each audited one part, using a candidate-line pass on rule words f
 - `commands-1` — `docs/commands.md` lines 1–2111 (§1 Conventions through §9 `pr`).
 - `commands-2` — `docs/commands.md` lines 2112–3189 (§10 `session` through §13.3).
 - `commands-3` — `docs/commands.md` lines 3190–4613 (§13.3 end through §24 `secret`).
-- `docs` — `CONTEXT.md`, `README.md`, `BACKLOG.md`, `docs/implementing.md`, `docs/interface.md`, `docs/cockpit-parity.md`, `docs/versioning.md`, `docs/ui-preview.md`, `ideas/dango-spinner.sh`, all in full.
+- `docs` — `CONTEXT.md`, `README.md`, `BACKLOG.md`, `docs/implementing.md`, `docs/interface.md`, `docs/cockpit-parity.md`, `docs/versioning.md`, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, `ideas/dango-spinner.sh`, all in full.
 - `agents` — the text agents are told: `pi/skills/cpd-lead` and `cpd-manager`, `core/src/spec/worker.md`, `core/src/context/distill_prompt.md`, `core/src/policy/default.toml`, the owner policy on hs, and the agent-facing strings of `pi/lib/*.ts` and `core/src/**/*.rs`.
 - `code` — comment lines of `core/`, `cli/`, `engine/`, `tui/`, `pi/`, `scripts/`, `package.json`, `Cargo.toml` (1721 rule-word comments, 943 `hs-` comments), plus the named scripts and test-tooling files.
 - `sibling` — dotfiles `AGENTS.md`, `README.md`, `SETUP.md`, `TMUX.md`, `AGENT_TOOLS.md`, `IDEAS.md`, `BACKLOG.md`, `docs/external-config-repos.md`, `.agents/AGENTS.md`, the `.agents/skills/*/SKILL.md` files, the pi-config `README.md` and `AGENTS.md`, and the pi-config `extensions/*.ts`, all in full.

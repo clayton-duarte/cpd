@@ -8,10 +8,10 @@ in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pi
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
 
-Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](../tools/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/SKILL.md) and
-[adoption guide](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](../tools/repo-qa/SKILL.md) and
+[adoption guide](../tools/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -69,7 +69,16 @@ Historical `docs/research/quality.md` is a lead list, not current proof.
 ## Budget configuration and commands
 
 [qa.config.json](../qa.config.json) is the canonical executable policy for this
-shared CPD/dotfiles/skills group: **no cardinal caps; continue while weekly remaining is at least 50%**, pausing below50% or when fresh usage cannot be verified. This User decision supersedes the former20/10 policy. Counts retain America/Toronto days for audit. Configured PR base is `main` in all three repos.
+shared CPD/dotfiles/skills group: **no cardinal caps; reserve
+`100 * (official resets_at - now) / (10080 * 60 seconds)` percent
+of the weekly allowance**, using the authenticated weekly window.
+Stop at or below the reserve, or when fresh usage cannot be verified. Unused
+allocation carries forward. Allocation releases continuously, not at midnight.
+There is no assumed reset weekday or Sunday 8 p.m. release hold; DST does not
+change elapsed-time pacing. A new window still requires explicit User run
+authorization. This User decision (2026-11-16) supersedes calendar daily pacing,
+the fixed 50% floor and former 20/10 count policy. Use full precision for decisions.
+Configured PR base remains `main` in all three repos.
 CPD remains the product priority; skills changes maintain the shared toolkit.
 One serialized creator covers the group. Other agents must not overlap it under
 a second config/scope. New agents' grouping/caps need explicit owner agreement;
@@ -99,7 +108,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers. The current run has null cardinal caps, fresh live usage (maximum60 seconds), and no reset batch.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [canonical kit README](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/README.md) defines fields, exit codes and limits.
+The [pinned canonical kit README](../tools/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 
@@ -143,13 +152,15 @@ reproducers; PRs retain implementation/validation. User alone reviews and merges
 No CPD adoption, scheduler, live access or agent spawning is enabled.
 
 
-## Active continuous run (2026-11-13)
+## Recorded continuous run (2026-11-13; historical pacing)
 
 The User explicitly lifted cardinal limits and authorized continuous QA until the
-weekly allowance is under50%; exactly50% permits continuation. Source research,
+weekly allowance is under50%; exactly50% permitted continuation under that
+historical rule, superseded by the 2026-11-16 daily pacing decision. Source research,
 decisions and immutable run descriptor are recorded in
 [#1187](https://github.com/clayton-duarte/cpd/issues/1187#issuecomment-6860759090).
-Use that same descriptor and `QA_USAGE_FILE` with every status/creation command.
+Recover the recorded descriptor and `QA_USAGE_FILE` for an authorized resumption;
+an expired descriptor cannot authorize the current weekly window.
 Reuse the explicitly authorized private CLI credential cache and obtain a fresh
 one-shot reading at each iteration/significant stage, before/after lengthy tests,
 and before every write. Process loss alone must not require a new login.
@@ -165,14 +176,19 @@ The User still reviews and merges every PR. No live host writes are authorized.
 The original memory-only reader lost its login when its process ended. The User
 rejected repeated sign-ins. [Source PR3](https://github.com/clayton-duarte/skills/pull/3)
 adds an explicit private credential directory outside Git and one-shot reads.
-Use the kit README's persistent-auth commands; ordinary checks omit `--login`.
+Use the kit README's persistent-auth commands with `--min-remaining 0` for
+reset pacing; ordinary checks omit `--login`. The reader publishes telemetry
+and the guard computes the changing floor.
 The official CLI owns refresh. Never overwrite the cloud-managed login or commit
 credentials. Initial device authorization is only needed when the private cache
 has no usable login; revocation or loss of that volume can require authorization.
 This authenticates allowance reads and does not start a new QA run or reset limits.
 The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fresh
 reading was66% remaining; that historical number is not a gate for later work.
-Source PR3 supplied persistent authentication; User-merged PR6 added proactive PR upkeep. This consumer pins reviewed revision `5569e37c4f09e079d7be30dce177eb2c351340c3`. User alone merges CPD.
+Source PR3 supplied persistent authentication; User-merged PR6 added proactive
+PR upkeep. Skills #8 supplied the previous calendar policy. The current
+reset-pacing pin and its satisfied source-review dependency are recorded in
+[qa-source.md](qa-source.md); CPD adoption still requires User review and merge.
 
 
 ## Proactive PR upkeep
@@ -194,3 +210,19 @@ GitHub API inspection supplies the same read-only inputs. The standing User
 policy applies independently of a consumer update.
 
 Weekly creation requires the same immutable `--run` descriptor. Its recorded start must belong to the current official allowance window; a fresh CLI process or reusable login cannot renew an old run after reset. Descriptor-free status is read-only inspection with `run_required:true` and creation disabled. User-merged skills#7 enforces this across sessions.
+
+
+## 2026-11-16 pacing and interpretation
+
+The formula is a cumulative remaining reserve, not a strict daily spending cap.
+Halfway through the actual weekly window the reserve is 50%. The official
+reset ends the old week's balance; no hardcoded weekday or release hour changes
+that boundary. Current usage by other sessions reduces headroom too. Status
+reports the computed `min_remaining_percent` and `spendable_percent`.
+
+The static reader threshold must be zero for this mode. Missing or stale data,
+account unavailability, spend controls, invalid/expired telemetry and expired
+run authority still refuse work. No new loop, scheduler, login, deployment or
+automatic weekly authorization is started by this policy update.
+
+Previous calendar source: [skills #8](https://github.com/clayton-duarte/skills/pull/8).

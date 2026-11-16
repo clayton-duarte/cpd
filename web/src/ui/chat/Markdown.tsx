@@ -52,6 +52,13 @@ export function splitMarkdown(text: string): string[] {
 
 const markdownComponents: Components = {
   a: ExternalLink,
+  table({ node: _node, children, ...props }) {
+    return (
+      <div className="typeset-scroll" role="region" aria-label="Scrollable table" tabIndex={0}>
+        <table {...props}>{children}</table>
+      </div>
+    );
+  },
   pre({ children }) {
     return <>{children}</>;
   },

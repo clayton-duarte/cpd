@@ -38,6 +38,7 @@ export type CpdCommand =
   | { readonly kind: "session.rename"; readonly sessionId: string; readonly name: string }
   | { readonly kind: "session.fork"; readonly sourceId: string; readonly name: string }
   | { readonly kind: "session.close"; readonly sessionId: string }
+  | { readonly kind: "session.resume"; readonly sessionId: string }
   | { readonly kind: "session.archive"; readonly sessionId: string }
   | { readonly kind: "session.unarchive"; readonly sessionId: string }
   | { readonly kind: "inbox.list" }
@@ -123,6 +124,7 @@ export function toArgv(cmd: CpdCommand): string[] {
     case "session.rename": return ["session", "rename", `--session=${cmd.sessionId}`, "--", cmd.name];
     case "session.fork": return ["session", "fork", cmd.sourceId, `--name=${cmd.name}`];
     case "session.close": return ["session", "close", cmd.sessionId];
+    case "session.resume": return ["session", "resume", cmd.sessionId];
     case "session.archive": return ["session", "archive", cmd.sessionId];
     case "session.unarchive": return ["session", "unarchive", cmd.sessionId];
     case "inbox.list": return ["inbox", "list"];
@@ -209,6 +211,7 @@ export function allCpdCommands(): CpdCommand[] {
     { kind: "session.rename", sessionId: "s1", name: "N" },
     { kind: "session.fork", sourceId: "s1", name: "N" },
     { kind: "session.close", sessionId: "s1" },
+    { kind: "session.resume", sessionId: "s1" },
     { kind: "session.archive", sessionId: "s1" },
     { kind: "session.unarchive", sessionId: "s1" },
     { kind: "inbox.list" },

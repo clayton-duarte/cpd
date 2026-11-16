@@ -32,6 +32,8 @@ pub enum BugCommand {
     Report(ReportArgs),
     /// Record the mitigation applied to an open bug (commands.md §33.2)
     Mitigate(MitigateArgs),
+    /// Associate an existing GitHub issue without recording a mitigation
+    AssociateIssue(AssociateIssueArgs),
     /// Close a bug whose root fix and regression test are in (commands.md §33.3)
     Close(CloseArgs),
     /// List bug records, id ascending (commands.md §33.4)
@@ -72,6 +74,16 @@ pub struct MitigateArgs {
     /// The GitHub issue of the bug, https://github.com/<owner>/<repo>/issues/<N> (required)
     #[arg(long, value_name = "url")]
     pub issue: Option<String>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AssociateIssueArgs {
+    /// The bug id, `b<k>`
+    #[arg(value_name = "id")]
+    pub id: String,
+    /// The GitHub issue URL
+    #[arg(long, value_name = "url")]
+    pub issue: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -127,6 +139,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         BugCommand::Report(args) => report(&mut env.store, args),
         BugCommand::Mitigate(args) => mitigate(&mut env.store, args),
+        BugCommand::AssociateIssue(args) => associate_issue(&mut env.store, args),
         BugCommand::Close(args) => close(&mut env.store, args),
         BugCommand::List(args) => list(&mut env.store, args),
         BugCommand::Show(args) => show(&mut env.store, args),
@@ -342,6 +355,37 @@ fn report(store: &mut Store, args: ReportArgs) -> Result<Output, CpdError> {
             ],
         )?;
         let bug = fetch(tx, &id)?.expect("the row just inserted");
+        Ok(Output::success(json!({"bug": bug.json()})))
+    })
+}
+
+/// Associate an issue without changing the bug's mitigation or other state.
+fn associate_issue(store: &mut Store, args: AssociateIssueArgs) -> Result<Output, CpdError> {
+    require_lead()?;
+    let issue = args.issue.as_str();
+    if parse_issue(issue).is_none() {
+        return Err(CpdError::new(
+            ErrorCode::IssueInvalid,
+            "An --issue is https://github.com/<owner>/<repo>/issues/<N>.",
+        )
+        .with("issue", issue));
+    }
+    store.write("protocol bug associate-issue", |tx| {
+        let bug = fetch(tx, &args.id)?.ok_or_else(|| bug_not_found(&args.id))?;
+        if let Some(old) = bug.issue.as_deref() {
+            if old == issue {
+                return Ok(Output::success(json!({"already": true, "bug": bug.json()})));
+            }
+            return Err(CpdError::new(
+                ErrorCode::IssueConflict,
+                format!("Bug {} already has the issue {old}: its linked pull requests close that one, so another --issue is refused.", args.id),
+            )
+            .with("id", args.id.as_str())
+            .with("issue", old)
+            .with("requested", issue));
+        }
+        tx.execute("UPDATE bug_records SET issue = ?1 WHERE id = ?2", params![issue, args.id])?;
+        let bug = fetch(tx, &args.id)?.expect("the row just updated");
         Ok(Output::success(json!({"bug": bug.json()})))
     })
 }

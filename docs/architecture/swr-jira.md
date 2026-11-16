@@ -1,6 +1,6 @@
 # Stale-while-revalidate (SWR): the Jira datasource
 
-Status: **normative for the `jira` Workflow** (Plan `external-sync-arch`, Job `swr-jira`). It is the design page that [swr.md §14](swr.md) names for the `jira` source. Where merged code later differs, the code wins. Decisions: pro-d443 (Jira), pro-d126 and pro-d128 (the transitions this replaces). Accepted assumptions cited here are the A-list of [swr.md §17](swr.md). Decisions this page makes on its own are marked **J1** to **J7** and listed in §13 for the Lead.
+Status: **normative for the `jira` Workflow** (Plan `external-sync-arch`, Job `swr-jira`). It is the design page that [swr.md §14](swr.md) names for the `jira` source. Decisions: pro-d443 (Jira), pro-d126 and pro-d128 (the transitions this replaces). Accepted assumptions cited here are the A-list of [swr.md §17](swr.md). Decisions this page makes on its own are marked **J1** to **J7** and listed in §13 for the Lead.
 
 ## 1. Rules
 

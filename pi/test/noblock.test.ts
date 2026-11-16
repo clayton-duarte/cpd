@@ -245,3 +245,35 @@ test("a Worker's bash call without timeout keeps timeout undefined", async (t) =
   assert.equal(input.timeout, undefined);
   assert.equal("timeout" in input, false);
 });
+
+test("command substitution cannot hide a foreground wait behind a background timeout", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  for (const command of [
+    "echo $(timeout 1800 scripts/cargo.sh build &)",
+    "echo `timeout 1800 scripts/cargo.sh build &`",
+    "echo $(timeout 1800 scripts/cargo.sh build > /tmp/build.log 2>&1 &)",
+    "echo $(echo $(timeout 1800 cmd &))",
+  ]) {
+    const result = await call(f, { command, timeout: 25 });
+    assert.equal(result?.block, true, command);
+    assert.match(result?.reason ?? "", /refused: timeout 1800/);
+  }
+});
+
+test("bounded background timeout is allowed", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  const foreground = await call(f, { command: "timeout 1800 env CPD_COMMIT=566357f scripts/cargo.sh build", timeout: 25 });
+  assert.equal(foreground?.block, true);
+  assert.match(foreground?.reason ?? "", /refused: timeout 1800/);
+  assert.equal(await call(f, { command: "timeout 20 cmd", timeout: 25 }), undefined);
+  for (const command of ["(timeout 1800 cmd & wait)", "timeout 1800 cmd & wait $!", "watch &", "sleep 60 &"]) {
+    assert.equal((await call(f, { command, timeout: 25 }))?.block, true, command);
+  }
+  assert.equal((await call(f, { command: "timeout 20 cmd", timeout: 31 }))?.block, true);
+  const nested = "mkdir -p /tmp/cpd-ssh-bindings && (set -m; (timeout 1800 cpd pr open --workflow sshconfig > /tmp/cpd-ssh-bindings/pr-open.log 2>&1; echo $? > /tmp/cpd-ssh-bindings/pr-open.exit) < /dev/null & echo $! > /tmp/cpd-ssh-bindings/pr-open.pid)";
+  const command = "cd /tmp/cpd-canonical-rollout/checkout && (set -m; timeout 1800 env CPD_COMMIT=566357f /tmp/cpd-canonical-rollout/checkout/scripts/cargo.sh build --release --locked --manifest-path /tmp/cpd-canonical-rollout/checkout/Cargo.toml -p cpd > /tmp/cpd-canonical-rollout/build.log 2>&1 < /dev/null & echo  > /tmp/cpd-canonical-rollout/build.pid) && printf pid= && cat /tmp/cpd-canonical-rollout/build.pid";
+  const results = await Promise.all([command, nested].map((cmd) => call(f, { command: cmd, timeout: 25 })));
+  assert.deepEqual(results, [undefined, undefined]);
+});

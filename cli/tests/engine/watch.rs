@@ -1460,8 +1460,8 @@ fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
 
 #[test]
 fn e2_retries_a_dead_driver_at_the_same_tier() {
-    let fx = engine_with_plan("concurrency = 1");
-    // A live Attempt holds the only slot; `api` is a tenant already, so E3 starts its next Attempt at once, competing for nothing.
+    let fx = engine_with_plan("concurrency = 2");
+    // The busy Attempt keeps one slot; the retry must acquire the other slot.
     let _busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &ago_in(&fx, 1));
     fx.add_running("api", "running", &ago_in(&fx, 1));
@@ -1498,10 +1498,10 @@ fn e2_retries_a_dead_driver_at_the_same_tier() {
 /// range at or above its effort (`S3`), never wedging with `tier_invalid` and leaving it `starting`.
 #[test]
 fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_valid_tier() {
-    let fx = engine_with_plan("concurrency = 1");
+    let fx = engine_with_plan("concurrency = 2");
     fx.env
         .sql("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
-    // A live Attempt holds the only slot; `api` is a tenant already, so E3 starts its next Attempt after E2 queues it, competing for nothing.
+    // The busy Attempt keeps one slot; E3 must acquire the other slot for the retry.
     let _busy = fx.live_driver("busy-a1");
     fx.add_running("busy", "running", &ago_in(&fx, 1));
     fx.add_running("api", "starting", &ago_in(&fx, 1));
@@ -1517,7 +1517,7 @@ fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_va
         fx.env
             .query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"),
         "S3",
-        "the tenant Job's next Attempt started at once, at S3"
+        "the next Attempt acquired the free slot at S3"
     );
     // The Attempt E2 ended climbs the ladder once (the next one's driver could not start, with no installed binary: its own `attempt-retry`).
     let retry: Vec<_> = fx
@@ -2367,7 +2367,7 @@ fn e3_never_starts_a_job_stored_outside_the_worker_range() {
 fn e2_ladder_climbs_inside_the_worker_range_and_fails_at_its_ceiling() {
     {
         let fx = engine_with_plan(&format!(
-            "concurrency = 1\nretry_cap = 3\n{}",
+            "concurrency = 2\nretry_cap = 3\n{}",
             ranged_roles("S4")
         ));
         ranged_catalog(&fx);

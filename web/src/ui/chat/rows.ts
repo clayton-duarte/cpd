@@ -112,7 +112,9 @@ export function groupRows(items: readonly TranscriptItem[]): Row[] {
     }
     if (item.kind === "assistant") {
       const thinkingBlocks = item.blocks.filter((b) => b.type === "thinking");
-      const textBlocks = item.blocks.filter((b) => b.type === "text");
+      const textBlocks = item.blocks.filter(
+        (b) => b.type === "text" && b.text.trim().length > 0,
+      );
       thinkingBlocks.forEach((b, idx) => {
         const isLastBlock = item.blocks[item.blocks.length - 1] === b;
         chainBuffer.push({
@@ -123,7 +125,7 @@ export function groupRows(items: readonly TranscriptItem[]): Row[] {
           running: item.streaming === true && isLastBlock,
         });
       });
-      if (textBlocks.length > 0) {
+      if (textBlocks.length > 0 || (item.streaming && thinkingBlocks.length === 0)) {
         commitChain();
         rows.push({
           kind: "item",

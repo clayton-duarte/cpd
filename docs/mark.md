@@ -10,4 +10,4 @@ cpd is written **φ** (U+03C6 GREEK SMALL LETTER PHI), as pi is written **π**. 
 
 ## Logo
 
-The logo is **φ set in EB Garamond**, a free font. The runner-up fonts were **Vollkorn** and **Tektur**. The logo itself is defined soon; this page records the decision (hs-d694) until then.
+The logo is **φ set in EB Garamond**, a free font. Decision hs-d694 records the typeface choice.

@@ -110,3 +110,38 @@ inspection and count-only multiweek runs. Rejecting an old descriptor cannot
 prove a replacement descriptor was authorized: that remains a trusted operator
 and recorded User-decision boundary. This is a policy enforcement choice, not
 an industry-consensus claim. Existing in-process reset/freshness checks remain.
+
+
+## Calendar pacing (2026-11-16)
+
+The User chose seven equal allocations of a weekly allowance, with Monday's
+reserve `6 * 100 / 7` down to Sunday's zero reserve, and confirmed a conservative
+Sunday **8 p.m. America/Toronto** release after the expected roughly 7 p.m.
+reset. This supersedes CPD's fixed 50% stop rule; it is an owner budget decision,
+not an industry-consensus claim. Unused allocation carries forward naturally
+because the guard compares the cumulative reserve to live remaining balance.
+
+[Node Intl](https://nodejs.org/api/intl.html) supplies IANA timezone calendar
+parts. Adopt calendar weekdays/hours instead of elapsed 24-hour intervals so
+DST does not shift midnight or the release time. The official reader's reset
+and account availability remain authoritative: before an actual reset there
+are only old credits; after it and before release the new balance is held.
+Keep this calculation in the JS guard; the existing Python reader can publish
+telemetry with a zero static threshold. Test all weekdays, midnight in standard
+and daylight time, both DST transitions, reset/release ordering, exact floors,
+carryover, and the final pre-write check. Existing fixed-floor consumers retain
+their configuration and inclusive threshold behavior. New paced consumers stop
+at the floor because no headroom remains. Run authorization and rollover
+protection are unchanged.
+
+## Official-reset pacing (2026-11-16)
+
+The User subsequently approved replacing CPD's weekday allocations and Sunday
+release hold with continuous pacing from the authenticated reset timestamp.
+The official app-server reset/duration fields already used for run-window
+validation also define the reserve: remaining elapsed milliseconds divided by
+10,080 minutes, times 100. This is an owner budget policy, not a provider rule.
+No date library or external scheduler is needed. UTC timestamp arithmetic avoids
+weekday and DST assumptions; keep legacy calendar/fixed modes for other consumers.
+Tests cover exact boundaries, arbitrary reset weekdays, DST, account refusals,
+freshness, reset rollover, old-run rejection and pre-write revalidation.

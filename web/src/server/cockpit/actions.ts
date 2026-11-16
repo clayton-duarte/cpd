@@ -34,6 +34,7 @@ export function actionArgs(action: CockpitAction): CpdCommand {
     case "session.rename": return { kind: "session.rename", sessionId: action.sessionId, name: action.name };
     case "session.fork": return { kind: "session.fork", sourceId: action.sourceId, name: action.name };
     case "session.close": return { kind: "session.close", sessionId: action.sessionId };
+    case "session.resume": return { kind: "session.resume", sessionId: action.sessionId };
     case "context.archive": return { kind: "context.archive", contextId: action.contextId };
     case "plan.archive": return { kind: "plan.archive", planId: action.planId };
     case "session.archive": return { kind: "session.archive", sessionId: action.sessionId };

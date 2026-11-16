@@ -62,6 +62,6 @@ Line numbers are of CONTEXT.md after the edit; some are approximate (unverified)
 
 - Commands and flags in entries: `pr add`, `pr open`, `pr push`, `pr rebase`, `pr poll`, `--pr`, `--needs`, `pr-feedback` Event.
 - Tables `prs`, `pr_needs`; the policy key `gate.merge`/`gate.pr` as named today.
-- The cockpit's third column title (Deploy today), and contract §3.9, README.md:7 table, docs/ui-preview.md, docs/implementing.md uses of "PR".
+- The cockpit's third column title (Deploy today), and contract §3.9, README.md:7 table, docs/contract.md#37b-the-serve-process-runtime-and-port-supervision, docs/implementing.md uses of "PR".
 - "workflow worktree" in docs/contract.md §7 and code strings (core/src/driver/start.rs:312, unverified line).
 - Retired section 11 does not exist until terms-gloss-2: entries point to "see Retired".

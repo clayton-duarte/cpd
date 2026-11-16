@@ -270,3 +270,74 @@ fn the_new_spec_is_checked_as_a_drafts_is() {
         "[\"tests/t2.rs\"]"
     );
 }
+
+fn check_git_boundary(target: &'static str) {
+    use cpd_core::host::runner::Reply;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let fx = touches_fx();
+    add_touching(&fx, "a", &["src/a.rs"]).ok();
+    lock(&fx.env, "pl");
+    let old = job_row(&fx.env, "pl", "a", "fingerprint");
+    let spec = new_spec(&fx, "boundary.json");
+    let before = count(&fx.env, "events");
+    let active = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    for (subcommand, reply) in [
+        ("rev-parse", Reply::exit(1, "", "")),
+        ("ls-tree", Reply::ok("src/a.rs\0")),
+    ] {
+        let active = active.clone();
+        let calls = calls.clone();
+        let _ = (*fx.fakes.runner).clone().on(
+            "git",
+            move |call| {
+                if call.args.get(2).is_some_and(|arg| arg == subcommand) {
+                    calls
+                        .lock()
+                        .unwrap()
+                        .push((subcommand, active.load(Ordering::SeqCst)));
+                    true
+                } else {
+                    false
+                }
+            },
+            reply,
+        );
+    }
+    let out = cpd_core::ports::observe_writes(active.clone(), || {
+        job(&fx, &["edit", "a", "--spec", &spec], "pl").ok()
+    });
+    assert_eq!(out["fields"], json!(["goal", "acceptance"]));
+    assert_eq!(job_row(&fx.env, "pl", "a", "goal"), "New goal.");
+    assert_eq!(count(&fx.env, "events"), before + 1);
+    assert_eq!(events(&fx, "job-edited").len(), 1);
+    assert_ne!(job_row(&fx.env, "pl", "a", "fingerprint"), old);
+    assert_eq!(
+        job_row(&fx.env, "pl", "a", "fingerprint"),
+        json!(locked_fingerprint_of(&fx.env, "a"))
+    );
+    assert!(!active.load(Ordering::SeqCst));
+    let calls = calls.lock().unwrap();
+    let states: Vec<_> = calls
+        .iter()
+        .filter(|(name, _)| *name == target)
+        .map(|(_, active)| *active)
+        .collect();
+    assert!(!states.is_empty(), "expected mocked git {target}");
+    assert!(
+        states.iter().all(|active| !active),
+        "git {target} ran within Store::write: {states:?}"
+    );
+}
+
+#[test]
+fn locked_spec_edit_runs_git_preflight_outside_store_write() {
+    check_git_boundary("rev-parse");
+}
+
+#[test]
+fn locked_spec_edit_checks_touches_outside_store_write() {
+    check_git_boundary("ls-tree");
+}

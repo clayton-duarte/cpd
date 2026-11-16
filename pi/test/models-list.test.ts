@@ -346,7 +346,7 @@ test("the providers are github-copilot (when logged in) and the custom providers
   }
 });
 
-test("--all lists the built-in providers pi has auth for and models to offer, beside github-copilot; the others are left out, and plain mode never lists one", async () => {
+test("--all lists the built-in providers pi has auth for and models to offer, beside github-copilot; the others are left out", async () => {
   const { rt } = runtime({
     builtin: {
       anthropic: { auth: "oauth", available: ["claude-sonnet-5.5"], known: ["claude-sonnet-5.5", "claude-opus-5.5"] },
@@ -365,10 +365,21 @@ test("--all lists the built-in providers pi has auth for and models to offer, be
   assert.deepEqual(anthropic.ids, ["claude-sonnet-5.5"]);
   assert.deepEqual(anthropic.known, ["claude-sonnet-5.5", "claude-opus-5.5"]);
 
-  // Without `--all` the built-ins are never listed, whatever pi has for them.
-  const plain = await listModels({ rt, piVersion: PI_VERSION });
-  assert.ok(plain.ok);
-  assert.deepEqual(plain.providers.map((e) => e.provider), ["github-copilot"]);
+});
+
+test("default discovery includes usable built-in providers", async () => {
+  const { rt } = runtime({
+    builtin: { openai: { auth: "api_key", available: ["gpt-5"], known: ["gpt-5", "gpt-4"] } },
+    copilot: { available: ["copilot-model"], known: ["copilot-model"], auth: "oauth" },
+  });
+  const fakeFetch: typeof fetch = async () => { throw new Error("unexpected network request"); };
+  const answer = await listModels({ rt, piVersion: PI_VERSION, fetch: fakeFetch });
+
+  const openai = listed(entry(answer, "openai"));
+  assert.equal(openai.auth, "api_key");
+  assert.deepEqual(openai.ids, ["gpt-5"]);
+  assert.deepEqual(openai.known, ["gpt-5", "gpt-4"]);
+  assert.deepEqual(listed(entry(answer, "github-copilot")).ids, ["copilot-model"]);
 });
 
 test("--all: a built-in whose auth check throws is one failed entry, never hiding the others", async () => {

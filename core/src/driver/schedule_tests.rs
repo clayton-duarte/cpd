@@ -185,21 +185,20 @@ fn schedule_takes_workers_and_the_spec_resources_all_or_none() {
 }
 
 #[test]
-fn schedule_a_tenant_job_retrying_starts_without_competing() {
-    // Every pool is full, and the retry needs none: it starts and takes nothing.
+fn schedule_a_retry_reacquires_workers_but_keeps_its_named_resources() {
+    // An ended Attempt released its Worker slot, even while the Job keeps its named resource.
     let plan = schedule(&[pool(0), pool(0)], &[tenant(1, &[0, 1])]);
-    assert_eq!((plan.start, plan.skipped), (vec![1], vec![]));
+    assert_eq!((plan.start, plan.skipped), (vec![], vec![1]));
 
-    // It takes no slot: the Job behind it still finds the one free slot.
-    let plan = schedule(&[pool(1), pool(1)], &[tenant(1, &[0, 1]), job(2, &[0, 1])]);
-    assert_eq!((plan.start, plan.skipped), (vec![1, 2], vec![]));
+    let plan = schedule(&[pool(1), pool(0)], &[tenant(1, &[0, 1]), job(2, &[0])]);
+    assert_eq!((plan.start, plan.skipped), (vec![1], vec![2]));
 
-    // A tenant is never skipped, whatever its place: behind a skipped Job and an urgent one.
+    // Multiple retries cannot all reuse the same free Worker slot.
     let plan = schedule(
-        &[pool(0)],
-        &[job(1, &[0]), tenant(2, &[0]), urgent(3, &[0])],
+        &[pool(1), pool(0)],
+        &[tenant(1, &[0, 1]), tenant(2, &[0, 1]), tenant(3, &[0, 1])],
     );
-    assert_eq!((plan.start, plan.skipped), (vec![2], vec![3, 1]));
+    assert_eq!((plan.start, plan.skipped), (vec![1], vec![2, 3]));
 }
 
 #[test]

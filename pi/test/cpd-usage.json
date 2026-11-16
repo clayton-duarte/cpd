@@ -1377,6 +1377,17 @@
     },
     "required": []
   },
+  "protocol bug associate-issue": {
+    "flags": {
+      "--help": false,
+      "--issue": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "protocol bug close": {
     "flags": {
       "--help": false,

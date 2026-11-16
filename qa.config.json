@@ -18,7 +18,7 @@
     }
   ],
   "weekly_allowance": {
-    "min_remaining_percent": 50,
+    "reset_pacing": true,
     "max_age_seconds": 60
   }
 }
