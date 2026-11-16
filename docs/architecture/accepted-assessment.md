@@ -2,11 +2,24 @@
 
 **Status:** documentation-based assessment of accepted direction, not a runtime
 verification or a new architecture mandate. It records the accepted substance
-from decision pro-d16. Upstream remains authoritative; the cited design pages
-are evidence for reasoning, not proof that their proposals or described
-behaviour are implemented.
+from decisions pro-d16, pro-d17 and pro-d18. Upstream remains authoritative; the
+cited design pages are evidence for reasoning, not proof that their proposals or
+described behaviour are implemented. The platform choices below are target
+decisions, not claims that migration or removal is complete.
 
 ## Assessment
+
+Methodology comes first: it governs what enabling platform is necessary for
+model access, interaction, action approvals and plan review. Assess methodology,
+coordination/continuity tooling, and execution/integration platform as distinct
+concerns rather than treating a platform choice as the methodology itself.
+
+The target is pi-durable rather than pi-agent+tmux, with no TUI and Cockpit as
+the canonical User control interface. These are target decisions, not claims
+that migration or removal is complete. Do not privilege a normal pi-agent
+extension as the target. Evaluate platform mechanisms by their contribution to
+the methodology; do not presume mechanisms unnecessary merely because they are
+platform mechanisms.
 
 A useful architecture preserves continuity: intent, decisions and ownership
 should remain recoverable, and current guidance should present amendments
@@ -21,7 +34,9 @@ daemon, scheduler, outbox, cache, particular state transitions, and module- or
 Job-based boundaries are not presumed necessary. For each concrete need,
 evaluate upstream alternatives and whole-system recovery, not merely local
 transition correctness. Add no mandatory architecture or process without
-that justification.
+that justification. The platform target does not override those safeguards:
+mechanisms remain subject to evaluation against methodology and justified
+needs.
 
 ## Evidence and limits
 
