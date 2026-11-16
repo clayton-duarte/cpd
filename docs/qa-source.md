@@ -6,7 +6,7 @@ Migration tracking: [#1152](https://github.com/clayton-duarte/cpd/issues/1152).
 CPD's `tools/repo-qa` is a pinned, unmodified consumer snapshot, not another
 source of truth. [tools/repo-qa.upstream.json](../tools/repo-qa.upstream.json) records
 the immutable upstream commit, package path and SHA-256 of every package file.
-The proposed daily-pacing pin is `3d67f3d920c7419308f49fa846ec55b3c45e00a3` (source review pending). CPD tests reject changed, added, removed or
+The daily-pacing pin is merged source `c751d328c58498c66ca457d615da2966a9060215`. CPD tests reject changed, added, removed or
 non-file entries that differ from that snapshot.
 
 The User asked for a standalone source repository. Keeping a pinned copy preserves
@@ -51,9 +51,10 @@ its adoption guide. Config/profile/permissions must be grounded in the new targe
 repo. Do not copy CPD machine data, active run IDs or an assumed allowance.
 
 
-For the 2026-11-16 daily pacing update, this consumer PR is prepared as a draft
-against the source branch's immutable commit so both changes can be reviewed.
-Merge the source PR first, then this consumer. This does not activate an
-unreviewed pin on main or authorize a new QA run.
+The User merged skills #8 and opened the 2026-11-16 CPD daily-pacing PR for
+review. The snapshot now pins the canonical merge commit; its package files are
+byte-for-byte identical to the previously tested source branch. The source
+dependency is satisfied. User review/merge of CPD remains required, and no
+new QA run is authorized by the pin update.
 
-Source proposal: [skills #8](https://github.com/clayton-duarte/skills/pull/8).
+Merged source: [skills #8](https://github.com/clayton-duarte/skills/pull/8).

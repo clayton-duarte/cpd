@@ -285,7 +285,8 @@ threshold consumers retain their old behavior. Run-window binding, explicit
 User authorization, shared attribution and User-only merge remain unchanged.
 This is a bounded policy/tooling update, not a resumed QA loop or quota reset.
 
-Canonical implementation and its tests live in the skills source PR; this
-consumer is prepared against its immutable commit and must merge after it.
+The User merged skills #8. This consumer now pins canonical merge commit
+`c751d328c58498c66ca457d615da2966a9060215`; every package byte matches the tested source proposal. The
+source dependency is satisfied; CPD still requires User review and merge.
 
-Source proposal: [skills #8](https://github.com/clayton-duarte/skills/pull/8).
+Merged source: [skills #8](https://github.com/clayton-duarte/skills/pull/8).

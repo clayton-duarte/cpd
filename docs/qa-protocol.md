@@ -184,8 +184,8 @@ has no usable login; revocation or loss of that volume can require authorization
 This authenticates allowance reads and does not start a new QA run or reset limits.
 The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fresh
 reading was66% remaining; that historical number is not a gate for later work.
-Source PR3 supplied persistent authentication; User-merged PR6 added proactive PR upkeep. This update proposes source revision `3d67f3d920c7419308f49fa846ec55b3c45e00a3` for daily pacing. Merge the
-source PR before this consumer PR; User alone reviews and merges both.
+Source PR3 supplied persistent authentication; User-merged PR6 added proactive PR upkeep. This consumer pins merged source revision `c751d328c58498c66ca457d615da2966a9060215` for daily pacing. The User
+merged skills #8; CPD adoption remains subject to User review and merge.
 
 
 ## Proactive PR upkeep
@@ -224,4 +224,4 @@ account unavailability, spend controls, unexpected reset weekday and expired
 run authority still refuse work. No new loop, scheduler, login, deployment or
 automatic weekly authorization is started by this policy update.
 
-Source proposal: [skills #8](https://github.com/clayton-duarte/skills/pull/8).
+Merged source: [skills #8](https://github.com/clayton-duarte/skills/pull/8).
