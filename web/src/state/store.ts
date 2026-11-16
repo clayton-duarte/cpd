@@ -31,6 +31,7 @@ export interface SessionView {
   readonly capabilities: Capabilities | null;
   readonly transcript: TranscriptState;
   readonly busy: boolean;
+  readonly compacting?: boolean;
   readonly queued: readonly QueuedSubmission[];
   readonly pending: readonly PendingSubmission[];
   readonly dialog: Dialog | null;
@@ -96,7 +97,7 @@ export const initialState: AppState = {
 };
 const emptySession = (id: string, completion: Completion | null = null): SessionView => ({
   id, attached: false, ref: null, title: null, footer: null, capabilities: null, transcript: emptyTranscript,
-  busy: false, queued: [], pending: [], dialog: null, models: null, error: null, completion,
+  busy: false, compacting: false, queued: [], pending: [], dialog: null, models: null, error: null, completion,
 });
 
 function normalizeUserText(text: string): string {
@@ -156,7 +157,7 @@ function reduceSession(state: AppState, session: SessionView, message: ServerMes
     case "session.delta":
       return set({ transcript: applyDelta(session.transcript, message) });
     case "session.status":
-      return set({ busy: message.busy, queued: message.queued });
+      return set({ busy: message.busy, compacting: message.compacting ?? false, queued: message.queued });
     case "session.footer":
       return set({ footer: message.footer });
     case "session.title":

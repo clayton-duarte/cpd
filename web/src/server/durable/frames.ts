@@ -21,6 +21,7 @@ export interface DurableFacts {
   model?: string;
   thinking?: string | null;
   busy: boolean;
+  compacting: boolean;
   costUsd: number;
   lastContextTokens?: number;
   queued: { id: number; mode: string }[];
@@ -52,6 +53,7 @@ export interface DialectOutput {
   update: TranscriptItem[];
   deltas: { itemId: string; blockIndex: number; blockType: "text" | "thinking"; text: string }[];
   busy?: boolean;
+  compacting?: boolean;
   queued?: { id: number; mode: string }[];
   agent?: { model?: string; thinking?: string | null };
   replaced?: boolean;
@@ -326,7 +328,7 @@ function createViewDialect(): ViewDialect {
   const replica = createReplica();
   let view: View | null = null;
   let items: TranscriptItem[] = [];
-  let facts: DurableFacts = { busy: false, costUsd: 0, queued: [] };
+  let facts: DurableFacts = { busy: false, compacting: false, costUsd: 0, queued: [] };
   let liveId: string | null = null;
   let liveCount = 0;
   let entryTokens: number | undefined;
@@ -457,6 +459,7 @@ function createViewDialect(): ViewDialect {
     const tokens = streaming ?? entryTokens;
     return {
       busy: liveOf(v).run !== undefined,
+      compacting: liveOf(v).compactions === undefined ? false : arr(liveOf(v).compactions, "compactions").length > 0,
       costUsd: costOf(v),
       queued: queuedOf(v),
       ...(agent.model === undefined ? {} : { model: agent.model }),
@@ -592,6 +595,7 @@ function createViewDialect(): ViewDialect {
       if (replaced || vanished) {
         out.replaced = true;
         out.busy = facts.busy;
+        out.compacting = facts.compacting;
         out.queued = facts.queued;
         out.agent = { ...(facts.model === undefined ? {} : { model: facts.model }), ...(facts.thinking === undefined ? {} : { thinking: facts.thinking }) };
         return out;
@@ -613,6 +617,7 @@ function createViewDialect(): ViewDialect {
       const updated = new Set(out.update.map((i) => i.id));
       out.deltas = deltas.filter((d) => !appended.has(d.itemId) && !updated.has(d.itemId));
       if (facts.busy !== prevFacts.busy) out.busy = facts.busy;
+      if (facts.compacting !== prevFacts.compacting) out.compacting = facts.compacting;
       if (!same(facts.queued, prevFacts.queued)) out.queued = facts.queued;
       if (facts.model !== prevFacts.model || facts.thinking !== prevFacts.thinking) {
         out.agent = { ...(facts.model === undefined ? {} : { model: facts.model }), ...(facts.thinking === undefined ? {} : { thinking: facts.thinking }) };
@@ -641,7 +646,7 @@ type EventsLive = { id: string; created: boolean; blocks: Map<number, number>; t
 
 function createEventsDialect(): Dialect {
   const items: TranscriptItem[] = [];
-  const facts: DurableFacts = { busy: false, costUsd: 0, queued: [] };
+  const facts: DurableFacts = { busy: false, compacting: false, costUsd: 0, queued: [] };
   const transcript: DurableTranscript = { items, facts, before: undefined };
   const index = new Map<string, number>(); // item id -> position in items
   const alias = new Map<string, string>(); // `a:<entry id>` -> live id

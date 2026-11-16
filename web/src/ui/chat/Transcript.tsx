@@ -552,6 +552,7 @@ export interface TranscriptProps {
   hasEarlier: boolean;
   loadingEarlier?: boolean;
   busy?: boolean;
+  compacting?: boolean;
   onLoadEarlier(): void;
   tailEpoch: number;
   queued: readonly QueuedSubmission[];
@@ -574,7 +575,7 @@ export function Transcript(props: TranscriptProps): JSX.Element {
     rows.length === 0 &&
     props.queued.length === 0 &&
     props.pending.length === 0 &&
-    !liveChain;
+    !liveChain && !props.compacting;
 
   return (
     <MessageScrollerProvider
@@ -667,6 +668,7 @@ export function Transcript(props: TranscriptProps): JSX.Element {
                 </MessageScrollerItem>
               );
             })}
+            {props.compacting ? <div role="status" className="text-sm text-muted-foreground">Compacting…</div> : null}
             {props.queued.length === 0 && props.pending.length === 0 ? null : (
               <ul
                 aria-label="Queued messages"
