@@ -3,6 +3,14 @@
 The [glossary](../../CONTEXT.md) defines terms; the [contract](../contract.md)
 defines behavior; the [command reference](../commands.md) defines operations.
 
+Architecture pages record designs and scenarios, not independent product
+requirements. In particular, [CPD as Core + pi Extension + WebSocket
+Clients](pi-native-core.md) is an approved target design; its migration and
+runtime claims should not be read as proof that each target is implemented.
+ADRs preserve decisions at their recorded status. Where an ADR is marked
+superseded, follow its successor; do not treat the historical decision text as
+current guidance.
+
 ## Design and operational references
 
 - [cpd doctor cross-machine probing](doctor-cross-machine.md)
