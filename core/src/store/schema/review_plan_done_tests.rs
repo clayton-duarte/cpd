@@ -43,6 +43,7 @@ fn dump(store: &mut Store) -> String {
                             && n != "changes_requested_at"
                             && !n.starts_with("reviewed_")
                             && !n.starts_with("host_")
+                            && n != "shaping_origin"
                     })
                     .collect())
             })

@@ -95,11 +95,10 @@ fn shaping_schema_accepts_shaping_phase_with_null_lead() {
 }
 
 #[test]
-fn shaping_schema_refuses_shaping_with_a_lead() {
+fn shaping_schema_accepts_shaping_with_a_lead() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
-    // The accepted case first: a shaping Plan is Lead-less. This is also the red step
-    // until the migration lands.
+    // Both legacy lead-less and paired shaping Plans are valid.
     write(
         &mut store,
         &format!(
@@ -111,23 +110,21 @@ fn shaping_schema_refuses_shaping_with_a_lead() {
         ),
     )
     .expect("a shaping Plan with a null lead_session is accepted");
-    assert!(
-        write(
-            &mut store,
-            "INSERT INTO plans (id, context, title, phase, lead_session, created_at)
-               VALUES ('shape2', 'ctx', 'Shape 2', 'shaping', 'lead1', 't');"
-        )
-        .is_err(),
-        "a shaping Plan with a Lead violates phase <> 'shaping' OR lead_session IS NULL"
-    );
-    assert!(
-        write(
-            &mut store,
-            "UPDATE plans SET lead_session = 'lead1' WHERE id = 'shape1'"
-        )
-        .is_err(),
-        "a shaping Plan may not gain a Lead"
-    );
+    write(
+        &mut store,
+        "UPDATE plans SET lead_session = 'lead1' WHERE id = 'shape1'",
+    )
+    .expect("a shaping Plan can gain its paired Lead");
+    let lead: Option<String> = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT lead_session FROM plans WHERE id = 'shape1'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(lead.as_deref(), Some("lead1"));
 }
 
 #[test]

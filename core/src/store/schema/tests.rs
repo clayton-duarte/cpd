@@ -731,7 +731,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
             &mut store,
             "SELECT count(*) FROM pragma_table_info('plans')"
         ),
-        17
+        18
     ); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`, `codereview-followup` `pr_subject` and `changes_requested_at`, `plan-reviewed-pr` `reviewed_repo`, `reviewed_number` and `reviewed_title`
     assert_eq!(
         count(
@@ -3073,6 +3073,7 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
                 // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0. `session-runner` one, `sessions.runner` 'pi'.
                 let default = |v: &Value| {
                     v.is_null()
+                        || (table == "plans" && v == 0)
                         || (table == "jobs" && v == "work")
                         || (table == "workflows" && v == "free")
                         || (table == "sessions" && v == 0)
