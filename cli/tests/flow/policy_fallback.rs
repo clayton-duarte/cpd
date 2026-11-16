@@ -15,7 +15,8 @@ const FALLBACK: &str = "clayton-duarte";
 
 fn base() -> Fx {
     let fx = Fx::with_ports();
-    fx.env.write_config("version = 1\nmachine = \"t\"\n");
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     fs::create_dir_all(link(&fx, FALLBACK).parent().unwrap()).unwrap();
     fs::write(link(&fx, FALLBACK), "[tests]\ntext = \"x\"\n").unwrap();
     fx

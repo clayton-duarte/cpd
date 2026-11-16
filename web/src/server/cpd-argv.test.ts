@@ -8,6 +8,11 @@ describe("toArgv", () => {
       .toEqual(["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"]);
   });
 
+  it("context.new creates a by-user Manager from the tree", () => {
+    expect(toArgv({ kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte", byUser: true }))
+      .toEqual(["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte", "--by-user"]);
+  });
+
   it("context.manager builds the context manager argv with --context and --by-user", () => {
     expect(toArgv({ kind: "context.manager", contextId: "ctx-1" }))
       .toEqual(["context", "manager", "--context=ctx-1", "--by-user"]);

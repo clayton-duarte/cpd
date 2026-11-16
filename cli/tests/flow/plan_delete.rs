@@ -37,6 +37,7 @@ impl World {
 /// The config, the fakes and the Context `ctx` (owner `acme`).
 pub fn base(fx: &Fx) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])

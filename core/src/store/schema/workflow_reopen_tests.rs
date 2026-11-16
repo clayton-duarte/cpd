@@ -75,6 +75,7 @@ fn dump(store: &mut Store) -> String {
                         .contains(&n.as_str())
                             && !n.starts_with("reviewed_")
                             && !n.starts_with("host_")
+                            && n != "shaping_origin"
                     })
                     .collect())
             })

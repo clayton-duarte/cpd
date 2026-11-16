@@ -10,11 +10,11 @@ use serde_json::Value;
 /// The Context `ctx` and the cockpit.
 fn setup(fx: &Fx, extra: &str) {
     fx.env.write_tmux_config(extra);
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
     .ok();
-    fx.cockpit();
 }
 
 /// `plan new <id>` with an optional `--runner`.

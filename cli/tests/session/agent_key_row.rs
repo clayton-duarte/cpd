@@ -82,12 +82,12 @@ fn pane_title(fx: &Fx, pane: &str) -> String {
 /// `plan new pay` in Context `ctx` on fake ports: the Lead's session id and pane.
 fn new_plan(fx: &Fx) -> (String, String) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
     .ok();
     fx.keyed_repo("pay");
-    fx.cockpit();
     let out = fx
         .cpd(&[
             "plan",

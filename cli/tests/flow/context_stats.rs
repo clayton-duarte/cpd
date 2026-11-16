@@ -6,7 +6,11 @@ use common::fx::Fx;
 
 fn fx() -> Fx {
     let fx = Fx::with_ports();
-    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
+    fx.cockpit();
     for (id, title) in [("alpha", "Alpha"), ("beta", "Beta")] {
         fx.cpd(&["context", "new", id, "--title", title, "--owner", "acme"])
             .ok();

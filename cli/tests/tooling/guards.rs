@@ -151,7 +151,7 @@ fn every_wait_polls_through_the_harness() {
 /// (cross-process writers, exec of the binary, `--version`), which takes it to nothing and removes this table. An exact
 /// match, as the other ratchets (`scripts/tripwire/allow.txt`, `pi/test/sleep-allow.txt`): a new call fails, and a call
 /// that goes away fails until its number is lowered here.
-const STORE_TESTENV_DEBT: &[(&str, usize)] = &[("store.rs", 8), ("store_window.rs", 1)];
+const STORE_TESTENV_DEBT: &[(&str, usize)] = &[("store.rs", 7), ("store_window.rs", 1)];
 
 /// How each `store/` file differs from `debt`, as `file: n calls (allowed m)`; empty when the counts are exact.
 /// `lines` are the (path, line number, line) of the test files; a comment line calls nothing.

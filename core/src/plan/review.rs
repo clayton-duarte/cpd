@@ -232,7 +232,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     let s = snapshot(&mut env, &id)?;
     let (plan, jobs, latest_review, fingerprint) =
         (&s.plan, &s.jobs, s.review.clone(), s.fingerprint.clone());
-    if plan.phase == Phase::Grounding {
+    if matches!(plan.phase, Phase::Grounding | Phase::Shaping) {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
             format!(

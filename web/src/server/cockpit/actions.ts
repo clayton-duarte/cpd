@@ -28,7 +28,7 @@ export function actionArgs(action: CockpitAction): CpdCommand {
     case "session.retier": return { kind: "session.retier", sessionId: action.sessionId, tier: action.tier };
     case "plan.reject": return { kind: "plan.decide", review: action.review, decision: "reject", planId: action.planId };
     case "plan.new": return { kind: "plan.new", planId: action.planId, contextId: action.contextId, title: action.title };
-    case "context.new": return { kind: "context.new", contextId: action.contextId, title: action.title, owner: action.owner };
+    case "context.new": return { kind: "context.new", contextId: action.contextId, title: action.title, owner: action.owner, byUser: true };
     case "context.rename": return { kind: "context.rename", contextId: action.contextId, title: action.title };
     case "plan.rename": return { kind: "plan.rename", planId: action.planId, title: action.title };
     case "session.rename": return { kind: "session.rename", sessionId: action.sessionId, name: action.name };
@@ -86,10 +86,6 @@ async function resolveArgs(cpd: Cpd, action: CockpitAction): Promise<CpdCommand>
 }
 export async function runAction(cpd: Cpd, raw: unknown): Promise<ActionOutput> {
   const action = parseCockpitAction(raw);
-  if (action.kind === "context.new") {
-    await cpd.json(toArgv({ kind: "context.new", contextId: action.contextId, title: action.title, owner: action.owner }));
-    return await cpd.json(toArgv({ kind: "context.manager", contextId: action.contextId }));
-  }
   const args = toArgv(await resolveArgs(cpd, action));
   try {
     return await cpd.json(args);

@@ -110,6 +110,18 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     std::fs::write(path, text).map_err(failed)
 }
 
+/// Provision the Manager committed by `context new`, using the existing manager command path.
+pub(super) fn start_for_new(context: &ContextId) -> Result<Output, CpdError> {
+    manager(ManagerArgs {
+        select: Select {
+            context: Some(context.clone()),
+            plan: crate::args::PlanArg { plan: None },
+        },
+        by_user: false,
+        runner: None,
+    })
+}
+
 /// `context manager` (§3.10).
 pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
     let Env {
@@ -326,19 +338,36 @@ pub(crate) fn prepare_with(
     by_user: bool,
     topics: &[(String, usize)],
 ) -> Result<Prepared, CpdError> {
-    let cwd = crate::session::agent_cwd()?;
+    let prepared = prepare_pair(config, context)?;
     if !by_user {
-        write_file(
-            &home.manager_message(context),
-            &manager_message(context, title, topics),
-        )?;
+        write_first_message(home, context, title, topics)?;
     }
+    Ok(prepared)
+}
+
+/// Prepare only database values; `context new` writes the message after committing the pair.
+pub(super) fn prepare_pair(
+    config: &crate::config::Config,
+    context: &ContextId,
+) -> Result<Prepared, CpdError> {
     Ok(Prepared {
         id: SessionId::new_v4(),
         name: AgentKey::manager(context.clone()).to_string(),
-        cwd,
+        cwd: crate::session::agent_cwd()?,
         tier: config.manager_tier.to_string(),
     })
+}
+
+pub(super) fn write_first_message(
+    home: &crate::home::CpdHome,
+    context: &ContextId,
+    title: &str,
+    topics: &[(String, usize)],
+) -> Result<(), CpdError> {
+    write_file(
+        &home.manager_message(context),
+        &manager_message(context, title, topics),
+    )
 }
 
 /// The `sessions` row and `session-registered` Event of a prepared Manager, inside `tx`.

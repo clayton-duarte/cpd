@@ -74,6 +74,7 @@ fn configure(fx: &InProcess) {
 fn fx() -> Fx {
     let fx = InProcess::with_ports();
     configure(&fx);
+    fx.cockpit();
     let pi = FakePi::install(&fx);
     fx.cpd(&[
         "context", "new", CONTEXT, "--title", "Ctx", "--owner", "acme",
@@ -1979,6 +1980,7 @@ fn tier_x_distill_model() -> String {
     ));
     install_pi(env);
     let _pi: Arc<common::pi::FakePi> = common::pi::FakePi::install(&fx);
+    fx.cockpit();
     fx.cpd(&["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
         .ok();
     fx.cpd(&["context", "decide", "Use sqlite.", "--context", "ctx"])

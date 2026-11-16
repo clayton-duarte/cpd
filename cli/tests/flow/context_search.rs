@@ -12,8 +12,12 @@ const CTX: &str = "building-cpd";
 
 /// An `Fx` on machine `hs` with Context `building-cpd`.
 fn env() -> Fx {
-    let fx = Fx::new();
-    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
+    let fx = Fx::with_ports();
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",
@@ -613,6 +617,11 @@ fn hybrid_env() -> Fx {
     let fx = Fx::with_ports();
     fx.env.write_config("version = 1\nmachine = \"hs\"\n");
     fx.install_pi();
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",

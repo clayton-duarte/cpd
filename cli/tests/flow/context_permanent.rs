@@ -15,6 +15,7 @@ const PERMANENT: [&str; 3] = ["cpd", "host", "codereview"];
 /// The Context `id` with a Plan `pay` and its Lead, and the config.
 fn world(fx: &Fx, id: &str) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",
@@ -131,11 +132,11 @@ fn context_manager_creates_a_missing_permanent_context_and_its_manager() {
 fn a_managers_cwd_is_the_users_home_not_the_callers_directory() {
     let fx = Fx::with_ports();
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
     .ok();
-    fx.cockpit();
     fs::create_dir_all(fx.env.home()).unwrap();
     let elsewhere = fx.env.root().join("elsewhere");
     fs::create_dir_all(&elsewhere).unwrap();
@@ -155,6 +156,7 @@ fn a_managers_cwd_is_the_users_home_not_the_callers_directory() {
 fn a_leads_cwd_is_the_users_home_not_the_callers_directory() {
     let fx = Fx::with_ports();
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
@@ -193,6 +195,7 @@ fn a_context_with_a_similar_id_is_not_guarded() {
     for id in ["host-2", "cpd-2", "eec-codereview"] {
         let fx = Fx::with_ports();
         fx.env.write_tmux_config("");
+        fx.cockpit();
         fx.cpd(&[
             "context", "new", id, "--title", "Similar", "--owner", "acme",
         ])

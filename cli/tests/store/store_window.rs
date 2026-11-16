@@ -8,6 +8,7 @@ use crate::common;
 use std::fs;
 
 use crate::home::{HasCpdHome, Home};
+use common::fx::Fx;
 use common::{TestEnv, newer_migration};
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
@@ -80,9 +81,13 @@ fn a_binary_opens_a_store_with_additive_migrations_it_does_not_know() {
 
 #[test]
 fn it_reads_and_writes_such_a_store() {
-    let env = machine();
-    store_with_additive_migrations(&env);
-    let mut store = Store::open(&home(&env), 5000).unwrap();
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+
+    fx.cockpit();
+    let env = &fx.env;
+    store_with_additive_migrations(env);
+    let mut store = Store::open(&home(env), 5000).unwrap();
     store
         .write("test", |tx| {
             tx.execute(
@@ -104,7 +109,7 @@ fn it_reads_and_writes_such_a_store() {
     assert_eq!(titles, ["Ctx"]);
 
     // And through the binary itself, which appends Events (the table with the unknown column).
-    let run = env.cpd(&[
+    let run = fx.cpd(&[
         "context", "new", "ctx2", "--title", "Two", "--owner", "acme",
     ]);
     assert_eq!(run.exit, 0, "{run:?}");

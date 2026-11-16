@@ -101,6 +101,7 @@ use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
+pub(crate) use contexts::creation_lock;
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
 
@@ -251,6 +252,9 @@ pub struct NewArgs {
     /// Link an unknown owner to clayton-duarte's policy (the User confirmed)
     #[arg(long)]
     confirm_fallback: bool,
+    /// Create the Manager without an initial turn until the User prompts it
+    #[arg(long)]
+    by_user: bool,
 }
 
 #[derive(Args, Debug)]
@@ -423,15 +427,16 @@ fn new(args: NewArgs) -> Result<Output, CpdError> {
         ..
     } = Env::open()?;
     let title = Text::from(args.title.clone());
-    let (row, already) = Contexts::new(&config, &mut store).create(
+    let (row, already, manager) = Contexts::new(&config, &mut store).create(
         &home,
         &args.id,
         &title,
         args.jira.as_ref(),
         &args.owner,
         args.confirm_fallback,
+        args.by_user,
     )?;
-    let mut out = json!({"context": context_json(&row)});
+    let mut out = json!({"context": context_json(&row), "manager": manager});
     if already {
         out["already"] = json!(true);
     }
