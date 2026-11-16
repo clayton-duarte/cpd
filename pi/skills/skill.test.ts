@@ -432,3 +432,16 @@ test("roles report evidence and blockers honestly", () => {
   assert.match(manager, /Do not claim completion without evidence/);
   assert.match(manager, /state what is blocked and what decision or intervention is needed/);
 });
+
+
+test("external-write authority distinguishes Lead bot replies from Manager authority", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  for (const text of [lead, manager]) {
+    assert.match(text, /Human PR comments and reviews, actions on other PRs, and Slack posts require explicit User permission and applicable approval controls/);
+    assert.match(text, /\[external-write approval boundary\]\(\.\.\/\.\.\/\.\.\/docs\/commands\.md#1527-guards-for-raw-github-comment-writes-and-slack-sends-and-the-pi-tool-cpd_external_approve\)/);
+  }
+  assert.match(lead, /Only replies to bot review threads on your own Workflow PR may proceed without renewed permission, through permitted tools and applicable controls/);
+  assert.doesNotMatch(manager, /bot review threads|without renewed permission/);
+  assert.match(commandsDoc, /^### 15\.27 Guards for raw GitHub comment writes and Slack sends, and the pi tool `cpd_external_approve`$/m);
+});
