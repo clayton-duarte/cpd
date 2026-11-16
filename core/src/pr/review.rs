@@ -252,6 +252,17 @@ fn request_changes(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
     Ok(())
 }
 
+// Compile-only seam for the submit transaction; implementation belongs to the follow-up Job.
+#[cfg(test)]
+pub(super) fn submit_plan_tracking_stub(
+    _tx: &WriteTxn<'_>,
+    _plan: &PlanId,
+    _pull: &str,
+    _verdict: &str,
+) -> Result<(), CpdError> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,15 +312,4 @@ mod tests {
             );
         }
     }
-}
-
-// Compile-only seam for the submit transaction; implementation belongs to the follow-up Job.
-#[cfg(test)]
-pub(super) fn submit_plan_tracking_stub(
-    _tx: &WriteTxn<'_>,
-    _plan: &PlanId,
-    _pull: &str,
-    _verdict: &str,
-) -> Result<(), CpdError> {
-    Ok(())
 }
