@@ -8,10 +8,10 @@ in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pi
 The User explicitly starts/resumes each run; copying the kit or merging its setup
 never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
 
-Read [the reusable QA Protocol](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/references/PROTOCOL.md) for the
+Read [the reusable QA Protocol](../tools/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
-handoff procedure. Its [entry point](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/SKILL.md) and
-[adoption guide](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/README.md) work without CPD. This profile contains
+handoff procedure. Its [entry point](../tools/repo-qa/SKILL.md) and
+[adoption guide](../tools/repo-qa/README.md) work without CPD. This profile contains
 CPD-specific facts, authority and commands; do not copy those into another repo.
 [Decisions/research](qa-decisions.md) preserve User instructions. The
 [Protocol registry](protocols.md) and [glossary](../CONTEXT.md#checks-and-gates)
@@ -108,7 +108,7 @@ an expendable local copy; the canonical record must survive the session.
 A User-authorized reset uses `QA_BATCH=YYYY-MM-DD-reset-N` (or legacy
 `CPD_QA_BATCH`) matching Toronto today. Never autonomously reset or remove markers. The current run has null cardinal caps, fresh live usage (maximum60 seconds), and no reset batch.
 Status reports full-day, active daily/batch and optional run counts from GitHub.
-The [canonical kit README](https://github.com/clayton-duarte/skills/blob/5569e37c4f09e079d7be30dce177eb2c351340c3/skills/repo-qa/README.md) defines fields, exit codes and limits.
+The [pinned canonical kit README](../tools/repo-qa/README.md) defines fields, exit codes and limits.
 
 ## Grounding and validation
 
@@ -187,7 +187,7 @@ The live bootstrap and separate-process reuse both succeeded on2026-11-13. A fre
 reading was66% remaining; that historical number is not a gate for later work.
 Source PR3 supplied persistent authentication; User-merged PR6 added proactive
 PR upkeep. Skills #8 supplied the previous calendar policy. The current
-reset-pacing pin and its pending source-review dependency are recorded in
+reset-pacing pin and its satisfied source-review dependency are recorded in
 [qa-source.md](qa-source.md); CPD adoption still requires User review and merge.
 
 

@@ -62,7 +62,15 @@ instruction narrowly authorized publication of these policy changes, not a run
 or budget reset. Reauthenticate only if
 the reusable official login is actually unavailable, not on ordinary restarts.
 
-Next safe action: User review/merge of source PR, then refresh the consumer pin
-as needed and mark the CPD PR ready. Obtain fresh telemetry before any later QA
+Source #9 subsequently merged at `6a46a8d24c802c3f070502f1a3b2291ec582c91c`.
+All 15 package files were compared against the merge tree; no bytes changed
+from the previously tested source head. The consumer manifest now pins that
+merge. CPD #1363 is being prepared for review with the source dependency met.
+Submodules versus snapshots were evaluated in `docs/qa-source.md`; retaining the
+snapshot for this policy PR avoids silently changing CI/private-source access.
+The source pin lives in the manifest; profile links use that local snapshot
+instead of independently hardcoding old source revisions.
+
+Next safe action: User review/merge of CPD #1363. Obtain fresh telemetry before any later QA
 and preserve explicit current-window run authority. This narrow publication
 instruction is not authority for further QA findings/PRs or automatic rollover.
