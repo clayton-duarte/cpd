@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::home::{HasCpdHome, Home};
 use crate::scripted::ScriptedClock;
 use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::clock::ManualClock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -1601,31 +1602,45 @@ fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
 
 #[test]
 fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
-    let env = TestEnv::new();
+    let fx = Fx::with_ports_empty();
+    fx.cockpit();
+    let env = &fx.env;
     fs::write(
         env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\n",
+        format!(
+            "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+            env.tmux_socket()
+        ),
     )
     .unwrap();
-    // The shell enters a directory, deletes it and runs cpd from there.
-    let out = env
-        .command("sh")
-        .args([
-            "-c",
-            "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"",
-            "sh",
-            common::CPD,
-        ])
-        .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success(),
-        "{stdout} {}",
-        String::from_utf8_lossy(&out.stderr)
+    let gone = env.root().join("gone");
+    fs::create_dir(&gone).unwrap();
+    // Restore even on panic, before Fx removes its temporary home.
+    struct RestoreCwd(std::path::PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).unwrap();
+        }
+    }
+    let (code, stdout) = {
+        let _restore = RestoreCwd(env.root().to_path_buf());
+        std::env::set_current_dir(&gone).unwrap();
+        fs::remove_dir(&gone).unwrap();
+        let args = [
+            "cpd", "context", "new", "ctx", "--title", "Ctx", "--owner", "acme",
+        ]
+        .map(std::ffi::OsString::from);
+        let mut stdout = Vec::new();
+        let code = cpd::run_with(&fx.fakes.ports, args, &mut stdout);
+        (code, stdout)
+    };
+    assert_eq!(
+        code,
+        std::process::ExitCode::SUCCESS,
+        "{}",
+        String::from_utf8_lossy(&stdout)
     );
-    let mut store = open(&env);
+    let mut store = open(env);
     let cwds: Vec<String> = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT cwd FROM txns WHERE command = 'context new'")?;
