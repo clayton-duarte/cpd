@@ -391,3 +391,16 @@ test("no failing-Workflow reminder while the Lead is blocked on a dialog", async
   await f.quiet();
   assert.equal(failingSent(f).length, 1, "not marked reminded while blocked");
 });
+
+test("failed Job reminder describes conditional workflow supersession", () => {
+  const text = failedJobReminderText(["genuine-failure"]);
+  assert.match(text, /genuine-failure/);
+  assert.match(text, /cpd job retry/);
+  assert.match(text, /cpd job cancel/);
+  assert.match(text, /cpd workflow cancel <workflow> --superseded-by <replacement>/);
+  assert.match(text, /dispatch/i);
+  assert.match(text, /merged/i);
+  assert.match(text, /\b(if|when|may)\b/i);
+  assert.match(text, /cpd (verifies|checks)/i);
+  assert.match(text, /safety|prerequisites|requirements/i);
+});
