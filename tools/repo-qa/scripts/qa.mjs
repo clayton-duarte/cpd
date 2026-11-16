@@ -18,7 +18,11 @@ const id = (v) => typeof v === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(v);
 const remaining = (caps, counts) => caps === null ? null : Object.fromEntries(Object.entries(caps).map(([k, n]) => [k, Math.max(0, n - counts[k])]));
 
 export function validateWeeklyPolicy(value) {
-  fields(value, ["min_remaining_percent", "daily_pacing", "max_age_seconds"], "weekly allowance policy");
+  fields(value, ["min_remaining_percent", "daily_pacing", "reset_pacing", "max_age_seconds"], "weekly allowance policy");
+  if (value.reset_pacing !== undefined && (value.reset_pacing !== true
+      || value.daily_pacing !== undefined || value.min_remaining_percent !== undefined)) {
+    throw new Error("Reset pacing must be true, without daily pacing or a fixed threshold");
+  }
   const paced = value.daily_pacing !== undefined;
   if (paced) {
     fields(value.daily_pacing, ["timezone", "sunday_release_hour"], "daily pacing");
@@ -29,15 +33,22 @@ export function validateWeeklyPolicy(value) {
     }
     new Intl.DateTimeFormat("en-CA", { timeZone: value.daily_pacing.timezone });
   }
-  if ((!paced && (!Number.isFinite(value.min_remaining_percent) || value.min_remaining_percent <= 0 || value.min_remaining_percent > 100))
+  if ((!paced && value.reset_pacing !== true && (!Number.isFinite(value.min_remaining_percent) || value.min_remaining_percent <= 0 || value.min_remaining_percent > 100))
       || !Number.isSafeInteger(value.max_age_seconds) || value.max_age_seconds < 1 || value.max_age_seconds > 60) {
-    throw new Error("Weekly policy needs a fixed threshold or daily pacing, and freshness of 1..60 seconds");
+    throw new Error("Weekly policy needs a fixed threshold, daily pacing or reset pacing, and freshness of 1..60 seconds");
   }
   return Object.freeze({ ...value, ...(paced ? { daily_pacing: Object.freeze({ ...value.daily_pacing }) } : {}) });
 }
 
-/** Calendar allocations, not seven 24-hour intervals: DST must not shift midnight. */
+/** Reset pacing uses elapsed time; legacy daily pacing uses local calendar boundaries. */
 export function weeklyAllowanceFloor(policy, now, resetsAt) {
+  if (policy.reset_pacing === true) {
+    const left = Date.parse(resetsAt) - now.getTime();
+    if (!Number.isFinite(left) || left <= 0 || left > 10080 * 60_000) {
+      throw new Error("Reset pacing needs an active official weekly window");
+    }
+    return left / (10080 * 60_000) * 100;
+  }
   if (policy.daily_pacing === undefined) return policy.min_remaining_percent;
   const { timezone, sunday_release_hour } = policy.daily_pacing;
   const format = new Intl.DateTimeFormat("en-CA", { timeZone: timezone,
@@ -71,7 +82,8 @@ export function readWeeklyUsage(policy, now = new Date(), read = () => {
     throw new Error("Weekly allowance is missing, invalid, stale or reset; refresh the authenticated reader");
   }
   const floor = weeklyAllowanceFloor(policy, now, value.resets_at);
-  const withinBudget = policy.daily_pacing === undefined ? value.remaining_percent >= floor : value.remaining_percent > floor;
+  const withinBudget = policy.daily_pacing === undefined && policy.reset_pacing !== true
+    ? value.remaining_percent >= floor : value.remaining_percent > floor;
   return { ...value, min_remaining_percent: floor, spendable_percent: Math.max(0, value.remaining_percent - floor), allowed: withinBudget
     && value.ordinary_usage_allowed && !value.spend_control_reached };
 }

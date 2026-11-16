@@ -10,6 +10,16 @@ distillation. Each run still needs the User's explicit start/resume instruction.
 
 ## User decisions
 
+Latest budget decision (2026-11-16): the User approved continuous pacing from
+the official reset timestamp, replacing the weekday reserve schedule and Sunday
+8 p.m. release hold. Reserve `100 * (resets_at - now) / (10080 * 60 seconds)`;
+spendable is `max(0, live_remaining_percent - reserve)`. Stop at or below the
+reserve. No fixed reset weekday or DST/calendar adjustment applies. Fresh official
+telemetry, account/spend controls, shared attribution and explicit authorization
+for each weekly run remain mandatory. This request authorizes the policy change,
+not a QA discovery run. Earlier budget decisions below are historical where
+superseded.
+
 | ID | Decision | Reason / consequence |
 | --- | --- | --- |
 | QA-01 | Scope includes everything: docs, UX/UI, tests, dependencies, prompts and core architecture. | Quality must cover complete product journeys and maintainability. |

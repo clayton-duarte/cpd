@@ -6,7 +6,11 @@ Migration tracking: [#1152](https://github.com/clayton-duarte/cpd/issues/1152).
 CPD's `tools/repo-qa` is a pinned, unmodified consumer snapshot, not another
 source of truth. [tools/repo-qa.upstream.json](../tools/repo-qa.upstream.json) records
 the immutable upstream commit, package path and SHA-256 of every package file.
-The daily-pacing pin is merged source `c751d328c58498c66ca457d615da2966a9060215`. CPD tests reject changed, added, removed or
+The reset-pacing pin is source `3634051354021725dc611be4cabff3c6c06a0cc9`,
+prepared on `feat/reset-based-pacing` in the canonical skills repo. This consumer
+update is local preparation only: source review/merge must precede consumer
+publication, and the pin must be refreshed if the reviewed source revision changes.
+CPD tests reject changed, added, removed or
 non-file entries that differ from that snapshot.
 
 The User asked for a standalone source repository. Keeping a pinned copy preserves
