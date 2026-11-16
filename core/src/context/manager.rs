@@ -20,7 +20,7 @@ use crate::host::layout::context_window;
 use crate::ids::{ContextId, SessionId};
 use crate::output::Output;
 use crate::ports::Ports;
-use crate::session::{lead_spawn, no_cockpit};
+use crate::session::lead_spawn;
 use crate::store::Store;
 
 #[derive(Args, Debug)]
@@ -110,6 +110,18 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     std::fs::write(path, text).map_err(failed)
 }
 
+/// Provision the Manager committed by `context new`, using the existing manager command path.
+pub(super) fn start_for_new(context: &ContextId) -> Result<Output, CpdError> {
+    manager(ManagerArgs {
+        select: Select {
+            context: Some(context.clone()),
+            plan: crate::args::PlanArg { plan: None },
+        },
+        by_user: false,
+        runner: None,
+    })
+}
+
 /// `context manager` (§3.10).
 pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
     let Env {
@@ -164,9 +176,6 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
             .is_none_or(|m| m.pane.is_none() && m.state == "stopped");
     let tmux = Tmux::new(config.tmux.socket.clone());
     let cockpit = config.tmux.cockpit_session.clone();
-    if needs_pane && !tmux.has_session(&cockpit)? {
-        return Err(no_cockpit(&cockpit));
-    }
 
     let (manager, registered) = match found {
         Some(manager) => (manager, false),
@@ -214,8 +223,11 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
             None,
             Path::new(&manager.cwd),
         );
-        let (new_window, new_pane) =
-            tmux.new_window(&cockpit, &context_window(&context), &spawn)?;
+        let window_name = context_window(&context);
+        let (new_window, new_pane) = match ensure_cockpit(&tmux, &cockpit, &window_name, &spawn)? {
+            Some(ids) => ids,
+            None => tmux.new_window(&cockpit, &window_name, &spawn)?,
+        };
         tmux.set_pane_session(&new_pane, &manager.id)?;
         store.write("context manager", |tx| {
             tx.execute(
@@ -326,19 +338,36 @@ pub(crate) fn prepare_with(
     by_user: bool,
     topics: &[(String, usize)],
 ) -> Result<Prepared, CpdError> {
-    let cwd = crate::session::agent_cwd()?;
+    let prepared = prepare_pair(config, context)?;
     if !by_user {
-        write_file(
-            &home.manager_message(context),
-            &manager_message(context, title, topics),
-        )?;
+        write_first_message(home, context, title, topics)?;
     }
+    Ok(prepared)
+}
+
+/// Prepare only database values; `context new` writes the message after committing the pair.
+pub(super) fn prepare_pair(
+    config: &crate::config::Config,
+    context: &ContextId,
+) -> Result<Prepared, CpdError> {
     Ok(Prepared {
         id: SessionId::new_v4(),
         name: AgentKey::manager(context.clone()).to_string(),
-        cwd,
+        cwd: crate::session::agent_cwd()?,
         tier: config.manager_tier.to_string(),
     })
+}
+
+pub(super) fn write_first_message(
+    home: &crate::home::CpdHome,
+    context: &ContextId,
+    title: &str,
+    topics: &[(String, usize)],
+) -> Result<(), CpdError> {
+    write_file(
+        &home.manager_message(context),
+        &manager_message(context, title, topics),
+    )
 }
 
 /// The `sessions` row and `session-registered` Event of a prepared Manager, inside `tx`.
@@ -390,4 +419,14 @@ pub(crate) fn manager_message(
         "You are the Manager of Context {context} \"{title}\". Follow the cpd-manager skill.\n\n{topics}\
          Context on demand: cpd context search <query> --context {context} · cpd context show --context {context} --since <seq> · cpd context show --context {context} --record <id>\n"
     )
+}
+
+/// Ensure the cockpit, returning its initial window when created.
+pub(crate) fn ensure_cockpit(
+    tmux: &Tmux,
+    cockpit: &str,
+    window: &str,
+    spawn: &crate::host::Spawn,
+) -> Result<Option<(crate::host::WindowId, crate::host::PaneId)>, CpdError> {
+    tmux.create_session(cockpit, window, spawn)
 }

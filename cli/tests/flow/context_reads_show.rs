@@ -7,15 +7,11 @@ use crate::context_on_demand::{CTX, curate, fast};
 use common::fx::Fx;
 use serde_json::Value;
 
-const SESSION: &str = "sess-1";
-
 /// Context `ctx`, a Session row of it, and three notes `m1-n1..3`.
 fn fixture() -> Fx {
     let fx = fast();
     fx.env.sql(&format!(
-        "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-           VALUES ('{SESSION}', 'manager', '{CTX}', 'Manager', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO context_records (context, id, kind, at, machine, text) VALUES
+        "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES
            ('{CTX}', 'm1-n1', 'note', '2026-01-01T00:00:00.000Z', 'm1', 'one'),
            ('{CTX}', 'm1-n2', 'note', '2026-01-01T00:00:01.000Z', 'm1', 'two'),
            ('{CTX}', 'm1-n3', 'note', '2026-01-01T00:00:02.000Z', 'm1', 'three');"
@@ -48,16 +44,23 @@ fn row(record: &str, channel: &str) -> Row {
     (record.into(), channel.into(), None, None, None)
 }
 
-fn as_session() -> [(&'static str, &'static str); 1] {
-    [("CPD_SESSION", SESSION)]
+fn session(fx: &Fx) -> String {
+    fx.env.read(|c| {
+        c.query_row(
+            "SELECT id FROM sessions WHERE context = ?1 AND role = 'manager'",
+            [CTX],
+            |r| r.get(0),
+        )
+    })
 }
 
 #[test]
 fn show_record_logs_one_show_read_for_a_session() {
     let fx = fixture();
+    let session = session(&fx);
     let plain = show(&fx, &[], &["--record", "m1-n2"]).ok();
     assert_eq!(rows(&fx), []);
-    let logged = show(&fx, &as_session(), &["--record", "m1-n2"]).ok();
+    let logged = show(&fx, &[("CPD_SESSION", &session)], &["--record", "m1-n2"]).ok();
     assert_eq!(logged, plain, "the output is unchanged");
     assert_eq!(rows(&fx), [row("m1-n2", "show")]);
 }
@@ -65,14 +68,16 @@ fn show_record_logs_one_show_read_for_a_session() {
 #[test]
 fn show_record_twice_keeps_one_row() {
     let fx = fixture();
-    show(&fx, &as_session(), &["--record", "m1-n2"]).ok();
-    show(&fx, &as_session(), &["--record", "m1-n2"]).ok();
+    let session = session(&fx);
+    show(&fx, &[("CPD_SESSION", &session)], &["--record", "m1-n2"]).ok();
+    show(&fx, &[("CPD_SESSION", &session)], &["--record", "m1-n2"]).ok();
     assert_eq!(rows(&fx), [row("m1-n2", "show")]);
 }
 
 #[test]
 fn show_topic_logs_a_read_per_record() {
     let fx = fixture();
+    let session = session(&fx);
     curate(
         &fx.env,
         &[
@@ -83,7 +88,7 @@ fn show_topic_logs_a_read_per_record() {
     );
     let plain = show(&fx, &[], &["--topic", "engine"]).ok();
     assert_eq!(rows(&fx), []);
-    let logged = show(&fx, &as_session(), &["--topic", "engine"]).ok();
+    let logged = show(&fx, &[("CPD_SESSION", &session)], &["--topic", "engine"]).ok();
     assert_eq!(logged, plain, "the output is unchanged");
     assert_eq!(rows(&fx), [row("m1-n1", "show"), row("m1-n3", "show")]);
 }
@@ -91,10 +96,16 @@ fn show_topic_logs_a_read_per_record() {
 #[test]
 fn since_with_pushed_logs_pushed_reads_and_without_it_none() {
     let fx = fixture();
-    let bare = show(&fx, &as_session(), &["--since", "0"]).ok();
+    let session = session(&fx);
+    let bare = show(&fx, &[("CPD_SESSION", &session)], &["--since", "0"]).ok();
     assert_eq!(bare["records"].as_array().unwrap().len(), 3, "{bare}");
     assert_eq!(rows(&fx), [], "no --pushed, no read");
-    let pushed = show(&fx, &as_session(), &["--since", "1", "--pushed"]).ok();
+    let pushed = show(
+        &fx,
+        &[("CPD_SESSION", &session)],
+        &["--since", "1", "--pushed"],
+    )
+    .ok();
     assert_eq!(pushed["records"].as_array().unwrap().len(), 2, "{pushed}");
     assert_eq!(rows(&fx), [row("m1-n2", "pushed"), row("m1-n3", "pushed")]);
 }
@@ -102,12 +113,13 @@ fn since_with_pushed_logs_pushed_reads_and_without_it_none() {
 #[test]
 fn pushed_needs_since_and_excludes_record_and_topic() {
     let fx = fixture();
+    let session = session(&fx);
     for args in [
         &["--pushed"][..],
         &["--since", "0", "--pushed", "--record", "m1-n1"],
         &["--since", "0", "--pushed", "--topic", "engine"],
     ] {
-        let run = show(&fx, &as_session(), args);
+        let run = show(&fx, &[("CPD_SESSION", &session)], args);
         common::refused(&run, "usage", 2);
     }
     assert_eq!(rows(&fx), []);
@@ -116,6 +128,7 @@ fn pushed_needs_since_and_excludes_record_and_topic() {
 #[test]
 fn no_usable_session_logs_nothing_and_changes_nothing() {
     let fx = fixture();
+    let session = session(&fx);
     let plain = show(&fx, &[], &["--record", "m1-n2"]).ok();
     for id in ["nobody", "bad id!", ""] {
         let run = show(&fx, &[("CPD_SESSION", id)], &["--record", "m1-n2"]);
@@ -132,14 +145,15 @@ fn no_usable_session_logs_nothing_and_changes_nothing() {
     assert_eq!(run.exit, 0, "{run:?}");
     assert_eq!(rows(&fx), []);
     // control: the same call with the real Session does log
-    show(&fx, &as_session(), &["--record", "m1-n2"]).ok();
+    show(&fx, &[("CPD_SESSION", &session)], &["--record", "m1-n2"]).ok();
     assert_eq!(rows(&fx), [row("m1-n2", "show")]);
 }
 
 #[test]
 fn pi_session_id_alone_is_honoured() {
     let fx = fixture();
-    show(&fx, &[("PI_SESSION_ID", SESSION)], &["--record", "m1-n3"]).ok();
+    let session = session(&fx);
+    show(&fx, &[("PI_SESSION_ID", &session)], &["--record", "m1-n3"]).ok();
     assert_eq!(rows(&fx), [row("m1-n3", "show")]);
 }
 
@@ -147,10 +161,13 @@ fn pi_session_id_alone_is_honoured() {
 #[test]
 fn a_search_logs_ranked_search_reads() {
     let fx = fixture();
+    let session = session(&fx);
     let args = ["context", "search", "one OR two OR three", "--context", CTX];
     let plain: Value = fx.cpd(&args).ok();
     assert_eq!(rows(&fx), []);
-    let logged = fx.cpd_with(fx.env.root(), &args, &as_session()).ok();
+    let logged = fx
+        .cpd_with(fx.env.root(), &args, &[("CPD_SESSION", &session)])
+        .ok();
     assert_eq!(logged, plain, "the output is unchanged");
     let hits = logged["records"].as_array().expect("records");
     assert!(hits.len() >= 2, "{logged}");

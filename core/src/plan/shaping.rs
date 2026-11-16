@@ -51,6 +51,38 @@ pub(crate) fn guard(conn: &Connection, plan: &PlanId) -> Result<Caller, CpdError
     Ok(Caller::Shaping)
 }
 
+/// A Manager may rename a Plan of its own Context only while it is shaping.
+/// This does not grant the separate Lead-owned Job and Workflow commands.
+pub(crate) fn guard_rename(conn: &Connection, plan: &PlanId) -> Result<(), CpdError> {
+    let Some((role, context)) = caller(conn)? else {
+        return Ok(());
+    };
+    if role != "manager" {
+        return Ok(());
+    }
+    let row = row::load(conn, plan)?;
+    if row.context != context {
+        return Err(CpdError::new(
+            ErrorCode::PlanOtherContext,
+            format!(
+                "Plan {plan} belongs to Context {}, not {}.",
+                row.context, context
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("plan_context", row.context.as_str())
+        .with("context", context.as_str()));
+    }
+    if row.phase != super::Phase::Shaping {
+        return Err(CpdError::new(
+            ErrorCode::PlanHasLead,
+            format!("Manager shaping authority on Plan {plan} ends after shaping."),
+        )
+        .with("plan", plan.as_str()));
+    }
+    Ok(())
+}
+
 /// `shaping_explore_only`: a shaping Plan holds only explore Jobs, and no Job of one takes a Workflow. `kind` is the
 /// Job kind and `workflow` the `--workflow` flag, when given.
 pub(crate) fn explore_only(

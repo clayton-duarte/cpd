@@ -1,6 +1,7 @@
 {
   "version": 1,
   "scope": "cpd-repo-qa",
+  "standing_authorization": "https://github.com/clayton-duarte/cpd/issues/1115#issuecomment-6921840796",
   "timezone": "America/Toronto",
   "limits": null,
   "repositories": [

@@ -731,7 +731,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
             &mut store,
             "SELECT count(*) FROM pragma_table_info('plans')"
         ),
-        17
+        18
     ); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`, `codereview-followup` `pr_subject` and `changes_requested_at`, `plan-reviewed-pr` `reviewed_repo`, `reviewed_number` and `reviewed_title`
     assert_eq!(
         count(
@@ -1411,6 +1411,7 @@ fn a_version_10_database_migrates_to_11_with_its_rows_unknown_and_its_history_li
     assert_eq!(
         triggers,
         [
+            "green_unmerged_pr_reset",
             "pull_requests_hist_del",
             "pull_requests_hist_ins",
             "pull_requests_hist_upd",
@@ -1548,6 +1549,7 @@ fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_l
     assert_eq!(
         triggers,
         [
+            "green_unmerged_pr_reset",
             "pull_requests_hist_del",
             "pull_requests_hist_ins",
             "pull_requests_hist_upd",
@@ -1668,7 +1670,8 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
         triggers_on(&Connection::open(home(&dir).db()).unwrap(), "workflows")
             .into_iter()
             .filter(|(name, _)| {
-                name != "workflows_shape_fixed"
+                name != "green_unmerged_workflow_reset"
+                    && name != "workflows_shape_fixed"
                     && name != "workflows_head_ref_fixed"
                     && name != "workflows_hist_del"
             })
@@ -3027,6 +3030,10 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
         ] {
             assert_eq!(rows_after.remove(table), Some(Vec::new()), "{table}");
         }
+        assert_eq!(
+            rows_after.remove("green_unmerged_periods"),
+            Some(Vec::new())
+        );
         // `coverage-baseline` creates an empty table for new refactor workflows.
         assert_eq!(
             rows_after.remove("refactor_coverage_baselines"),
@@ -3073,6 +3080,7 @@ fn converts_keeping_every_row_and_id_at(n: usize) {
                 // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0. `session-runner` one, `sessions.runner` 'pi'.
                 let default = |v: &Value| {
                     v.is_null()
+                        || (table == "plans" && v == 0)
                         || (table == "jobs" && v == "work")
                         || (table == "workflows" && v == "free")
                         || (table == "sessions" && v == 0)

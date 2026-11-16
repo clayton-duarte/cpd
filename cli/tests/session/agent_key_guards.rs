@@ -111,6 +111,7 @@ fn world() -> Fx {
         fx.env.tmux_socket()
     ));
     fx.fake_cpd_views();
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
@@ -172,6 +173,10 @@ fn agent_key_guards_a_rerun_of_an_existing_pair_is_still_already() {
             count(fx, "SELECT count(*) FROM events"),
         )
     };
+    fx.cpd(&[
+        "context", "new", "pay", "--title", "Twin", "--owner", "acme",
+    ])
+    .ok();
     let before = rows(&fx);
     let plan = fx
         .cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"])

@@ -199,19 +199,14 @@ describe("tree menu actions", () => {
     expect(post.calls.at(-1)).toEqual(["pr", "post", "--workflow", "w1", "--plan", "p7"]);
     expect(repost.calls.at(-1)).toEqual(["pr", "repost", "--workflow", "w1", "--plan", "p7"]);
   });
-  it("context.new runs context new then context manager sequentially and returns manager session", async () => {
-    const managerReply = { manager: { session: "ctx-1:manager" }, started: true };
-    const { cpd, calls } = fakeCpd(async (args) => {
-      if (args[0] === "context" && args[1] === "new") return { context: { id: "ctx-1" } };
-      if (args[0] === "context" && args[1] === "manager") return managerReply;
-      return { ok: true };
-    });
+  it("context.new returns the Manager from the paired creation command", async () => {
+    const reply = { context: { id: "ctx-1" }, manager: { session: "ctx-1:manager" } };
+    const { cpd, calls } = fakeCpd(async () => reply);
     const out = await runAction(cpd, { kind: "context.new", contextId: "ctx-1", title: "My context", owner: "clayton-duarte" });
     expect(calls).toEqual([
-      ["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte"],
-      ["context", "manager", "--context=ctx-1", "--by-user"],
+      ["context", "new", "ctx-1", "--title=My context", "--owner=clayton-duarte", "--by-user"],
     ]);
-    expect(out).toEqual(managerReply);
+    expect(out).toEqual(reply);
   });
 
   it("error.report sends the report to the bare Context id with unblocks", async () => {

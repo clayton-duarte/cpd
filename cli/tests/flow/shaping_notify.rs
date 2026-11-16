@@ -1,16 +1,5 @@
-//! The Manager's message for a Lead-less shaping Plan's Job Events (contract §5.3 "The Events of a Lead-less Plan",
-//! §3.1 "Shaping"; commands.md §4.1, §5.1, §8.1, §8.2; air-d19, air-d22).
-//!
-//! When cpd appends a `job-merged`, a `job-failed` or an `escalation` Event (the open of a `cpd ask`) for a Plan whose
-//! `lead_session` is NULL, it appends in the same transaction one `session-message` Event to the live Manager of the
-//! Plan's Context, as engine E8's `tell_managers` does: `from` null, `wake` true. The message's `data.text` is the
-//! triggering Event's `text` for `job-merged` and `job-failed`; for an Escalation it is `Worker <agent-key> of Plan
-//! <plan> asks: "<question, first 300 characters>" (escalation <id>). Answer with: cpd answer <id> "<text>" --plan
-//! <plan>`. With no live Manager nothing is written, and a Plan with a Lead is unchanged.
-//!
-//! Every command runs in this process (`Fx::with_ports`) on the fake tmux and the fake pi install, against a temporary
-//! `$CPD_HOME`: no real tmux, git, gh or pi is ever started. The notify does not exist yet in the base, so every test
-//! here is red until the feature lands.
+//! Paired shaping ownership and its ordinary Plan event routing (pro-d561).
+//! All external ports use fakes.
 
 use crate::common;
 
@@ -55,18 +44,12 @@ fn setup() -> Fx {
         })
         .collect();
     fx.env.sql(&rows);
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
     .ok();
-    fx.cockpit();
     fx
-}
-
-/// A Context `id`, owner `acme`.
-fn context(fx: &Fx, id: &str) {
-    fx.cpd(&["context", "new", id, "--title", "Other", "--owner", "acme"])
-        .ok();
 }
 
 /// The Context's live Manager (commands.md §3.10), its Session id.
@@ -84,8 +67,8 @@ fn run_as(fx: &Fx, session: &str, args: &[&str]) -> Run {
 }
 
 /// `cpd plan new <id> --context <c> --title <t> --shaping`, run by the Context's Manager.
-fn new_shaping(fx: &Fx, manager: &str, context: &str, id: &str) {
-    run_as(
+fn new_shaping(fx: &Fx, manager: &str, context: &str, id: &str) -> String {
+    let out = run_as(
         fx,
         manager,
         &[
@@ -100,6 +83,7 @@ fn new_shaping(fx: &Fx, manager: &str, context: &str, id: &str) {
         ],
     )
     .ok();
+    out["lead_session"].as_str().unwrap().to_owned()
 }
 
 /// `cpd plan new <id> --context <c> --title <t>` (a Lead), run by `caller`; returns the Lead Session id.
@@ -248,16 +232,24 @@ fn messages(fx: &Fx) -> Vec<Value> {
     events(fx, "session-message")
 }
 
-// ---------- job-merged ----------
+// Paired shaping Plans use the ordinary Plan event route. `events list --session` is the
+// Lead's subscription; `session-message` is only for legacy Lead-less Plans.
+fn lead_events(fx: &Fx, lead: &str, kind: &str) -> Vec<Value> {
+    fx.cpd(&["events", "list", "--session", lead, "--kind", kind])
+        .ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
 
 #[test]
-fn shaping_notify_job_merged_wakes_the_manager() {
+fn shaping_notify_job_merged_routes_plan_event_to_lead() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan");
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1");
+    add_scout(&fx, &lead, "shape1", "scan");
     let attempt = running_explore(&fx, "ctx", "shape1", "scan");
-
+    assert!(lead_events(&fx, &lead, "job-merged").is_empty());
     submit_explore(
         &fx,
         "w-scan",
@@ -266,9 +258,9 @@ fn shaping_notify_job_merged_wakes_the_manager() {
         "The ladder is in engine/src/ladder.rs.",
     )
     .ok();
-
-    let merged = events(&fx, "job-merged");
-    assert_eq!(merged.len(), 1, "{merged:?}");
+    let merged = lead_events(&fx, &lead, "job-merged");
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0]["plan"], json!("shape1"));
     assert_eq!(
         merged[0]["data"]["artefact"],
         json!("run/shape1/explore/scan.md")
@@ -277,199 +269,63 @@ fn shaping_notify_job_merged_wakes_the_manager() {
         merged[0]["text"]
             .as_str()
             .unwrap()
-            .contains("Summary: The ladder is in engine/src/ladder.rs."),
-        "{merged:?}"
+            .contains("Summary: The ladder is in engine/src/ladder.rs.")
     );
-
-    let sent = messages(&fx);
-    assert_eq!(sent.len(), 1, "one session-message: {sent:?}");
-    assert_eq!(sent[0]["session"], json!(manager));
-    assert_eq!(sent[0]["context"], json!("ctx"));
-    assert_eq!(sent[0]["plan"], Value::Null, "a Manager is in no Plan");
-    assert_eq!(sent[0]["data"]["from"], Value::Null);
-    assert_eq!(sent[0]["data"]["wake"], json!(true));
-    assert_eq!(
-        sent[0]["data"]["text"], merged[0]["text"],
-        "the message is the job-merged Event's text, summary and artefact path included"
-    );
+    assert!(messages(&fx).is_empty());
+    assert!(lead_events(&fx, &manager, "job-merged").is_empty());
 }
 
-// ---------- job-failed ----------
-
 #[test]
-fn shaping_notify_job_failed_wakes_the_manager() {
+fn shaping_notify_job_failed_routes_plan_event_to_lead() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan");
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1");
+    add_scout(&fx, &lead, "shape1", "scan");
     let attempt = running_explore(&fx, "ctx", "shape1", "scan");
-
-    abort_explore(&fx, &manager, "shape1", &attempt).ok();
-
-    let failed = events(&fx, "job-failed");
-    assert_eq!(failed.len(), 1, "{failed:?}");
-
-    let sent = messages(&fx);
-    assert_eq!(sent.len(), 1, "one session-message: {sent:?}");
-    assert_eq!(sent[0]["session"], json!(manager));
-    assert_eq!(sent[0]["data"]["from"], Value::Null);
-    assert_eq!(sent[0]["data"]["wake"], json!(true));
-    assert_eq!(
-        sent[0]["data"]["text"], failed[0]["text"],
-        "the message is the job-failed Event's text"
-    );
+    assert!(lead_events(&fx, &lead, "job-failed").is_empty());
+    abort_explore(&fx, &lead, "shape1", &attempt).ok();
+    let failed = lead_events(&fx, &lead, "job-failed");
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["plan"], json!("shape1"));
+    assert!(messages(&fx).is_empty());
+    assert!(lead_events(&fx, &manager, "job-failed").is_empty());
 }
 
-// ---------- escalation ----------
-
 #[test]
-fn shaping_notify_escalation_wakes_the_manager() {
+fn shaping_notify_escalation_routes_plan_event_to_lead() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan");
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1");
+    add_scout(&fx, &lead, "shape1", "scan");
     let attempt = running_explore(&fx, "ctx", "shape1", "scan");
-
-    let run = ask_timeout(&fx, "shape1", &attempt, "Which field names?");
-    refused(&run, "ask_timeout", 5);
-
-    let asked = events(&fx, "escalation");
-    assert_eq!(asked.len(), 1, "{asked:?}");
-
-    let sent = messages(&fx);
-    assert_eq!(sent.len(), 1, "one session-message: {sent:?}");
-    assert_eq!(sent[0]["session"], json!(manager));
-    assert_eq!(sent[0]["data"]["from"], Value::Null);
-    assert_eq!(sent[0]["data"]["wake"], json!(true));
-    assert_eq!(
-        sent[0]["data"]["text"],
-        json!(concat!(
-            "Worker ctx:shape1:scan of Plan shape1 asks: \"Which field names?\" (escalation scan-a1-q1). ",
-            "Answer with: cpd answer scan-a1-q1 \"<text>\" --plan shape1"
-        )),
-        "the escalation message names the Worker's agent key, the question, the escalation and the answer command"
+    assert!(lead_events(&fx, &lead, "escalation").is_empty());
+    refused(
+        &ask_timeout(&fx, "shape1", &attempt, "Which field names?"),
+        "ask_timeout",
+        5,
     );
+    let asked = lead_events(&fx, &lead, "escalation");
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0]["plan"], json!("shape1"));
+    assert_eq!(asked[0]["data"]["question"], json!("Which field names?"));
+    assert!(messages(&fx).is_empty());
+    assert!(lead_events(&fx, &manager, "escalation").is_empty());
 }
 
-// ---------- no live Manager ----------
-
 #[test]
-fn shaping_notify_without_live_manager_writes_nothing() {
+fn shaping_notify_multiple_events_stay_with_their_plan() {
     let fx = setup();
     let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan");
-    add_scout(&fx, &manager, "shape1", "probe");
-    let scan = running_explore(&fx, "ctx", "shape1", "scan");
-    let probe = running_explore(&fx, "ctx", "shape1", "probe");
-
-    // A live Manager is woken by the first Event, the control that the rule runs at all.
-    submit_explore(&fx, "w-scan", "shape1", &scan, "First.").ok();
-    assert_eq!(messages(&fx).len(), 1, "the live Manager is woken");
-
-    // The Manager created the Plan and added its Job while live; it is gone before the Job ends.
-    fx.env.sql(&format!(
-        "UPDATE sessions SET archived_at = 't' WHERE id = '{manager}';"
-    ));
-    submit_explore(&fx, "w-probe", "shape1", &probe, "Second.").ok();
-
-    assert_eq!(events(&fx, "job-merged").len(), 2, "both Jobs merged");
-    assert_eq!(
-        messages(&fx).len(),
-        1,
-        "with no live Manager the second Event writes nothing: {:?}",
-        messages(&fx)
-    );
-}
-
-// ---------- a Plan with a Lead is unchanged ----------
-
-#[test]
-fn shaping_notify_lead_plan_events_are_unchanged() {
-    let fx = setup();
-    let manager = manager_of(&fx, "ctx");
-    // A Lead-less shaping Plan beside it, the control: its Job's Event does wake the Manager.
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan");
-    let lead = new_lead_plan(&fx, &manager, "ctx", "pl");
-    add_scout(&fx, &lead, "pl", "probe");
+    let lead = new_shaping(&fx, &manager, "ctx", "shape1");
+    let other_lead = new_lead_plan(&fx, &manager, "ctx", "pl");
+    add_scout(&fx, &lead, "shape1", "scan");
+    add_scout(&fx, &other_lead, "pl", "probe");
     let scan = running_explore(&fx, "ctx", "shape1", "scan");
     let probe = running_explore(&fx, "ctx", "pl", "probe");
-
     submit_explore(&fx, "w-scan", "shape1", &scan, "Shaping.").ok();
     submit_explore(&fx, "w-probe", "pl", &probe, "Lead.").ok();
-
-    let merged = events(&fx, "job-merged");
-    assert_eq!(merged.len(), 2, "both Jobs merged: {merged:?}");
-    let shaping_text = merged
-        .iter()
-        .find(|e| e["plan"] == json!("shape1"))
-        .expect("the shaping Job's Event")["text"]
-        .clone();
-    let lead_text = merged
-        .iter()
-        .find(|e| e["plan"] == json!("pl"))
-        .expect("the Lead Plan's Event")["text"]
-        .clone();
-
-    let sent = messages(&fx);
-    assert_eq!(
-        sent.len(),
-        1,
-        "only the Lead-less Plan's Event wakes it: {sent:?}"
-    );
-    assert_eq!(sent[0]["session"], json!(manager));
-    assert_eq!(sent[0]["data"]["text"], shaping_text);
-    assert_ne!(
-        sent[0]["data"]["text"], lead_text,
-        "a Lead Plan's job-merged Event writes no session-message"
-    );
-}
-
-// ---------- one message per event ----------
-
-#[test]
-fn shaping_notify_one_message_per_event() {
-    let fx = setup();
-    let manager = manager_of(&fx, "ctx");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan");
-    add_scout(&fx, &manager, "shape1", "probe");
-    let scan = running_explore(&fx, "ctx", "shape1", "scan");
-    let probe = running_explore(&fx, "ctx", "shape1", "probe");
-
-    submit_explore(&fx, "w-scan", "shape1", &scan, "First.").ok();
-    submit_explore(&fx, "w-probe", "shape1", &probe, "Second.").ok();
-
-    let merged = events(&fx, "job-merged");
-    assert_eq!(merged.len(), 2, "{merged:?}");
-    let sent = messages(&fx);
-    assert_eq!(sent.len(), 2, "one message per Event: {sent:?}");
-    for (message, event) in sent.iter().zip(merged.iter()) {
-        assert_eq!(message["session"], json!(manager));
-        assert_eq!(message["data"]["text"], event["text"]);
-    }
-}
-
-// ---------- another Context's Manager hears nothing ----------
-
-#[test]
-fn shaping_notify_other_context_manager_hears_nothing() {
-    let fx = setup();
-    let manager = manager_of(&fx, "ctx");
-    context(&fx, "ctx2");
-    let other = manager_of(&fx, "ctx2");
-    new_shaping(&fx, &manager, "ctx", "shape1");
-    add_scout(&fx, &manager, "shape1", "scan");
-    let attempt = running_explore(&fx, "ctx", "shape1", "scan");
-
-    submit_explore(&fx, "w-scan", "shape1", &attempt, "Done.").ok();
-
-    let sent = messages(&fx);
-    assert_eq!(sent.len(), 1, "exactly one message: {sent:?}");
-    assert_eq!(sent[0]["session"], json!(manager));
-    assert!(
-        sent.iter().all(|m| m["session"] != json!(other)),
-        "the other Context's Manager hears nothing: {sent:?}"
-    );
+    assert_eq!(events(&fx, "job-merged").len(), 2);
+    assert_eq!(lead_events(&fx, &lead, "job-merged").len(), 1);
+    assert_eq!(lead_events(&fx, &other_lead, "job-merged").len(), 1);
+    assert!(messages(&fx).is_empty());
 }

@@ -32,6 +32,10 @@ fn raw(home: &CpdHome) -> Connection {
 /// The table's generated triggers name the column, so they are dropped first (so are `history_tables`', which refuse its row's delete); the runner's reconcile recreates them.
 const LATER: &[(&str, &str)] = &[
     (
+        "green_unmerged_periods",
+        "DROP TRIGGER green_unmerged_pr_reset; DROP TRIGGER green_unmerged_workflow_reset; DROP TABLE green_unmerged_periods",
+    ),
+    (
         "pull_requests",
         "ALTER TABLE pull_requests DROP COLUMN open_threads; ALTER TABLE pull_requests DROP COLUMN reviewers; ALTER TABLE pull_requests DROP COLUMN rereview_head; ALTER TABLE pull_requests DROP COLUMN review_threads_complete",
     ),

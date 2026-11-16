@@ -54,6 +54,7 @@ pub enum Kind {
     Bug,
     /// A Session whose guard Events reach the configured refusal threshold.
     RefusalAlert,
+    GreenUnmerged,
 }
 
 impl Kind {
@@ -80,6 +81,7 @@ impl Kind {
             Kind::PrClosed => "pr-closed",
             Kind::Bug => "bug",
             Kind::RefusalAlert => "refusal-alert",
+            Kind::GreenUnmerged => "green-unmerged",
         }
     }
 
@@ -106,6 +108,7 @@ impl Kind {
             PrClosed,
             Bug,
             RefusalAlert,
+            GreenUnmerged,
         ]
         .into_iter()
         .find(|k| k.as_str() == s)

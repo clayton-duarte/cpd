@@ -497,6 +497,16 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         Ok((row, escalations))
     })?;
     let mut session = row.list_json();
+    if row.runner != Runner::Durable
+        && let Some(pane) = &row.tmux_pane
+    {
+        let panes = env.tmux().list_panes()?;
+        if !panes.iter().any(|p| p.pane.as_str() == pane && !p.dead) {
+            session["state"] = json!("stopped");
+            session["state_label"] = Value::Null;
+            session["tmux_pane"] = Value::Null;
+        }
+    }
     session["created_at"] = json!(row.created_at);
     session["registered_event"] = json!(row.registered_event);
     let models = models_of(&mut env, &row)?;

@@ -20,6 +20,7 @@ pub(crate) const CTX: &str = "ctx";
 fn fx() -> Fx {
     let fx = Fx::with_ports();
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", CTX, "--title", "Payments", "--owner", "acme",
     ])
@@ -27,15 +28,9 @@ fn fx() -> Fx {
     fx
 }
 
-/// Machine `m1` and Context `ctx`, the command tree in this process: for the tests that start no pane.
+/// Machine `m1` and Context `ctx`, with mocked ports for Manager provisioning.
 pub(crate) fn fast() -> Fx {
-    let fx = Fx::new();
-    fx.env.write_tmux_config("");
-    fx.cpd(&[
-        "context", "new", CTX, "--title", "Payments", "--owner", "acme",
-    ])
-    .ok();
-    fx
+    fx()
 }
 
 /// Writes a curation per `(record id, topic, short)` row, as the distiller will.
@@ -136,7 +131,6 @@ fn a_manager_first_message_is_header_and_pointer() {
     let fx = fx();
     fx.cpd(&["context", "note", "Mind the ledger.", "--context", CTX])
         .ok();
-    fx.cockpit();
     fx.cpd(&["context", "manager", "--context", CTX]).ok();
 
     let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
@@ -229,19 +223,18 @@ fn the_lead_first_message_lists_the_topics_before_the_pointer() {
     );
 }
 
-/// pro-d5: the Manager's message, as written by `context manager` and as `session first-message` renders it.
+/// pro-d5: the Manager's message is refreshed with current topics by `session first-message`.
 #[test]
 fn the_manager_first_message_lists_the_topics_before_the_pointer() {
     let fx = fx();
     curate_three(&fx);
-    fx.cockpit();
     let out = fx.cpd(&["context", "manager", "--context", CTX]).ok();
     let manager = out["manager"]["session"].as_str().unwrap().to_owned();
     let expected =
         format!("{MANAGER_HEADER}\n\nTopics: engine (2), store (1)\n\n{MANAGER_POINTER}\n");
 
     let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
-    assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+    assert!(!fs::read_to_string(&path).unwrap().contains("Topics:"));
 
     let out = fx
         .cpd(&["session", "first-message", "--session", &manager])
@@ -255,7 +248,6 @@ fn the_manager_first_message_lists_the_topics_before_the_pointer() {
 fn a_first_message_without_curated_topics_has_no_topics_line() {
     let fx = fx();
     notes(&fx, 2);
-    fx.cockpit();
     fx.cpd(&["context", "manager", "--context", CTX]).ok();
     new_plan_with_brief(&fx, "pay", "Retry the failed payouts.\n");
 

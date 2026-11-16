@@ -116,7 +116,7 @@ pub(crate) fn open_plan_refs(
 ) -> Result<Vec<(crate::ids::PlanId, String, u64)>, crate::error::CpdError> {
     let rows: Vec<(String, String)> = store.read(|c| {
         let mut st = c.prepare(
-            "SELECT id, pr_subject FROM plans WHERE context = 'codereview' AND phase = 'grounding'
+            "SELECT id, pr_subject FROM plans WHERE context = 'codereview'
                AND archived_at IS NULL AND deleted_at IS NULL AND pr_subject IS NOT NULL ORDER BY id",
         )?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -136,20 +136,68 @@ pub(crate) fn open_plan_refs(
 }
 
 /// Whether the pull request is over for the viewer: closed, merged, or the viewer's latest review is APPROVED.
+fn approved(pr: &super::team::GhPr, me: &str) -> bool {
+    pr.reviews
+        .iter()
+        .rev()
+        .find(|r| r.author == me)
+        .is_some_and(|r| r.state == "APPROVED")
+}
+
+#[cfg(test)]
 fn is_over(pr: &super::team::GhPr, me: &str) -> bool {
-    pr.state != super::team::GhState::Open
-        || pr
-            .reviews
-            .iter()
-            .rev()
-            .find(|r| r.author == me)
-            .is_some_and(|r| r.state == "APPROVED")
+    pr.state != super::team::GhState::Open || approved(pr, me)
+}
+
+/// Preserve approval-based completion independently of closed-PR archival.
+pub(crate) fn finish_approved(
+    store: &mut crate::store::Store,
+    lookup: &super::team::Lookup,
+) -> Result<(), crate::error::CpdError> {
+    let unfinished: std::collections::HashSet<String> = store.read(|c| {
+        let mut stmt = c.prepare("SELECT id FROM plans WHERE phase != 'done'")?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    })?;
+    let plans: Vec<_> = open_plan_refs(store)?
+        .into_iter()
+        .filter(|(id, repo, number)| {
+            unfinished.contains(id.as_str())
+                && lookup
+                    .workflows
+                    .get(&(repo.clone(), *number))
+                    .and_then(Option::as_ref)
+                    .is_some_and(|pr| {
+                        pr.state == super::team::GhState::Open && approved(pr, &lookup.me)
+                    })
+        })
+        .map(|(id, _, _)| id)
+        .collect();
+    let mut failures = Vec::new();
+    for id in plans {
+        if let Err(error) = store.write("review approved", |tx| {
+            crate::pr::review::finish_plan(tx, &id)
+        }) {
+            failures.push(serde_json::json!({"plan": id.as_str(), "error": error}));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::error::CpdError::new(
+            crate::error::ErrorCode::Internal,
+            "Review approval completion failed for one or more Plans.",
+        )
+        .with("failures", failures))
+    }
 }
 
 /// Finishes every open (phase `grounding`, unarchived) `codereview` Plan whose `pr_subject` names a pull request that
 /// `lookup` reports CLOSED or MERGED, or APPROVED by the viewer (`lookup.me`) in their latest review (pro-d416, A3), the
 /// way `review submit` finishes one: phase `done`, `locked_at`, `done_at` and one quiet `plan-done` Event. A Plan without
 /// `pr_subject` is never finished. Returns the finished Plan ids.
+#[cfg(test)]
 pub(crate) fn finish_closed(
     store: &mut crate::store::Store,
     lookup: &super::team::Lookup,

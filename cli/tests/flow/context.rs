@@ -1,9 +1,7 @@
 //! Contexts (contract §2.2, §4.6; commands.md §3): the command tree, in this process (`Fx`). The records live only in
 //! the database: no directory, no git, no lock file.
 //!
-//! One test stays on `TestEnv` and the built binary, because it needs a fake `pi` on `PATH`
-//! (`a_superseded_note_is_absent_from_the_batch_a_distill_run_reads`, a distill test: another Job's). The archive tests
-//! run on the fake tmux route of `Fx::with_ports`.
+//! The archive and distillation tests run on the fake ports of `Fx::with_ports`.
 
 use crate::common;
 
@@ -11,9 +9,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use common::fx::Fx;
+use common::pi::FakePi;
 use common::{Run, TestEnv};
 use cpd_core::config::Config;
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
@@ -30,41 +30,21 @@ impl Cpd for Fx {
     }
 }
 
-impl Cpd for TestEnv {
-    fn cpd(&self, args: &[&str]) -> Run {
-        TestEnv::cpd(self, args)
-    }
-}
-
-/// The config file of machine `hs` in `env`'s `$CPD_HOME`.
-fn write_hs(env: &TestEnv) {
-    fs::create_dir_all(env.cpd_home()).unwrap();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\n",
-    )
-    .unwrap();
-}
-
 /// Machine `hs`, in this process.
 fn hs() -> Fx {
-    let fx = Fx::new();
-    write_hs(&fx.env);
-    fx
-}
-
-/// Machine `hs`, in this process on the fake ports: a call of any program is recorded (`Fx::calls`).
-fn hs_ports() -> Fx {
     let fx = Fx::with_ports();
-    write_hs(&fx.env);
+    let config = format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    );
+    fx.env.write_config(&config);
+    fx.cockpit();
     fx
 }
 
-/// Machine `hs`, for the binary.
-fn hs_binary() -> TestEnv {
-    let env = TestEnv::new();
-    write_hs(&env);
-    env
+/// Machine `hs`, in this process on fake ports.
+fn hs_ports() -> Fx {
+    hs()
 }
 
 /// `$CPD_HOME/contexts`: where the git stores of earlier versions lived.
@@ -411,6 +391,7 @@ fn sync_is_gone() {
 fn no_record_write_runs_git_or_makes_a_directory() {
     let fx = hs_ports();
     new_context(&fx);
+    let calls_before = fx.fakes.runner.calls();
     fx.cpd(&["context", "decide", "D.", "--context", CTX]).ok();
     fx.cpd(&["context", "note", "N.", "--context", CTX]).ok();
     fx.cpd(&["context", "rename", CTX, "--title", "Renamed"])
@@ -418,7 +399,7 @@ fn no_record_write_runs_git_or_makes_a_directory() {
     assert_eq!(record_ids(&fx), ["hs-d1", "hs-n1"]);
     // Not one program was run: on the fake ports a `git` (or any other call) would be in the record.
     assert_eq!(fx.calls("git"), Vec::new());
-    assert_eq!(fx.fakes.runner.calls(), Vec::new());
+    assert_eq!(fx.fakes.runner.calls(), calls_before);
     assert!(!old_dir(&fx.env).exists(), "no contexts/ directory");
     assert!(
         !fx.env
@@ -772,22 +753,28 @@ fn a_note_superseding_an_unknown_record_is_record_not_found() {
     assert_eq!(events(&fx, "context-record").len(), 3);
 }
 
-/// `S2` is the distiller's Tier: a fake `pi` that curates every record of `batch.md`.
-fn distilling(env: &TestEnv) {
-    env.write_models();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n",
-    )
-    .unwrap();
-    env.fake_pi(&crate::common::pi_says(crate::common::CURATES_ALL));
-}
-
 #[test]
 fn a_superseded_note_is_absent_from_the_batch_a_distill_run_reads() {
-    let env = hs_binary();
+    let env = hs();
+    env.env.write_models();
+    env.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n[tmux]\nsocket = \"{}\"\n",
+        env.env.tmux_socket()
+    ));
+    env.fake_node(Reply::ok(r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"],"G":["off"]}"#));
+    let install = env
+        .env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
+    fs::create_dir_all(env.env.root().join("install")).unwrap();
+    fs::write(env.env.root().join("install/current-version"), "1.0.0\n").unwrap();
+    for package in ["pi-coding-agent", "pi-ai"] {
+        let dist = install.join(package).join("dist");
+        fs::create_dir_all(&dist).unwrap();
+        fs::write(dist.join("index.js"), "").unwrap();
+    }
+    let pi = FakePi::install(&env);
     new_context(&env);
-    distilling(&env);
     env.cpd(&["context", "decide", "Keep this decision.", "--context", CTX])
         .ok();
     env.cpd(&["context", "note", "Stale fact one.", "--context", CTX])
@@ -818,12 +805,7 @@ fn a_superseded_note_is_absent_from_the_batch_a_distill_run_reads() {
     let out = env.cpd(&["context", "distill", "--context", CTX]).ok();
     assert_eq!(out["distilled"], json!(true), "{out}");
     // In force: hs-d1, hs-n3, hs-d2.
-    let (home, _, _) = library(&env);
-    let batch = fs::read_to_string(
-        home.context_digest_dir(&CTX.parse().unwrap())
-            .join("batch.md"),
-    )
-    .unwrap();
+    let batch = pi.seen("batch.md");
     for gone in ["[hs-n1]", "[hs-n2]", "Stale fact"] {
         assert!(!batch.contains(gone), "{gone} is out of force: {batch}");
     }
@@ -1354,6 +1336,7 @@ fn hs_tmux() -> Fx {
         fx.env.tmux_socket()
     );
     fs::write(fx.env.cpd_home().join("config.toml"), config).unwrap();
+    fx.cockpit();
     fx
 }
 
@@ -1362,33 +1345,6 @@ fn count(fx: &Fx, sql: &str) -> i64 {
     store
         .read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?))
         .unwrap()
-}
-
-/// The cockpit: session `cpd`, window `main` with a tree pane.
-fn cockpit(fx: &Fx) {
-    let out = fx.tmux(&[
-        "new-session",
-        "-d",
-        "-s",
-        "cpd",
-        "-n",
-        "main",
-        "-P",
-        "-F",
-        "#{pane_id}",
-        "cpd tui view tree",
-    ]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let tree = String::from_utf8(out.stdout).unwrap().trim().to_owned();
-    assert!(
-        fx.tmux(&["set", "-p", "-t", &tree, "@cpd_view", "tree"])
-            .status
-            .success()
-    );
 }
 
 /// Gives Session `id` a live parked pane in the cockpit, as `@cpd_session`.
@@ -1426,6 +1382,16 @@ fn live_panes(fx: &Fx) -> Vec<String> {
     fx.panes().into_iter().map(|p| p.pane).collect()
 }
 
+fn manager_id(fx: &Fx) -> String {
+    fx.env.read(|db| {
+        db.query_row(
+            "SELECT id FROM sessions WHERE role = 'manager' AND context = ?1",
+            [CTX],
+            |r| r.get(0),
+        )
+    })
+}
+
 fn archived_ats(fx: &Fx) -> i64 {
     count(
         fx,
@@ -1452,8 +1418,7 @@ fn archivable(fx: &Fx) {
     fixture_plan(&fx.env, "side", "other");
     fx.env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
-           VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
-                  ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O4', 'idle', 't', 't0', NULL);
+           VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay');
          INSERT INTO jobs (plan, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope, status, cancel_reason, cancel_requested_at, appended, created_txn, created_at)
            VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 'a fixture', 't', 0, 1, 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
@@ -1467,8 +1432,7 @@ fn archivable(fx: &Fx) {
          UPDATE plans SET phase = 'deploy' WHERE id IN ('pay', 'ship');
          UPDATE plans SET phase = 'done', done_at = 't' WHERE id IN ('pay', 'ship');",
     );
-    cockpit(fx);
-    for id in ["lead-pay", "fork-pay", "manager"] {
+    for id in ["lead-pay", "fork-pay"] {
         pane(fx, id);
     }
 }
@@ -1494,10 +1458,14 @@ fn archive_covers_plans_leads_forks_and_the_manager_with_one_event_each() {
     assert_eq!(out["archived"][0], json!({"kind": "context", "id": CTX}));
     assert_eq!(ids(&out, "context"), [CTX]);
     assert_eq!(ids(&out, "plan"), ["pay", "ship"]);
-    assert_eq!(
-        ids(&out, "session"),
-        ["fork-pay", "lead-pay", "lead-ship", "manager"]
-    );
+    let mut expected = vec![
+        manager_id(&fx),
+        "fork-pay".into(),
+        "lead-pay".into(),
+        "lead-ship".into(),
+    ];
+    expected.sort();
+    assert_eq!(ids(&out, "session"), expected);
     assert_eq!(out["archived"].as_array().unwrap().len(), 7);
     assert_eq!(out["closed"].as_array().unwrap().len(), 3);
     // Every pane the cascade closed is gone; the cockpit's other panes are not ours to count.
@@ -1534,7 +1502,7 @@ fn archive_covers_plans_leads_forks_and_the_manager_with_one_event_each() {
     assert_eq!(
         count(
             &fx,
-            "SELECT count(*) FROM sessions WHERE tmux_pane IS NOT NULL"
+            "SELECT count(*) FROM sessions WHERE context = 'building-cpd' AND tmux_pane IS NOT NULL"
         ),
         0
     );
@@ -1604,7 +1572,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
         assert_eq!(
             count(
                 &fx,
-                "SELECT count(*) FROM sessions WHERE tmux_pane IS NOT NULL"
+                "SELECT count(*) FROM sessions WHERE context = 'building-cpd' AND tmux_pane IS NOT NULL"
             ),
             3,
             "{kind}"
@@ -1620,9 +1588,14 @@ fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
     let manager = fx
         .panes()
         .into_iter()
-        .find(|p| p.session == "manager")
+        .find(|p| p.session == manager_id(&fx))
         .unwrap()
         .pane;
+    assert!(
+        fx.tmux(&["rename-window", "-t", "=cpd:main", "old-main"])
+            .status
+            .success()
+    );
     assert!(
         fx.tmux(&["rename-window", "-t", &manager, "main"])
             .status
@@ -1647,10 +1620,14 @@ fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
     let out = fx.cpd(&["context", "unarchive", CTX]).ok();
     assert_eq!(out["archived"][0], json!({"kind": "context", "id": CTX}));
     assert_eq!(ids(&out, "plan"), ["pay", "ship"]);
-    assert_eq!(
-        ids(&out, "session"),
-        ["fork-pay", "lead-pay", "lead-ship", "manager"]
-    );
+    let mut expected = vec![
+        manager_id(&fx),
+        "fork-pay".into(),
+        "lead-pay".into(),
+        "lead-ship".into(),
+    ];
+    expected.sort();
+    assert_eq!(ids(&out, "session"), expected);
     assert_eq!(out["closed"], json!([]));
     assert_eq!(archived_ats(&fx), 0);
     assert_eq!(event_count(&fx), events_before + 7);

@@ -26,6 +26,7 @@ fn run_file(fx: &Fx, plan: &str, name: &str) -> PathBuf {
 /// A Plan `pay` in phase `plan` with one draft Job `a`, outlined for review.
 fn plan_with_one_draft(fx: &Fx) -> PathBuf {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])

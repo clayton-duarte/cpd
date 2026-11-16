@@ -805,7 +805,8 @@ fn wait_some_says_the_last_state_on_timeout() {
 
 #[test]
 fn sql_writes_the_envs_store() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
+    fx.cockpit();
     fx.env.write_tmux_config("");
     fx.cpd(&[
         "context", "new", "c1", "--title", "Before", "--owner", "acme",
@@ -821,7 +822,8 @@ fn sql_writes_the_envs_store() {
 
 #[test]
 fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
+    fx.cockpit();
     let (a, b) = (&fx.env, fx.another_env());
     for env in [a, &b] {
         let store = env.store();

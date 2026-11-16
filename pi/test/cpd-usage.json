@@ -316,6 +316,7 @@
   },
   "context new": {
     "flags": {
+      "--by-user": false,
       "--confirm-fallback": false,
       "--help": false,
       "--jira": true,

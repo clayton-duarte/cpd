@@ -1,12 +1,11 @@
 //! The Inbox's notice tier is cyan, and blue is only for focus (contract §2.2 "Inbox item", commands.md §21; pro-d16,
-//! which refines hs-d570), run as the built binary. The curation notices come from the engine's rule
+//! which refines hs-d570), run in-process with mock ports. The curation notices come from the engine's rule
 //! (`rules::conditions`), as E8 reads them; the other tiers are fixture conditions.
 
 use crate::common;
 
-use std::fs;
-
 use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::context::curation::{Approval, Curation, Proposal, Reason, propose};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::ContextId;
@@ -18,16 +17,13 @@ const CTX: &str = "building-cpd";
 const T0: &str = "2026-01-01T00:00:00.000Z";
 const T1: &str = "2026-01-01T01:00:00.000Z";
 
-/// A machine `hs` with Context `building-cpd`, a pending retirement.
-fn fx() -> TestEnv {
-    let env = TestEnv::new();
-    fs::create_dir_all(env.cpd_home()).unwrap();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\ncontext_curation_min_records = 1\n",
-    )
-    .unwrap();
-    env.cpd(&[
+/// A machine `m1` with Context `building-cpd`, a pending retirement.
+fn fx() -> Fx {
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    env.write_tmux_config("context_curation_min_records = 1");
+    fx.cockpit();
+    fx.cpd(&[
         "context",
         "new",
         CTX,
@@ -38,18 +34,18 @@ fn fx() -> TestEnv {
     ])
     .ok();
     for text in ["Old fact.", "Same fact.", "Worth documenting."] {
-        env.cpd(&["context", "note", text, "--context", CTX]).ok();
+        fx.cpd(&["context", "note", text, "--context", CTX]).ok();
     }
     let curation = |record: &str| Curation {
         record: record.parse().unwrap(),
         topic: "engine".into(),
         short: format!("short of {record}"),
     };
-    let curations = [curation("hs-n1"), curation("hs-n2"), curation("hs-n3")];
+    let curations = [curation("m1-n1"), curation("m1-n2"), curation("m1-n3")];
     let proposals = [Proposal {
-        record: "hs-n1".parse().unwrap(),
+        record: "m1-n1".parse().unwrap(),
         reason: Reason::Duplicate,
-        target: "hs-n2".into(),
+        target: "m1-n2".into(),
         approval: Approval::Pending,
     }];
     propose(
@@ -59,7 +55,7 @@ fn fx() -> TestEnv {
         &proposals,
     )
     .unwrap();
-    env
+    fx
 }
 
 fn home(env: &TestEnv) -> CpdHome {
@@ -96,8 +92,8 @@ fn plain(kind: Kind, urgency: Urgency, subject: &str) -> Condition {
     }
 }
 
-fn listed(env: &TestEnv) -> Vec<Value> {
-    let out = env.cpd(&["inbox", "list"]).ok();
+fn listed(fx: &Fx) -> Vec<Value> {
+    let out = fx.cpd(&["inbox", "list"]).ok();
     out["items"]
         .as_array()
         .unwrap()
@@ -109,10 +105,11 @@ fn listed(env: &TestEnv) -> Vec<Value> {
 
 #[test]
 fn the_curation_notices_are_opened_with_urgency_white_and_no_inbox_output_prints_blue() {
-    let env = fx();
-    reconcile(&mut env.store(), &notices(&env), T0).unwrap();
+    let fx = fx();
+    let env = &fx.env;
+    reconcile(&mut env.store(), &notices(env), T0).unwrap();
 
-    let items = listed(&env);
+    let items = listed(&fx);
     let item = items
         .iter()
         .find(|i| i["kind"] == "curate-retire")
@@ -131,13 +128,13 @@ fn the_curation_notices_are_opened_with_urgency_white_and_no_inbox_output_prints
         .unwrap();
     assert_eq!(stored, ["white"], "the stored value");
 
-    let list = env.cpd(&["inbox", "list"]).ok().to_string();
+    let list = fx.cpd(&["inbox", "list"]).ok().to_string();
     assert!(list.contains("\"urgency\":\"white\""), "{list}");
     let id = items[0]["id"].as_i64().unwrap().to_string();
     let outputs = [
         list,
-        env.cpd(&["inbox", "show", &id]).ok().to_string(),
-        env.cpd(&["inbox", "list", "--all"]).ok().to_string(),
+        fx.cpd(&["inbox", "show", &id]).ok().to_string(),
+        fx.cpd(&["inbox", "list", "--all"]).ok().to_string(),
     ];
     for out in outputs {
         assert!(!out.contains("blue"), "no inbox output prints blue: {out}");
@@ -146,8 +143,9 @@ fn the_curation_notices_are_opened_with_urgency_white_and_no_inbox_output_prints
 
 #[test]
 fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a_tier() {
-    let env = fx();
-    let notices = notices(&env);
+    let fx = fx();
+    let env = &fx.env;
+    let notices = notices(env);
     let of = |kind: Kind| {
         notices
             .iter()
@@ -167,7 +165,7 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
     second.push(plain(Kind::Unread, Urgency::Cyan, "c-new"));
     reconcile(&mut env.store(), &second, T1).unwrap();
 
-    let order: Vec<(String, String)> = listed(&env)
+    let order: Vec<(String, String)> = listed(&fx)
         .iter()
         .map(|i| {
             (

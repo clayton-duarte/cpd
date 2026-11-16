@@ -605,10 +605,9 @@ fn tmux_makes_no_socket_no_state_file_and_no_process() {
 fn a_plan_new_window_shows_its_window_and_pane_options_in_the_state() {
     let fx = tmux_fx();
     fx.fake_cpd_views();
-    fx.cpd(&[
-        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
-    ])
-    .ok();
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, created_at, created_on, owner) VALUES ('ctx', 'Payments', 't', 'm1', 'acme')",
+    );
     assert!(
         fx.tmux_state().is_none(),
         "no server before the Lead's window"

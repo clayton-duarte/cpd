@@ -22,6 +22,7 @@ fn base(fx: &Fx) {
         "version = 1\nmachine = \"pro\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n",
         fx.env.tmux_socket()
     ));
+    fx.cockpit();
     for id in ["ctx", "other"] {
         fx.cpd(&["context", "new", id, "--title", id, "--owner", "acme"])
             .ok();
@@ -30,10 +31,11 @@ fn base(fx: &Fx) {
     records(fx);
 }
 
-/// A Manager Session row each.
+/// Archive the paired Managers before seeding the named Manager Sessions used by the read fixtures.
 fn sessions(fx: &Fx, a: (&str, &str), b: (&str, &str)) {
     fx.env.sql(&format!(
-        "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at) VALUES
+        "UPDATE sessions SET archived_at = 't' WHERE role = 'manager' AND context IN ('ctx', 'other');
+         INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at) VALUES
            ('{}', 'manager', '{}', 'One', '/', 'O3', 'idle', 't', 't'),
            ('{}', 'manager', '{}', 'Two', '/', 'O3', 'idle', 't', 't');",
         a.1, a.0, b.1, b.0
@@ -97,7 +99,7 @@ fn write(fx: &Fx, verb: &str, session: Option<&str>, text: &str, extra: &[&str])
 
 #[test]
 fn decide_marks_the_read_and_cited_record_used_for_that_session_only() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     base(&fx);
     // No Session: nothing is marked.
     write(&fx, "decide", None, "Follows pro-d1.", &[]);
@@ -115,7 +117,7 @@ fn decide_marks_the_read_and_cited_record_used_for_that_session_only() {
 
 #[test]
 fn own_id_and_supersedes_targets_are_not_marked() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     base(&fx);
     // s1 read the id the next decision takes (`pro-d3`): its read row is seeded before the record exists, with the
     // foreign keys off for the seed connection.
@@ -163,7 +165,7 @@ fn own_id_and_supersedes_targets_are_not_marked() {
 
 #[test]
 fn a_record_of_another_context_marks_nothing() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     base(&fx);
     let out = write(&fx, "decide", Some(S1), "Builds on pro-d5.", &[]);
     assert_eq!(out["ok"], true, "{out}");
@@ -177,7 +179,7 @@ fn a_record_of_another_context_marks_nothing() {
 
 #[test]
 fn note_marks_like_decide() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     base(&fx);
     write(&fx, "note", None, "About pro-d1.", &[]);
     assert_eq!(used(&fx, "ctx", "pro-d1", S1), None);
@@ -191,7 +193,7 @@ fn note_marks_like_decide() {
 
 #[test]
 fn session_send_marks_for_the_sender_and_the_user_marks_nothing() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     common::session::setup_with_fork(&fx.env);
     // `lead2` (sender) read pro-d1; `worker1` read pro-d2.
     fx.env.sql(
@@ -237,7 +239,7 @@ fn session_send_marks_for_the_sender_and_the_user_marks_nothing() {
 
 #[test]
 fn job_add_scans_goal_context_acceptance_and_out_of_scope() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     job::setup(&fx.env);
     job::plan(&fx.env, "pl", "plan");
     // The caller is the Plan's Lead (`lead-pl`): a Manager may add a Job only to a Lead-less shaping Plan of its own

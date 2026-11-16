@@ -10,10 +10,9 @@ use common::fx::Fx;
 /// The Context `ctx`, with no cockpit yet.
 fn setup(fx: &Fx, extra: &str) {
     fx.env.write_tmux_config(extra);
-    fx.cpd(&[
-        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
-    ])
-    .ok();
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Payments', 't', 'm1');",
+    );
 }
 
 /// `context manager --context ctx` with an optional `--runner`.

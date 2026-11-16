@@ -14,11 +14,11 @@ use cpd_core::host::spawn::Launch;
 /// The Context `ctx` and the cockpit.
 fn setup(fx: &Fx) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
     .ok();
-    fx.cockpit();
 }
 
 /// `plan new pay` and the `session run` of its Lead's window, stepped until pi was launched: the id of the Lead and
