@@ -6,19 +6,43 @@
 use std::sync::Arc;
 
 use cpd_core::clock::ManualClock;
-use cpd_core::host::runner::FakeRunner;
+use cpd_core::fakes::tmux::TmuxRoute;
+use cpd_core::host::runner::{Call, FakeRunner, Handler, Reply};
 use cpd_core::host::spawn::FakeSpawn;
 use cpd_core::ports::Ports;
 
 use super::liveness;
 use super::testkit::Fx;
 
+/// Give every fake tmux call the fixture's own directory, including calls made by session startup.
+struct IsolatedTmux {
+    route: TmuxRoute,
+    tmpdir: String,
+}
+
+impl Handler for IsolatedTmux {
+    fn handle(&self, call: &Call) -> Reply {
+        let mut call = call.clone();
+        call.envs.retain(|(key, _)| key != "TMUX_TMPDIR");
+        call.envs
+            .push(("TMUX_TMPDIR".into(), Some(self.tmpdir.clone())));
+        self.route.handle(&call)
+    }
+}
+
 /// Plan `pay` (`dispatch`) with Lead `lead1` and Manager `mgr1`, both `stopped`, `pi`, with no pane; the fake tmux has a server
 /// with the cockpit session `cpd`, and lists no pane `%99`.
 fn fx() -> (Fx, FakeRunner) {
     let mut fx = Fx::with_plan("");
-    let runner = fx.on_fake_tmux();
-    unsafe { std::env::set_var("TMUX_TMPDIR", fx.engine.home.root()) };
+    let runner = FakeRunner::new(ManualClock::new());
+    let route = TmuxRoute::new().with_runner(runner.weak());
+    let runner = runner.route(
+        "tmux",
+        Arc::new(IsolatedTmux {
+            route,
+            tmpdir: fx.engine.home.root().display().to_string(),
+        }),
+    );
     fx.engine.tmux = cpd_core::host::Tmux::new(fx.engine.config.tmux.socket.clone())
         .with_runner(Arc::new(runner.clone()));
     fx.tmux_server();
