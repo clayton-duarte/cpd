@@ -262,3 +262,23 @@ it("hides completed empty assistant bubbles while preserving meaningful and stre
     m.unmount();
   }
 });
+
+it("preserves chronological thinking and streamed response order", () => {
+  const dialect = createDialect(1);
+  dialect.applyBase({ view: { conversation: "root", entries: [], docs: {
+    "pi.agent": {}, "pi.live": { run: { taskId: 1, inputs: [], turns: 0 }, generation: { attempt: 1, message: { role: "assistant", content: [{ type: "thinking", thinking: "earlier thought" }], stopReason: "pending" } } },
+    "pi.inbox": { items: [] }, "pi.provider": {}, "pi.usage": { models: {}, tools: {} },
+  } } });
+  const render = () => mount(<Transcript {...base} thinking="expanded" items={dialect.transcript.items} />);
+  const first = render();
+  try { expect(first.container.querySelector('[data-kind="thinking"]')).not.toBeNull(); } finally { first.unmount(); }
+  dialect.applyIncrement({ ops: [["s", ["docs", "pi.live", "generation", "message", "content"], [{ type: "thinking", thinking: "earlier thought" }, { type: "text", text: "streamed answer" }]]] });
+  const second = render();
+  try {
+    const thought = second.container.querySelector('[data-kind="thinking"]');
+    const answer = second.container.querySelector('[data-kind="assistant"]');
+    expect(thought).not.toBeNull();
+    expect(answer?.textContent).toContain("streamed answer");
+    expect(thought && answer && (thought.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
+  } finally { second.unmount(); }
+});
