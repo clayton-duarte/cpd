@@ -62,6 +62,7 @@ fn gh_says_open(fx: &Fx) {
 /// `gh` is whatever the test scripted before; [`setup`] scripts [`gh_says_open`].
 fn world(fx: &Fx) -> (String, String) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
@@ -322,8 +323,9 @@ fn cancels_jobs_closes_open_pull_requests_and_the_lead_and_archives_the_plan() {
         1
     );
     assert_eq!(
-        fx.env
-            .query::<i64>("SELECT count(*) FROM sessions WHERE archived_at IS NULL"),
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM sessions WHERE plan = 'pay' AND archived_at IS NULL"
+        ),
         0
     );
     assert_eq!(events(&fx, "plan-archived").len(), 1);
@@ -655,7 +657,6 @@ fn a_pending_plan_review_is_superseded_and_the_cancel_goes_on() {
 #[test]
 fn the_lead_in_the_chat_slot_blocks_and_nothing_is_written() {
     let fx = Fx::with_ports();
-    fx.cockpit();
     let (lead, _) = setup(&fx);
     fx.cpd(&["session", "open", &lead]).ok();
     let before = fx.env.query::<i64>("SELECT count(*) FROM events");

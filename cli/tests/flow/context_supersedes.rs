@@ -3,16 +3,20 @@
 
 use crate::common;
 
+use common::Run;
 use common::fx::Fx;
-use common::{Run, TestEnv};
 use serde_json::{Value, json};
 
 const CTX: &str = "building-cpd";
 
 /// Machine `hs`, with Context `building-cpd`.
 fn hs() -> Fx {
-    let fx = Fx::new();
-    write_hs(&fx.env);
+    let fx = Fx::with_ports();
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",
@@ -24,10 +28,6 @@ fn hs() -> Fx {
     ])
     .ok();
     fx
-}
-
-fn write_hs(env: &TestEnv) {
-    env.write_config("version = 1\nmachine = \"hs\"\n");
 }
 
 fn refused(run: Run, exit: i32, expected: &str) -> Value {

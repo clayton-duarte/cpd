@@ -143,6 +143,7 @@ mod inproc {
     /// The env with its config, Context `ctx` and the repo `pay`.
     pub fn setup(fx: &Fx) -> PathBuf {
         fx.env.write_tmux_config("");
+        fx.cockpit();
         fx.cpd(&[
             "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
         ])
@@ -220,6 +221,7 @@ mod inproc {
     pub fn panes(fx: &Fx) -> Vec<(String, String, String)> {
         fx.panes()
             .into_iter()
+            .filter(|p| p.window_name.starts_with("park-"))
             .map(|p| (p.pane, p.window_name, p.session))
             .collect()
     }
@@ -367,7 +369,10 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
         created["data"],
         json!({"title": "Retry payouts", "jira": "PAY-1", "lead_session": session, "forked_from": null, "cwd": cwd})
     );
-    let registered = inproc::events(&fx, "session-registered");
+    let registered: Vec<_> = inproc::events(&fx, "session-registered")
+        .into_iter()
+        .filter(|e| e["plan"] == "pay")
+        .collect();
     assert_eq!(registered.len(), 1);
     assert_eq!(
         (&registered[0]["plan"], &registered[0]["session"]),
@@ -381,7 +386,10 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
         registered[0]["id"].as_i64().unwrap(),
         created["id"].as_i64().unwrap() + 1
     );
-    let moved = inproc::events(&fx, "session-moved");
+    let moved: Vec<_> = inproc::events(&fx, "session-moved")
+        .into_iter()
+        .filter(|e| e["plan"] == "pay")
+        .collect();
     assert_eq!(
         moved[0]["data"],
         json!({"pane": pane, "window": window, "place": "parked"})
@@ -816,7 +824,13 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     assert_ne!(redone["lead"]["pane"], Value::Null);
     assert_eq!(inproc::panes(&fx).len(), 1);
     assert!(home(&fx.env).lead_message(&pid("pay")).exists());
-    assert_eq!(inproc::events(&fx, "session-moved").len(), 2);
+    assert_eq!(
+        inproc::events(&fx, "session-moved")
+            .iter()
+            .filter(|e| e["plan"] == "pay")
+            .count(),
+        2
+    );
     assert_eq!(inproc::events(&fx, "plan-created").len(), 1);
 
     // Other flags: plan_exists.
@@ -1106,7 +1120,7 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     assert_eq!(
         fx.env
             .query::<i64>("SELECT count(*) FROM sessions WHERE plan IS NULL"),
-        0
+        1
     );
 
     // Already in phase plan: nothing is written.
@@ -3377,12 +3391,7 @@ fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
     let (lead, fork) = plan_with_fork(&fx);
     finish_plan(&fx, "pay");
     // The chat slot: the pane of window `main` running a Lead (the fork).
-    let fork_pane = inproc::panes(&fx)
-        .into_iter()
-        .find(|p| p.2 == fork)
-        .unwrap()
-        .0;
-    fx.tmux(&["rename-window", "-t", &fork_pane, "main"]);
+    fx.cpd(&["session", "open", &fork]).ok();
     let (events_before, panes_before) = (event_count(&fx.env), inproc::panes(&fx));
     let error = refused(
         &fx.cpd(&["plan", "archive", "--plan", "pay"]),

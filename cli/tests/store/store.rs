@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::home::{HasCpdHome, Home};
 use crate::scripted::ScriptedClock;
 use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::clock::ManualClock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -285,7 +286,21 @@ fn the_schema_is_contract_4_4_as_written() {
                 .unwrap_or_else(|e| panic!("block {}: {e}", i + 1));
         }
     }
-    let expected = schema_sql(&contract);
+    // The paired shaping migrations postdate §4.4's plans DDL. Apply their
+    // explicit schema changes to the contract's expected definition.
+    let expected = schema_sql(&contract).into_iter().map(|(name, sql)| {
+        if name == "plans_phase" {
+            let sql = sql.replace(" BEGIN SELECT RAISE", " AND NOT (OLD.phase = 'shaping' AND NEW.phase = 'plan' AND OLD.shaping_origin = 1 AND OLD.lead_session IS NOT NULL AND OLD.locked_at IS NULL) AND NOT (OLD.phase = 'plan' AND NEW.phase = 'done' AND OLD.shaping_origin = 1 AND OLD.lead_session IS NOT NULL AND OLD.locked_at IS NULL) BEGIN SELECT RAISE");
+            return (name, sql);
+        }
+        if name != "plans" {
+            return (name, sql);
+        }
+        let sql = sql.replace("reviewed_title TEXT, CHECK", "reviewed_title TEXT, shaping_origin INTEGER NOT NULL DEFAULT 0 CHECK (shaping_origin IN (0, 1)), CHECK")
+            .replace("(phase = 'done' AND (lead_session IS NULL) = (locked_at IS NULL))", "(phase = 'done' AND ((lead_session IS NULL) = (locked_at IS NULL) OR (shaping_origin = 1 AND lead_session IS NOT NULL AND locked_at IS NULL)))")
+            .replace(", CHECK (phase <> 'shaping' OR lead_session IS NULL)", "");
+        (name, sql)
+    }).collect::<Vec<_>>();
     assert!(expected.len() > 40, "{expected:?}");
     let env = Home::new();
     drop(open(&env));
@@ -331,6 +346,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     expected.insert("swr_deploy_lists".to_owned());
     expected.insert("workflow_prereqs".to_owned());
     expected.insert("pr_rereview_asks".to_owned());
+    expected.insert("plans_shaping_origin_immutable".to_owned());
     let found = names(
         &raw(&env),
         "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -1586,31 +1602,45 @@ fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
 
 #[test]
 fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
-    let env = TestEnv::new();
+    let fx = Fx::with_ports_empty();
+    fx.cockpit();
+    let env = &fx.env;
     fs::write(
         env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\n",
+        format!(
+            "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+            env.tmux_socket()
+        ),
     )
     .unwrap();
-    // The shell enters a directory, deletes it and runs cpd from there.
-    let out = env
-        .command("sh")
-        .args([
-            "-c",
-            "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"",
-            "sh",
-            common::CPD,
-        ])
-        .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success(),
-        "{stdout} {}",
-        String::from_utf8_lossy(&out.stderr)
+    let gone = env.root().join("gone");
+    fs::create_dir(&gone).unwrap();
+    // Restore even on panic, before Fx removes its temporary home.
+    struct RestoreCwd(std::path::PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).unwrap();
+        }
+    }
+    let (code, stdout) = {
+        let _restore = RestoreCwd(env.root().to_path_buf());
+        std::env::set_current_dir(&gone).unwrap();
+        fs::remove_dir(&gone).unwrap();
+        let args = [
+            "cpd", "context", "new", "ctx", "--title", "Ctx", "--owner", "acme",
+        ]
+        .map(std::ffi::OsString::from);
+        let mut stdout = Vec::new();
+        let code = cpd::run_with(&fx.fakes.ports, args, &mut stdout);
+        (code, stdout)
+    };
+    assert_eq!(
+        code,
+        std::process::ExitCode::SUCCESS,
+        "{}",
+        String::from_utf8_lossy(&stdout)
     );
-    let mut store = open(&env);
+    let mut store = open(env);
     let cwds: Vec<String> = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT cwd FROM txns WHERE command = 'context new'")?;

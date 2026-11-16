@@ -1,7 +1,12 @@
 //! The Context writes (contract §4.6): creating a Context and writing a
 //! record, each one database transaction.
 
+use std::fs::{self, File, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
+use std::time::Duration;
+
 use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::Value;
 
 use super::Jira;
 use super::distill::State;
@@ -16,6 +21,127 @@ use crate::home::CpdHome;
 use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind, SessionId};
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
+
+/// A local lease also wakes same-process waiters when the file lock is released.
+struct LocalLease {
+    path: std::path::PathBuf,
+}
+
+fn local_registry() -> &'static (
+    std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    std::sync::Condvar,
+) {
+    static REGISTRY: std::sync::OnceLock<(
+        std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+        std::sync::Condvar,
+    )> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        (
+            std::sync::Mutex::new(std::collections::HashSet::new()),
+            std::sync::Condvar::new(),
+        )
+    })
+}
+
+impl Drop for LocalLease {
+    fn drop(&mut self) {
+        let (mutex, wake) = local_registry();
+        let mut held = mutex.lock().unwrap_or_else(|e| e.into_inner());
+        held.remove(&self.path);
+        wake.notify_all();
+    }
+}
+
+/// File drops before the local lease wakes its waiters.
+pub(crate) struct CreationLock {
+    _file: File,
+    _local: LocalLease,
+}
+
+/// Serialize one creation and its external provisioning without holding a store transaction.
+/// Lock files are persistent: unlinking a held inode would allow a second holder.
+pub(crate) fn creation_lock(
+    home: &CpdHome,
+    kind: &str,
+    id: &str,
+) -> Result<CreationLock, CpdError> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    creation_lock_with_remaining(home, kind, id, || {
+        deadline.saturating_duration_since(std::time::Instant::now())
+    })
+}
+
+fn creation_lock_with_remaining(
+    home: &CpdHome,
+    kind: &str,
+    id: &str,
+    remaining: impl Fn() -> Duration,
+) -> Result<CreationLock, CpdError> {
+    let dir = home.locks_dir();
+    let path = dir.join(format!("{kind}-new-{id}.lock"));
+    let failed = |e: &dyn std::fmt::Display| {
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot use creation lock {}: {e}.", path.display()),
+        )
+        .with("lock", path.display().to_string())
+    };
+    let timed_out = || {
+        CpdError::new(
+            ErrorCode::LockTimeout,
+            format!(
+                "Another creation held {} for 60 seconds. Retry with the same flags.",
+                path.display()
+            ),
+        )
+        .with("lock", path.display().to_string())
+        .with("waited_seconds", 60)
+    };
+    fs::create_dir_all(&dir).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|e| failed(&e))?;
+    if !file.metadata().map_err(|e| failed(&e))?.is_file() {
+        return Err(failed(&"not a regular file"));
+    }
+    let (mutex, wake) = local_registry();
+    let mut held = mutex.lock().unwrap_or_else(|e| e.into_inner());
+    while held.contains(&path) {
+        let remaining = remaining();
+        if remaining.is_zero() {
+            return Err(timed_out());
+        }
+        held = wake
+            .wait_timeout(held, remaining)
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
+    }
+    held.insert(path.clone());
+    drop(held);
+    let local = LocalLease { path: path.clone() };
+    loop {
+        if crate::lock::try_lock(&file).map_err(|e| failed(&e))? {
+            return Ok(CreationLock {
+                _file: file,
+                _local: local,
+            });
+        }
+        let remaining = remaining();
+        if remaining.is_zero() {
+            return Err(timed_out());
+        }
+        let held = mutex.lock().unwrap_or_else(|e| e.into_inner());
+        drop(
+            wake.wait_timeout(held, remaining.min(Duration::from_millis(100)))
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+    }
+}
 
 /// A row of `contexts`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,6 +207,7 @@ pub struct Written {
 /// only place they live (contract §4.6). Every write is one transaction.
 pub struct Contexts<'a> {
     machine: MachineName,
+    config: Config,
     store: &'a mut Store,
 }
 
@@ -97,13 +224,15 @@ impl<'a> Contexts<'a> {
     pub fn new(config: &Config, store: &'a mut Store) -> Contexts<'a> {
         Contexts {
             machine: config.machine.clone(),
+            config: config.clone(),
             store,
         }
     }
 
     /// `context new` (commands.md §3.1): the Context's row and `context-created`.
-    /// Returns the row and whether it already existed with this title, Jira key and owner.
+    /// Returns the row, whether it already existed, and the provisioned Manager.
     /// The owner's policy file must resolve (`owner_unconfirmed`, `policy_invalid`).
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &mut self,
         home: &CpdHome,
@@ -112,7 +241,9 @@ impl<'a> Contexts<'a> {
         jira: Option<&Jira>,
         owner: &OwnerLogin,
         confirm_fallback: bool,
-    ) -> Result<(ContextRow, bool), CpdError> {
+        by_user: bool,
+    ) -> Result<(ContextRow, bool, Value), CpdError> {
+        let _creation_lock = creation_lock(home, "context", id.as_str())?;
         let existing = |conn: &Connection| -> Result<Option<ContextRow>, CpdError> {
             // A deleted Context keeps its row, and so its id: never reused (contract §2.2 "Deleted").
             let deleted: bool = conn
@@ -148,21 +279,52 @@ impl<'a> Contexts<'a> {
             .with("jira", row.jira)
             .with("owner", row.owner))
         };
-        if let Some(row) = self.store.read(|conn| existing(conn))? {
-            return Ok((row, true));
+        let found = self.store.read(|conn| existing(conn))?;
+        let manager = self.store.read(|conn| super::manager::live(conn, id))?;
+        if found.is_none() {
+            let link = match resolve(home, &PolicyKey::Owner(owner.clone())) {
+                Err(e) if e.code() == ErrorCode::OwnerUnconfirmed && confirm_fallback => true,
+                other => other.map(|_| false)?,
+            };
+            if link {
+                crate::policy::confirm_fallback(home, owner)?;
+            }
         }
-        let link = match resolve(home, &PolicyKey::Owner(owner.clone())) {
-            Err(e) if e.code() == ErrorCode::OwnerUnconfirmed && confirm_fallback => true,
-            other => other.map(|_| false)?,
+        let prepared = if manager.is_none() {
+            Some(super::manager::prepare_pair(&self.config, id)?)
+        } else {
+            None
         };
-        if link {
-            crate::policy::confirm_fallback(home, owner)?;
-        }
         let machine = self.machine.clone();
-        self.store.write("context new", |tx| {
+        let result = self.store.write("context new", |tx| {
             // Another process may have created it since the read.
             if let Some(row) = existing(tx)? {
-                return Ok((row, true));
+                if row.archived_at.is_some() {
+                    return Err(CpdError::new(
+                        ErrorCode::Archived,
+                        format!("Context {id} is archived: unarchive it before starting its Manager."),
+                    )
+                    .with("context", id.as_str())
+                    .with("next", format!("cpd context unarchive {id}")));
+                }
+                let registered = if super::manager::live(tx, id)?.is_none() {
+                    let prepared = prepared.as_ref().ok_or_else(|| CpdError::bad_row(format!("Manager of Context {id} disappeared during creation")))?;
+                    super::manager::insert(tx, id, prepared, by_user, self.config.manager_runner)?;
+                    true
+                } else {
+                    let stored: bool = tx.query_row(
+                        "SELECT by_user FROM sessions WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
+                        [id.as_str()],
+                        |r| r.get(0),
+                    )?;
+                    if stored != by_user {
+                        return Err(CpdError::new(ErrorCode::ContextExists, format!("Context {id} exists with a different Manager by-user mode."))
+                            .with("context", id.as_str())
+                            .with("by_user", stored));
+                    }
+                    false
+                };
+                return Ok((row, true, registered));
             }
             let taken: bool = tx.query_row(
                 "SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)",
@@ -190,8 +352,37 @@ impl<'a> Contexts<'a> {
                 )
                 .context(id.clone()),
             )?;
-            Ok((ContextRow::require(tx, id)?, false))
-        })
+            let prepared = prepared.as_ref().ok_or_else(|| CpdError::bad_row(format!("Manager exists without Context {id}")))?;
+            super::manager::insert(tx, id, prepared, by_user, self.config.manager_runner)?;
+            Ok((ContextRow::require(tx, id)?, false, true))
+        })?;
+        let mut provision = || -> Result<Value, CpdError> {
+            let by_user: bool = self.store.read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT by_user FROM sessions WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
+                    [id.as_str()],
+                    |r| r.get(0),
+                )?)
+            })?;
+            if !by_user && (result.2 || !home.manager_message(id).is_file()) {
+                let topics = self
+                    .store
+                    .read(|conn| super::curated::topic_counts(conn, id))?;
+                super::manager::write_first_message(home, id, &result.0.title, &topics)?;
+            }
+            let crate::output::Output::Success(mut output) = super::manager::start_for_new(id)?
+            else {
+                return Err(CpdError::bad_row("Manager provisioning returned no output"));
+            };
+            output
+                .remove("manager")
+                .ok_or_else(|| CpdError::bad_row("Manager provisioning returned no Manager"))
+        };
+        let manager = provision().map_err(|e| {
+            let message = format!("Context {id} and its Manager are registered, but Manager provisioning failed: {}. Retry context new with the same flags.", e.message());
+            CpdError::new(e.code(), message).with("context", id.as_str()).with("cause", e.to_json())
+        })?;
+        Ok((result.0, result.1, manager))
     }
 
     /// Writes one record (§4.6 "A write"): in one transaction, validates it
@@ -463,4 +654,71 @@ fn record_event(context: &ContextId, record: &Record, seq: i64, verb: &str) -> N
         seq,
     )
     .context(context.clone())
+}
+
+#[cfg(test)]
+mod creation_lock_tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn expired_lock(home: &CpdHome, kind: &str, id: &str) -> Result<CreationLock, CpdError> {
+        creation_lock_with_remaining(home, kind, id, || Duration::ZERO)
+    }
+
+    fn home(dir: &tempfile::TempDir) -> CpdHome {
+        CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap()
+    }
+
+    #[test]
+    fn local_and_file_contention_use_the_same_deadline_and_release() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let home = home(&dir);
+        let held = expired_lock(&home, "context", "ctx").unwrap();
+        let error = match expired_lock(&home, "context", "ctx") {
+            Err(error) => error,
+            Ok(_) => panic!("local contention must time out"),
+        };
+        assert_eq!(error.code(), ErrorCode::LockTimeout);
+        let unrelated = expired_lock(&home, "context", "other").unwrap();
+        drop(unrelated);
+        drop(held);
+        let path = home.locks_dir().join("context-new-ctx.lock");
+        let external = OpenOptions::new().write(true).open(path).unwrap();
+        assert!(crate::lock::try_lock(&external).unwrap());
+        let error = match expired_lock(&home, "context", "ctx") {
+            Err(error) => error,
+            Ok(_) => panic!("file contention must time out"),
+        };
+        assert_eq!(error.code(), ErrorCode::LockTimeout);
+        assert!(error.message().contains("Retry"));
+        drop(external);
+        drop(expired_lock(&home, "context", "ctx").unwrap());
+    }
+
+    #[test]
+    fn panic_releases_both_creation_guards() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let home = home(&dir);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _held = expired_lock(&home, "plan", "fresh").unwrap();
+            panic!("injected failure");
+        }));
+        assert!(result.is_err());
+        drop(expired_lock(&home, "plan", "fresh").unwrap());
+    }
+
+    #[test]
+    fn lock_file_symlink_is_refused_without_leaving_a_lease() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let home = home(&dir);
+        fs::create_dir_all(home.locks_dir()).unwrap();
+        let path = home.locks_dir().join("context-new-ctx.lock");
+        let target = dir.path().join("target");
+        fs::write(&target, "unchanged").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(expired_lock(&home, "context", "ctx").is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "unchanged");
+        fs::remove_file(path).unwrap();
+        drop(expired_lock(&home, "context", "ctx").unwrap());
+    }
 }

@@ -920,26 +920,76 @@ fn checks_confirm_only_for_owned_or_authored() {
 
 #[test]
 fn job_merge_into_base_lead_branch_queues_stacked_update_job() {
-    // `web` is stacked on `api` (its base is api's Lead Branch); `solo` is on main.
-    let rig = open_rig(&["api", "web", "solo"]);
-    rig.sql("UPDATE workflows SET base = 'cpd/pay/api' WHERE plan = 'pay' AND key = 'web'");
+    let mut rig = Rig::new();
+    rig.running = true;
+    rig.workflow_with("api", "open", "running", "failed");
+    rig.workflow("web", "open");
+    rig.workflow("solo", "open");
+    let (base, submitted) = {
+        let mut u = rig.universe.lock().unwrap();
+        let base = u.ref_oid(rig.repo.id(), "refs/heads/cpd/pay/api").unwrap();
+        let blob = u.blob(rig.repo.id(), b"changed\n");
+        let original = u.blob(rig.repo.id(), b"base\n");
+        let tree = u.tree(rig.repo.id(), &[("f.txt", &original), ("a", &blob)]);
+        let submitted = u.commit(rig.repo.id(), &tree, std::slice::from_ref(&base), "work");
+        u.set_ref(rig.repo.id(), "refs/heads/cpd/pay/api", &submitted, "work");
+        (base, submitted)
+    };
+    std::fs::write(rig.workflows[0].lead.join("a"), "changed\n").unwrap();
+    rig.sql(&format!("UPDATE workflows SET base = 'cpd/pay/api' WHERE plan = 'pay' AND key = 'web';
+        UPDATE attempts SET status = 'merging', branch = 'cpd/pay/api', worktree = '{}', base_sha = '{}', submitted_sha = '{}', submitted_at = 't' WHERE plan = 'pay' AND id = 'api-a1';", rig.workflows[0].lead.display(), base.as_str(), submitted.as_str()));
+    let dir = rig.home.root().join("policy/acme");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("owner.toml"), OWNER_POLICY).unwrap();
+    let config = crate::config::Config::parse(
+        "version = 1\nmachine = \"test\"\n",
+        std::path::Path::new("config.toml"),
+    )
+    .unwrap()
+    .0;
+    let model = |m: &str| crate::config::TierModel {
+        model: m.to_owned(),
+        efforts: vec![1, 2, 3],
+    };
+    let catalog = crate::config::Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: vec![],
+        },
+        pi_version: "1.0.0".to_owned(),
+        o: model("o/m"),
+        s: model("s/m"),
+        h: model("h/m"),
+        g: crate::config::TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
+    };
+    let ctx = crate::merge::Ctx {
+        home: &rig.home,
+        config: &config,
+        catalog: &catalog,
+        source: "test",
+        metrics: &|_| None,
+        classifier: crate::merge::no_verdict_classifier(),
+    };
     let mut store = Store::open(&rig.home, 5000).unwrap();
     let pay = PlanId::parse("pay").unwrap();
-
-    // A Job merges into api's Lead Branch (pro-d466): its transaction queues the dependants' update Jobs.
-    let queued = store
-        .write("job merge", |tx| {
-            crate::merge::queue_stacked_updates(tx, &pay, "cpd/pay/api", tier())
-        })
-        .unwrap();
-
-    assert_eq!(queued.len(), 1, "only the stacked dependant is refreshed");
-    assert_eq!(
-        update_jobs(&mut store),
-        vec![queued[0].as_str().to_owned()],
-        "exactly one update Job, for web"
+    let id = crate::ids::AttemptId::parse("api-a1").unwrap();
+    let out = Ports::scope(&rig.fakes.ports, || {
+        crate::merge::merge(&mut store, &ctx, &pay, &id)
+    })
+    .unwrap();
+    assert!(
+        matches!(out.end, crate::merge::End::Merged { .. }),
+        "base Job must merge: {:?}",
+        out.end
     );
-    assert_eq!(last_reason(&mut store).as_deref(), Some("base-moved"));
+    assert!(
+        update_jobs(&mut store).is_empty(),
+        "base movement without a conflict must not queue an update"
+    );
+    assert_ne!(last_reason(&mut store).as_deref(), Some("base-moved"));
 }
 
 #[test]

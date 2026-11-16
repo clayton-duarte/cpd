@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 /// Plan `pay` (walked to phase `done` with its Workflow `cancelled`, as the archive rule wants, with its Lead) in Context `ctx`, one PR `api` and one full draft Job `d`.
 fn world(fx: &Fx) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
@@ -162,6 +163,7 @@ fn plan_cancel_still_cancels_drafts() {
 fn a_new_workflow_leaves_no_open_job_to_cancel_before_archive() {
     let fx = Fx::with_ports();
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])

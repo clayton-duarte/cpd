@@ -37,6 +37,7 @@ fn setup(fx: &Fx, extra: &str) {
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
     fx.env.owner_policy("acme", "");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
@@ -52,7 +53,6 @@ fn setup(fx: &Fx, extra: &str) {
     ])
     .ok();
     seed_catalog(fx, "[0,1,2,3,4]", "[0,2,3,4]");
-    fx.cockpit();
 }
 
 /// The catalog rows: `s` and `o` efforts, H 0-3, and G (no efforts: a G Tier is never a Lead's).
@@ -208,7 +208,7 @@ fn a_rerun_with_the_same_tier_is_already() {
     setup(&fx, "");
     plan_new(&fx, "pl", "ctx", Some("O2")).ok();
     assert_eq!(plan_new(&fx, "pl", "ctx", Some("O2")).ok()["already"], true);
-    assert_eq!((count(&fx, "plans"), count(&fx, "sessions")), (1, 1));
+    assert_eq!((count(&fx, "plans"), count(&fx, "sessions")), (1, 3));
 }
 
 #[test]

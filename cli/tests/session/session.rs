@@ -600,10 +600,6 @@ fn rename_appends_session_renamed_once() {
 fn fork_refusals_register_nothing() {
     let fx = Fx::with_ports();
     setup(&fx.env);
-    let message = fx.env.root().join("message.md");
-    fs::write(&message, "Hello.").unwrap();
-    let message = message.to_str().unwrap();
-
     let error = refused(&fx.cpd(&["session", "fork", WORKER]), "not_a_lead", 3);
     assert_eq!(error["details"]["role"], "worker");
     let error = refused(&fx.cpd(&["session", "fork", MANAGER]), "not_a_lead", 3);
@@ -634,14 +630,29 @@ fn fork_refusals_register_nothing() {
         "invalid_name",
         2,
     );
-    // No tmux server, so no cockpit.
-    let error = refused(
-        &fx.cpd(&["session", "fork", LEAD1, "--message-file", message]),
-        "no_cockpit",
-        3,
-    );
-    assert_eq!(error["details"]["next"], "cpd watch");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions"), 4);
+}
+
+#[test]
+fn fork_creates_a_missing_cockpit() {
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    let out = fx.cpd(&["session", "fork", LEAD1]).ok();
+    assert_eq!(out["session"]["forked_from"], LEAD1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions"), 5);
+    let calls = fx.calls("tmux");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "new-session"))
+    );
+    let state = fx.tmux_state().expect("created cockpit");
+    assert!(
+        state
+            .panes()
+            .iter()
+            .any(|p| p.id == out["session"]["pane"].as_str().unwrap())
+    );
 }
 
 #[test]

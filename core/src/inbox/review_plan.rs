@@ -154,27 +154,43 @@ pub(crate) fn finish_approved(
     store: &mut crate::store::Store,
     lookup: &super::team::Lookup,
 ) -> Result<(), crate::error::CpdError> {
+    let unfinished: std::collections::HashSet<String> = store.read(|c| {
+        let mut stmt = c.prepare("SELECT id FROM plans WHERE phase != 'done'")?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    })?;
     let plans: Vec<_> = open_plan_refs(store)?
         .into_iter()
-        .filter(|(_, repo, number)| {
-            lookup
-                .workflows
-                .get(&(repo.clone(), *number))
-                .and_then(Option::as_ref)
-                .is_some_and(|pr| {
-                    pr.state == super::team::GhState::Open && approved(pr, &lookup.me)
-                })
+        .filter(|(id, repo, number)| {
+            unfinished.contains(id.as_str())
+                && lookup
+                    .workflows
+                    .get(&(repo.clone(), *number))
+                    .and_then(Option::as_ref)
+                    .is_some_and(|pr| {
+                        pr.state == super::team::GhState::Open && approved(pr, &lookup.me)
+                    })
         })
         .map(|(id, _, _)| id)
         .collect();
-    if !plans.is_empty() {
-        store.write("review approved", |tx| {
-            plans
-                .iter()
-                .try_for_each(|id| crate::pr::review::finish_plan(tx, id))
-        })?;
+    let mut failures = Vec::new();
+    for id in plans {
+        if let Err(error) = store.write("review approved", |tx| {
+            crate::pr::review::finish_plan(tx, &id)
+        }) {
+            failures.push(serde_json::json!({"plan": id.as_str(), "error": error}));
+        }
     }
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::error::CpdError::new(
+            crate::error::ErrorCode::Internal,
+            "Review approval completion failed for one or more Plans.",
+        )
+        .with("failures", failures))
+    }
 }
 
 /// Finishes every open (phase `grounding`, unarchived) `codereview` Plan whose `pr_subject` names a pull request that

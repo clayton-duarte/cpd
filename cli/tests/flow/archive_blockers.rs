@@ -34,6 +34,7 @@ fn world(fx: &Fx, phase: &str, workflow: &str, job: &str) {
 /// Context `ctx` and the Plan `pay` in `phase` with its Lead, and nothing else.
 fn seed_plan(fx: &Fx, phase: &str) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])

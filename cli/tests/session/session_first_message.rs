@@ -18,6 +18,7 @@ fn config(env: &TestEnv) {
 fn first_message_of_a_lead_holds_header_brief_and_pointer() {
     let fx = Fx::with_ports();
     config(&fx.env);
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
@@ -74,13 +75,13 @@ fn first_message_of_a_lead_holds_header_brief_and_pointer() {
 fn first_message_of_a_manager_holds_header_and_pointer() {
     let fx = Fx::with_ports();
     config(&fx.env);
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
     .ok();
     fx.cpd(&["context", "note", "Mind the ledger.", "--context", "ctx"])
         .ok();
-    fx.cockpit();
     let out = fx
         .cpd(&["context", "manager", "--context", "ctx", "--by-user"])
         .ok();

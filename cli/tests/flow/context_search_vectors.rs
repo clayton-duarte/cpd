@@ -19,8 +19,12 @@ const DIMS: usize = 768;
 /// Machine `hs`, pi installed (so the embedder resolves), Context `building-cpd`.
 fn fx() -> Fx {
     let fx = Fx::with_ports();
-    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
     fx.install_pi();
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",

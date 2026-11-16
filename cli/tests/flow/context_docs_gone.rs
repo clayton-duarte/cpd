@@ -3,8 +3,6 @@
 
 use crate::common;
 
-use std::fs;
-
 use common::fx::Fx;
 use common::refused;
 use cpd_core::error::ErrorCode;
@@ -16,13 +14,12 @@ const COL: &str = concat!("pro", "posed_at");
 
 /// A machine `hs` with Context `building-cpd` holding notes hs-n1 and hs-n2.
 fn fx() -> Fx {
-    let fx = Fx::new();
-    fs::create_dir_all(fx.env.cpd_home()).unwrap();
-    fs::write(
-        fx.env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\n",
-    )
-    .unwrap();
+    let fx = Fx::with_ports();
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",

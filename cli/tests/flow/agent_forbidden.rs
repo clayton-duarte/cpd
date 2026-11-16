@@ -13,6 +13,7 @@ type Vars<'a> = &'a [(&'a str, &'a str)];
 /// Context `ctx` with Plan `pay` (and its Lead).
 fn world() -> (Fx, String) {
     let fx = Fx::with_ports();
+    fx.cockpit();
     fx.env.write_tmux_config("");
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
