@@ -21,6 +21,7 @@ export interface DurableFacts {
   model?: string;
   thinking?: string | null;
   busy: boolean;
+  compacting: boolean;
   costUsd: number;
   lastContextTokens?: number;
   queued: { id: number; mode: string }[];
@@ -52,6 +53,7 @@ export interface DialectOutput {
   update: TranscriptItem[];
   deltas: { itemId: string; blockIndex: number; blockType: "text" | "thinking"; text: string }[];
   busy?: boolean;
+  compacting?: boolean;
   queued?: { id: number; mode: string }[];
   agent?: { model?: string; thinking?: string | null };
   replaced?: boolean;
@@ -326,7 +328,7 @@ function createViewDialect(): ViewDialect {
   const replica = createReplica();
   let view: View | null = null;
   let items: TranscriptItem[] = [];
-  let facts: DurableFacts = { busy: false, costUsd: 0, queued: [] };
+  let facts: DurableFacts = { busy: false, compacting: false, costUsd: 0, queued: [] };
   let liveId: string | null = null;
   let liveCount = 0;
   let entryTokens: number | undefined;
@@ -457,6 +459,7 @@ function createViewDialect(): ViewDialect {
     const tokens = streaming ?? entryTokens;
     return {
       busy: liveOf(v).run !== undefined,
+      compacting: liveOf(v).compactions === undefined ? false : arr(liveOf(v).compactions, "compactions").length > 0,
       costUsd: costOf(v),
       queued: queuedOf(v),
       ...(agent.model === undefined ? {} : { model: agent.model }),
@@ -592,6 +595,7 @@ function createViewDialect(): ViewDialect {
       if (replaced || vanished) {
         out.replaced = true;
         out.busy = facts.busy;
+        out.compacting = facts.compacting;
         out.queued = facts.queued;
         out.agent = { ...(facts.model === undefined ? {} : { model: facts.model }), ...(facts.thinking === undefined ? {} : { thinking: facts.thinking }) };
         return out;
@@ -613,6 +617,7 @@ function createViewDialect(): ViewDialect {
       const updated = new Set(out.update.map((i) => i.id));
       out.deltas = deltas.filter((d) => !appended.has(d.itemId) && !updated.has(d.itemId));
       if (facts.busy !== prevFacts.busy) out.busy = facts.busy;
+      if (facts.compacting !== prevFacts.compacting) out.compacting = facts.compacting;
       if (!same(facts.queued, prevFacts.queued)) out.queued = facts.queued;
       if (facts.model !== prevFacts.model || facts.thinking !== prevFacts.thinking) {
         out.agent = { ...(facts.model === undefined ? {} : { model: facts.model }), ...(facts.thinking === undefined ? {} : { thinking: facts.thinking }) };
@@ -641,13 +646,15 @@ type EventsLive = { id: string; created: boolean; blocks: Map<number, number>; t
 
 function createEventsDialect(): Dialect {
   const items: TranscriptItem[] = [];
-  const facts: DurableFacts = { busy: false, costUsd: 0, queued: [] };
+  const facts: DurableFacts = { busy: false, compacting: false, costUsd: 0, queued: [] };
   const transcript: DurableTranscript = { items, facts, before: undefined };
   const index = new Map<string, number>(); // item id -> position in items
   const alias = new Map<string, string>(); // `a:<entry id>` -> live id
   const costed = new Set<string>();
   let live: EventsLive | null = null;
   let liveCount = 0;
+  const compactions = new Set<number>();
+  let failureId: string | undefined;
 
   type Out = DialectOutput;
   const newOut = (): Out => ({ append: [], update: [], deltas: [] });
@@ -662,6 +669,24 @@ function createEventsDialect(): Dialect {
       items[at] = item;
       out.update.push(item);
     }
+  };
+  const clearFailure = (out: Out): void => {
+    if (failureId === undefined) return;
+    const at = index.get(failureId);
+    if (at !== undefined) {
+      items.splice(at, 1);
+      index.clear();
+      items.forEach((item, i) => index.set(item.id, i));
+      out.replaced = true;
+    }
+    failureId = undefined;
+  };
+  const putFailure = (raw: unknown, out: Out): void => {
+    const failure = obj(raw, "compaction failure");
+    const id = `cf:${num(failure.taskId, "compaction taskId")}`;
+    if (failureId !== id) clearFailure(out);
+    failureId = id;
+    put({ kind: "fold", id, foldKind: "cpd", title: `Compaction failed (${str(failure.reason, "compaction reason")})`, body: str(failure.error, "compaction error"), defaultOpen: true }, out);
   };
   const get = (id: string): TranscriptItem | undefined => {
     const at = index.get(id);
@@ -760,6 +785,7 @@ function createEventsDialect(): Dialect {
         put({ kind: "orphanResult", id: `orphan:${callId}`, callId, name: str(message.toolName, "toolName"), result }, out);
       }
     } else if (kind === "pi.compaction") {
+      clearFailure(out);
       const message = obj(arr(entry.model, "compaction model")[0], "compaction model[0]");
       put({ kind: "compaction", id: `c:${entryId}`, ...isoOf(message), summary: textOf(message.content) }, out);
     } else if (kind === "cpd-skills" && Array.isArray(entry.model) && entry.model.length === 0) {
@@ -818,11 +844,16 @@ function createEventsDialect(): Dialect {
     index.clear();
     alias.clear();
     costed.clear();
+    compactions.clear();
+    for (const raw of arr(snap.compactions ?? [], "snapshot.compactions")) compactions.add(num(obj(raw, "compaction").taskId, "compaction taskId"));
+    facts.compacting = compactions.size > 0;
+    failureId = undefined;
     live = null;
     facts.costUsd = 0;
     delete facts.lastContextTokens;
     const sink = newOut();
     for (const e of entries) ingest(e, sink);
+    if (snap.compactionFailure !== undefined) putFailure(snap.compactionFailure, sink);
     facts.queued = queued;
     setAgent(agent);
     facts.busy = snap.run !== undefined;
@@ -908,7 +939,7 @@ function createEventsDialect(): Dialect {
     }
   };
 
-  const NO_OUTPUT = new Set(["turn_start", "turn_end", "submission", "auto_retry_start", "auto_retry_end", "deferred_poll", "task_failed", "compaction_start", "compaction_end", "tool_execution_update", "usage_changed"]);
+  const NO_OUTPUT = new Set(["turn_start", "turn_end", "submission", "auto_retry_start", "auto_retry_end", "deferred_poll", "task_failed", "tool_execution_update", "usage_changed"]);
 
   const applyEvent = (raw: unknown, out: Out): void => {
     const event = obj(raw, "event");
@@ -920,8 +951,20 @@ function createEventsDialect(): Dialect {
         out.queued = r.queued;
         out.agent = r.agent;
         out.busy = r.busy;
+        out.compacting = facts.compacting;
         return;
       }
+      case "compaction_start":
+        compactions.add(num(event.taskId, "compaction taskId"));
+        facts.compacting = compactions.size > 0;
+        out.compacting = facts.compacting;
+        return;
+      case "compaction_end":
+        compactions.delete(num(event.taskId, "compaction taskId"));
+        facts.compacting = compactions.size > 0;
+        out.compacting = facts.compacting;
+        if (event.error !== undefined) putFailure(event, out);
+        return;
       case "run_start":
         facts.busy = true;
         out.busy = true;

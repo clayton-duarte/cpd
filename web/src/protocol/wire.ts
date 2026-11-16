@@ -53,7 +53,7 @@ export type ServerMessage =
   | { type: "session.update"; sessionId: string; items: TranscriptItem[] } // full replacement of existing items by id
   | { type: "session.remove"; sessionId: string; itemId: string } // drops the item with that id; an unknown id is a no-op
   | { type: "session.delta"; sessionId: string; itemId: string; blockIndex: number; blockType: "text" | "thinking"; text: string } // text appended to blocks[blockIndex] of an assistant item
-  | { type: "session.status"; sessionId: string; busy: boolean; queued: QueuedSubmission[] }
+  | { type: "session.status"; sessionId: string; busy: boolean; compacting?: boolean; queued: QueuedSubmission[] }
   | { type: "session.submitAck"; sessionId: string; clientSubmissionId: string; queued: boolean; submissionId?: number }
   | { type: "session.footer"; sessionId: string; footer: FooterStats }
   | { type: "session.title"; sessionId: string; title: string | null }

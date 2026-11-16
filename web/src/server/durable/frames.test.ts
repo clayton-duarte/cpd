@@ -434,3 +434,70 @@ for (const protocol of [1, 2] as const) {
  expect(loaded.transcript.items.map(i => i.id)).toEqual(["u:2"]);
  });
 }
+
+
+it("projects compaction lifecycle without losing completion or failure", () => {
+  const completed = entry(1, "pi.compaction", { role: "user", content: [{ type: "text", text: "Earlier summary" }], timestamp: 1 });
+  const a = createDialect(1);
+  const b = createDialect(1);
+  a.applyBase(view([completed]));
+  b.applyBase(view([]));
+  const active = { taskId: 5, trigger: "manual", blocking: false, attempt: 1 };
+  const start = a.applyIncrement({ ops: [["s", [...LIVE, "compactions"], [active]]] });
+  expect(start).toMatchObject({ compacting: true });
+  expect(a.transcript.facts).toMatchObject({ compacting: true });
+  expect(b.transcript.facts).toMatchObject({ compacting: false });
+  expect(a.transcript.items).toMatchObject([{ kind: "compaction", summary: "Earlier summary" }]);
+  expect(a.transcript.items.some((item) => item.kind === "tool")).toBe(false);
+  const end = a.applyIncrement({ ops: [["d", [...LIVE, "compactions"]]] });
+  expect(end).toMatchObject({ compacting: false });
+  expect(a.transcript.items).toMatchObject([{ kind: "compaction", summary: "Earlier summary" }]);
+  a.applyIncrement({ ops: [["s", [...LIVE, "compactions"], [active]]] });
+  const failed = a.applyIncrement({ ops: [["d", [...LIVE, "compactions"]], ["s", [...LIVE, "compactionFailure"], { taskId: 5, trigger: "manual", error: "boom" }]] });
+  expect(failed).toMatchObject({ compacting: false });
+  expect(a.transcript.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "compaction", summary: "Earlier summary" }),
+    expect.objectContaining({ kind: "fold", title: "Compaction failed (manual)", body: "boom" }),
+  ]));
+  expect(b.transcript.facts).toMatchObject({ compacting: false });
+});
+
+describe("protocol 1 snapshot and events compaction", () => {
+  const completed = entry(1, "pi.compaction", { role: "user", content: "Earlier summary", timestamp: 1 });
+  const active = { taskId: 5, reason: "manual", blocking: false, attempt: 1 };
+  const snapshot = (compactions: Obj[] = [], extra: Obj = {}) => ({
+    snapshot: { type: "snapshot", entries: [completed], tools: [], nestedTools: [], compactions, inbox: [], agent: {}, usage: { models: {}, tools: {} }, ...extra },
+  });
+  const start = (taskId: number) => ({ type: "compaction_start", taskId, reason: "manual", blocking: false });
+  const end = (taskId: number, error?: string) => ({ type: "compaction_end", taskId, reason: "manual", ...(error === undefined ? {} : { error }) });
+
+  it("restores active work and failure from a snapshot, including replacement snapshots", () => {
+    const d = createDialect(1);
+    expect(d.applyBase(snapshot([active], { compactionFailure: { taskId: 4, reason: "overflow", error: "failed" } })).transcript.facts.compacting).toBe(true);
+    expect(d.transcript.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "compaction", summary: "Earlier summary" }),
+      expect.objectContaining({ kind: "fold", title: "Compaction failed (overflow)", body: "failed" }),
+    ]));
+    const replacement = d.applyIncrement({ events: [snapshot().snapshot] });
+    expect(replacement).toMatchObject({ replaced: true, compacting: false });
+    expect(d.transcript.facts.compacting).toBe(false);
+  });
+
+  it("tracks concurrent starts and ends per session, retaining history and failure", () => {
+    const a = createDialect(1);
+    const b = createDialect(1);
+    a.applyBase(snapshot());
+    b.applyBase(snapshot());
+    expect(a.applyIncrement({ events: [start(5), start(6)] })).toMatchObject({ compacting: true });
+    expect(b.transcript.facts.compacting).toBe(false);
+    a.applyIncrement({ events: [end(5)] });
+    expect(a.transcript.facts.compacting).toBe(true);
+    expect(a.applyIncrement({ events: [end(6, "boom")] })).toMatchObject({ compacting: false });
+    expect(a.transcript.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "compaction", summary: "Earlier summary" }),
+      expect.objectContaining({ kind: "fold", title: "Compaction failed (manual)", body: "boom" }),
+    ]));
+    expect(a.transcript.items.some((item) => item.kind === "tool")).toBe(false);
+    expect(b.transcript.facts.compacting).toBe(false);
+  });
+});

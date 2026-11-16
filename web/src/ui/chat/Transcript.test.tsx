@@ -5,6 +5,8 @@ import type { ToolItem, TranscriptItem } from "../../protocol/domain.ts";
 import type { PendingSubmission } from "../../state/store.ts";
 import { mount } from "../../testing/render.tsx";
 import { Transcript } from "./Transcript.tsx";
+import { createDialect } from "../../server/durable/frames.ts";
+import { initialState, reduce } from "../../state/store.ts";
 
 const stateOf = (el: Element): string | null =>
   (el.matches('[data-slot="trace-collapsible"]') ? el : el.querySelector('[data-slot="trace-collapsible"]'))?.getAttribute("data-state") ?? el.getAttribute("data-state");
@@ -178,4 +180,39 @@ it("a lone tool run is a collapsed chain with one step", () => {
   expect(chain.querySelector('[data-part="meta"]')?.textContent).toContain("1 step");
   expect(m.container.querySelector('[data-kind="tool"]')).toBeNull();
   m.unmount();
+});
+
+
+it("shows compaction feedback only during the actual lifecycle", () => {
+  const completed: TranscriptItem = { kind: "compaction", id: "c1", summary: "Earlier summary" };
+  const failure: TranscriptItem = { kind: "fold", id: "cf:5", foldKind: "cpd", title: "Compaction failed (manual)", body: "boom", defaultOpen: true };
+  const dialect = createDialect(1);
+  dialect.applyBase({ view: { conversation: "root", entries: [], docs: { "pi.agent": {}, "pi.live": {}, "pi.inbox": { items: [] }, "pi.provider": {}, "pi.usage": { models: {}, tools: {} } } } });
+  let state = reduce(initialState, { type: "selectSession", sessionId: "a" });
+  const send = (sessionId: string, compacting: boolean | undefined) => {
+    const message = { type: "session.status" as const, sessionId, busy: false, queued: [], compacting };
+    state = reduce(state, { type: "server", message });
+  };
+  const render = (items: TranscriptItem[]) => mount(<Transcript {...base} {...{ compacting: (state.session as unknown as { compacting?: boolean })?.compacting }} items={items} />);
+  send("b", true);
+  const idle = render([completed]);
+  try { expect(idle.container.textContent).not.toContain("Compacting"); } finally { idle.unmount(); }
+  const start = dialect.applyIncrement({ ops: [["s", ["docs", "pi.live", "compactions"], [{ taskId: 5, trigger: "manual", blocking: false, attempt: 1 }]]] });
+  send("a", (start as unknown as { compacting?: boolean }).compacting);
+  const active = render([completed]);
+  try {
+    expect(active.container.textContent).toContain("Compacting");
+    expect(active.container.textContent).not.toMatch(/\d+\s*%/);
+    expect(active.container.querySelector('[role="progressbar"][aria-valuenow]')).toBeNull();
+    expect(active.container.querySelector('[data-kind="tool"]')).toBeNull();
+    expect(active.container.querySelector('[data-kind="compaction"]')).not.toBeNull();
+  } finally { active.unmount(); }
+  const end = dialect.applyIncrement({ ops: [["d", ["docs", "pi.live", "compactions"]], ["s", ["docs", "pi.live", "compactionFailure"], { taskId: 5, trigger: "manual", error: "boom" }]] });
+  send("a", (end as unknown as { compacting?: boolean }).compacting);
+  const ended = render([completed, failure]);
+  try {
+    expect(ended.container.textContent).not.toContain("Compacting");
+    expect(ended.container.textContent).toContain("Compaction failed (manual)");
+    expect(ended.container.querySelector('[data-kind="compaction"]')).not.toBeNull();
+  } finally { ended.unmount(); }
 });
