@@ -6,7 +6,7 @@
 
 use super::engine::Engine;
 use super::report::{About, Step};
-use super::sleep::{LEAD_FINISHED, PLAN_FINISHED};
+use super::sleep::{LEAD_FINISHED, LEAD_NOTHING_OPEN, PLAN_FINISHED};
 use cpd_core::clock::timestamp;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::ids::{PlanId, SessionId};
@@ -46,6 +46,13 @@ pub(super) fn run(engine: &mut Engine) {
         }
         Err(e) => return engine.fail(Step::E14, About::Machine, &e),
     };
+    let mut plans = plans;
+    match review_ready(engine) {
+        Ok(review_plans) => plans.extend(review_plans),
+        Err(e) => engine.fail(Step::E14, About::Machine, &e),
+    }
+    plans.sort();
+    plans.dedup();
     let mut archived = 0usize;
     for plan in plans {
         match archive_plan(engine, &plan) {
@@ -62,6 +69,60 @@ pub(super) fn run(engine: &mut Engine) {
             .log
             .line(&format!("archive-asleep: archived {archived} Plan(s)"));
     }
+}
+
+/// Closed reviewed pull requests bypass only the sleep and archive delays.
+fn review_ready(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
+    let candidates: Vec<(String, String)> = engine.store.read(|conn| {
+        let sql = format!("SELECT p.id, p.pr_subject FROM plans p JOIN sessions s ON s.id = p.lead_session
+            WHERE p.context = 'codereview' AND p.archived_at IS NULL AND p.deleted_at IS NULL
+              AND p.pr_subject IS NOT NULL AND s.archived_at IS NULL AND s.state IN ('idle', 'stopped')
+              {LEAD_NOTHING_OPEN} ORDER BY p.id");
+        let mut stmt = conn.prepare(&sql)?;
+        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    })?;
+    let mut ready = Vec::new();
+    for (id, subject) in candidates {
+        let Some((repo, number)) = subject.strip_prefix("pr:").and_then(|s| s.rsplit_once('#'))
+        else {
+            continue;
+        };
+        let Ok(number) = number.parse::<i64>() else {
+            continue;
+        };
+        let Some(pr) = cpd_core::swr::github::effective_pr(&mut engine.store, repo, number)? else {
+            continue;
+        };
+        if !matches!(pr.state.as_str(), "closed" | "merged") {
+            continue;
+        }
+        let plan = PlanId::parse(&id)?;
+        let objects = engine.store.read(|conn| Objects::of_plan(conn, &plan))?;
+        if !engine
+            .store
+            .read(|conn| {
+                cpd_core::session::archive_blockers(conn, &objects.sessions, &objects.plans)
+            })?
+            .is_empty()
+        {
+            continue;
+        }
+        match archive::refuse_chat_slot(
+            &mut engine.store,
+            &engine.tmux,
+            &engine.config.tmux.cockpit_session,
+            &objects.sessions,
+        ) {
+            Ok(()) => {}
+            Err(e) if e.code() == ErrorCode::InChatSlot => continue,
+            Err(e) => return Err(e),
+        }
+        engine.store.write("review PR closed", |tx| {
+            cpd_core::pr::review::finish_plan(tx, &plan)
+        })?;
+        ready.push(plan);
+    }
+    Ok(ready)
 }
 
 /// Stops the hosts of the Plan's durable Lead Sessions (contract §6.19; E14 archives their Plan).

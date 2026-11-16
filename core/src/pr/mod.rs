@@ -843,3 +843,6 @@ fn refusal(
 fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
+
+#[cfg(test)]
+mod review_autoarchive_tests;

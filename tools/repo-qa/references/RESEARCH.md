@@ -145,3 +145,16 @@ No date library or external scheduler is needed. UTC timestamp arithmetic avoids
 weekday and DST assumptions; keep legacy calendar/fixed modes for other consumers.
 Tests cover exact boundaries, arbitrary reset weekdays, DST, account refusals,
 freshness, reset rollover, old-run rejection and pre-write revalidation.
+
+## Standing scheduled authorization (2026-11-16)
+
+The User corrected the weekly approval requirement for a recurring scheduled
+operator: an authorized cron trigger and available live allowance are sufficient.
+Opt-in `standing_authorization` records that decision without changing other
+adopters' default descriptor-bound authority. Reset changes still abort an
+in-flight operation; fresh subsequent reads can proceed without manual weekly
+approval. Optional run caps/counts remain immutable and never reset at rollover.
+One-shot telemetry already discovers each current official window without
+extracting credentials or requiring another login. Continuous readers still
+stop safely at rollover and may be restarted under standing authority.
+No generic scheduler or new dependency is needed; scheduling belongs to adopters.

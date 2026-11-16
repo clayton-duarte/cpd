@@ -676,3 +676,88 @@ test("reset pacing refuses a reset change during pagination", () => {
   assert.throws(() => guard.status(() => { reset = "2026-11-23T01:00:00Z"; return []; },
     undefined, null, { ...weeklyRun, started_at: at }), /Weekly window changed/);
 });
+
+test("standing authorization permits fresh-window creation without weekly approval or a descriptor", () => {
+  for (const at of ["2026-11-19T12:00:00Z", "2026-11-26T12:00:00Z"]) {
+    const reset = new Date(Date.parse(at) + 302400000).toISOString();
+    const guard = createGuard({ ...fixture, limits: null, weekly_allowance: resetPolicy,
+      standing_authorization: "Recorded User approval of recurring scheduled QA" }, {
+      clock: () => new Date(at), readUsage: () => pacedSample(at, 75, reset),
+    });
+    const state = guard.status(() => []);
+    assert.equal(state.run_required, false);
+    assert.equal(state.can_create_issue, true);
+    assert.equal(state.weekly_allowance.min_remaining_percent, 50);
+    assert.ok(state.standing_authorization);
+    let posts = 0;
+    const result = guard.run(["issue", REPOS[0], "finding", "body"], (args, payload) => {
+      if (args.includes("POST")) {
+        posts++;
+        assert.ok(payload.body.includes(MARKER));
+      }
+      return [];
+    }, () => "Evidence");
+    assert.equal(result.exit, 0);
+    assert.equal(posts, 1);
+  }
+});
+
+test("standing authorization preserves old run attribution and finite caps instead of resetting them", () => {
+  const at = "2026-11-26T12:00:00Z";
+  const guard = createGuard({ ...fixture, limits: null, weekly_allowance: resetPolicy,
+    standing_authorization: "Recorded recurring authority" }, {
+    clock: () => new Date(at), readUsage: () => pacedSample(at, 75, "2026-11-30T00:00:00Z"),
+  });
+  const descriptor = { ...weeklyRun, started_at: "2026-11-13T12:00:00Z", limits: { issues: 1, prs: 1 } };
+  const old = { number: 1, created_at: "2026-11-13T13:00:00Z",
+    body: `${MARKER}\n<!-- sample-qa-run:${descriptor.id} -->` };
+  const state = guard.status(() => [old], undefined, null, descriptor);
+  assert.equal(state.run.id, descriptor.id);
+  assert.equal(state.run.started_at, descriptor.started_at);
+  assert.equal(state.can_create_issue, false);
+  assert.equal(state.remaining.issues, 0);
+});
+
+test("standing authorization never bypasses fresh telemetry, reserve or account controls", () => {
+  const at = "2026-11-19T12:00:00Z", reset = "2026-11-23T00:00:00Z";
+  for (const change of [
+    { remaining_percent: 50 }, { ordinary_usage_allowed: false }, { spend_control_reached: true },
+    { sampled_at: "2026-11-19T11:58:59Z" }, { resets_at: at },
+  ]) {
+    const guard = createGuard({ ...fixture, limits: null, weekly_allowance: resetPolicy,
+      standing_authorization: "Recorded recurring authority" }, {
+      clock: () => new Date(at), readUsage: () => ({ ...pacedSample(at, 75, reset), ...change }),
+    });
+    let posts = 0;
+    try {
+      const result = guard.run(["pr", REPOS[0], "qa/fix", "title", "body"], (args) => {
+        if (args.includes("POST")) posts++;
+        return [];
+      }, () => "Evidence");
+      assert.equal(result.exit, 3);
+    } catch (error) {
+      assert.match(error.message, /weekly allowance.*(invalid|stale|reset)/i);
+    }
+    assert.equal(posts, 0);
+  }
+  for (const value of ["", " ", false, null, {}]) {
+    assert.throws(() => validateConfig({ ...fixture, weekly_allowance: resetPolicy, standing_authorization: value }),
+      /Standing authorization/);
+  }
+  assert.throws(() => validateConfig({ ...fixture, standing_authorization: "No live policy" }), /Standing authorization/);
+});
+
+test("standing authorization still refuses a window change during a write operation", () => {
+  const at = "2026-11-19T12:00:00Z";
+  let reset = "2026-11-23T00:00:00Z", posts = 0;
+  const guard = createGuard({ ...fixture, limits: null, weekly_allowance: resetPolicy,
+    standing_authorization: "Recorded recurring authority" }, {
+    clock: () => new Date(at), readUsage: () => pacedSample(at, 100, reset),
+  });
+  assert.throws(() => guard.run(["issue", REPOS[0], "finding", "body"], (args) => {
+    if (args.includes("POST")) posts++;
+    reset = "2026-11-23T01:00:00Z";
+    return [];
+  }, () => "Evidence"), /Weekly window changed/);
+  assert.equal(posts, 0);
+});
