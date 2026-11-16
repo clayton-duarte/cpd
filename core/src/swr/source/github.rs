@@ -261,7 +261,19 @@ impl GithubSource {
                 .collect::<Result<BTreeSet<_>, _>>()?;
             Ok(rows)
         })?;
-        for key in first_seen {
+        let mut review_keys = Vec::new();
+        for (_, repo, number) in crate::inbox::review_plan::open_plan_refs(cx.store)? {
+            let Ok(number) = i64::try_from(number) else {
+                continue;
+            };
+            let ended: bool = cx.store.read(|c| Ok(c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pull_requests WHERE repo = ?1 AND number = ?2 AND (state != 'open' OR archived != 0))",
+                rusqlite::params![repo, number], |r| r.get(0))?))?;
+            if !ended {
+                review_keys.push((repo, number));
+            }
+        }
+        for key in first_seen.into_iter().chain(review_keys) {
             if !absent.iter().any(|(_, _, _, k)| *k == key)
                 && !heavy.contains(&key)
                 && !tombstoned.contains(&key.0)

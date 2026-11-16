@@ -117,10 +117,12 @@ fn review_ready(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
             Err(e) if e.code() == ErrorCode::InChatSlot => continue,
             Err(e) => return Err(e),
         }
-        engine.store.write("review PR closed", |tx| {
+        match engine.store.write("review PR closed", |tx| {
             cpd_core::pr::review::finish_plan(tx, &plan)
-        })?;
-        ready.push(plan);
+        }) {
+            Ok(()) => ready.push(plan),
+            Err(e) => engine.fail(Step::E14, About::Plan(plan), &e),
+        }
     }
     Ok(ready)
 }
