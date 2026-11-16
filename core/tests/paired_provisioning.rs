@@ -222,6 +222,11 @@ fn paired_future_context_creation() {
             .clone()
             .on(
                 "tmux",
+                |call| call.args.iter().any(|arg| arg == "list-sessions"),
+                Reply::ok("$1\n"),
+            )
+            .on(
+                "tmux",
                 |call| call.args.iter().any(|arg| arg == "has-session"),
                 Reply::ok(""),
             )
@@ -235,9 +240,12 @@ fn paired_future_context_creation() {
                 |call| call.args.iter().any(|arg| arg == "new-window"),
                 Reply::exit(1, "", "injected tmux failure"),
             );
+        let error = f
+            .context(CONTEXT_ARGS)
+            .expect_err("fake tmux failure must be reported");
         assert!(
-            f.context(CONTEXT_ARGS).is_err(),
-            "fake tmux failure must be reported"
+            error.to_string().contains("injected tmux failure"),
+            "unexpected provisioning error: {error:?}"
         );
         let manager = f.manager();
         assert_eq!(

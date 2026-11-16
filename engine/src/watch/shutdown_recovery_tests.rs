@@ -6,19 +6,43 @@
 use std::sync::Arc;
 
 use cpd_core::clock::ManualClock;
-use cpd_core::host::runner::FakeRunner;
+use cpd_core::fakes::tmux::TmuxRoute;
+use cpd_core::host::runner::{Call, FakeRunner, Handler, Reply};
 use cpd_core::host::spawn::FakeSpawn;
 use cpd_core::ports::Ports;
 
 use super::liveness;
 use super::testkit::Fx;
 
+/// Give every fake tmux call the fixture's own directory, including calls made by session startup.
+struct IsolatedTmux {
+    route: TmuxRoute,
+    tmpdir: String,
+}
+
+impl Handler for IsolatedTmux {
+    fn handle(&self, call: &Call) -> Reply {
+        let mut call = call.clone();
+        call.envs.retain(|(key, _)| key != "TMUX_TMPDIR");
+        call.envs
+            .push(("TMUX_TMPDIR".into(), Some(self.tmpdir.clone())));
+        self.route.handle(&call)
+    }
+}
+
 /// Plan `pay` (`dispatch`) with Lead `lead1` and Manager `mgr1`, both `stopped`, `pi`, with no pane; the fake tmux has a server
 /// with the cockpit session `cpd`, and lists no pane `%99`.
 fn fx() -> (Fx, FakeRunner) {
     let mut fx = Fx::with_plan("");
-    let runner = fx.on_fake_tmux();
-    unsafe { std::env::set_var("TMUX_TMPDIR", fx.engine.home.root()) };
+    let runner = FakeRunner::new(ManualClock::new());
+    let route = TmuxRoute::new().with_runner(runner.weak());
+    let runner = runner.route(
+        "tmux",
+        Arc::new(IsolatedTmux {
+            route,
+            tmpdir: fx.engine.home.root().display().to_string(),
+        }),
+    );
     fx.engine.tmux = cpd_core::host::Tmux::new(fx.engine.config.tmux.socket.clone())
         .with_runner(Arc::new(runner.clone()));
     fx.tmux_server();
@@ -109,4 +133,51 @@ fn a_stopped_lead_of_a_done_plan_is_not_restarted() {
     );
     liveness::run(&mut fx.engine);
     assert_eq!(new_windows(&runner), 0);
+}
+
+#[test]
+fn missing_cockpit_restarts_lead_with_vanished_pane() {
+    let (mut fx, _runner) = fx();
+    fx.engine
+        .tmux
+        .run(&["kill-session", "-t", "=cpd"].map(str::to_owned))
+        .unwrap();
+    vanished(&mut fx, "lead1");
+    assert!(!fx.engine.tmux.has_session("cpd").unwrap());
+    assert!(
+        fx.engine
+            .tmux
+            .list_panes()
+            .unwrap()
+            .iter()
+            .all(|p| p.pane.as_str() != "%99")
+    );
+
+    liveness::run(&mut fx.engine);
+
+    assert!(
+        fx.engine.tmux.has_session("cpd").unwrap(),
+        "liveness recreates the missing cockpit"
+    );
+    let recorded: Option<String> = fx.query("SELECT tmux_pane FROM sessions WHERE id = 'lead1'");
+    let recorded = recorded.expect("the same Lead has a new recorded pane");
+    assert_ne!(recorded, "%99");
+    let panes = fx.engine.tmux.list_panes().unwrap();
+    let pane = panes
+        .iter()
+        .find(|p| p.pane.as_str() == recorded)
+        .expect("recorded pane exists");
+    assert!(!pane.dead, "the parked pane is live");
+    assert_eq!(pane.session_name, "cpd");
+    assert!(pane.window_name.starts_with("park-"));
+    assert_eq!(
+        pane.cpd_session.as_ref().map(|id| id.as_str()),
+        Some("lead1")
+    );
+    assert!(
+        fx.events("session-moved")
+            .iter()
+            .any(|e| e.3["place"] == "parked")
+    );
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
 }

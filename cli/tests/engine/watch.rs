@@ -1902,8 +1902,8 @@ fn r2_preserves_the_worktree_though_every_kill_window_fails() {
     assert_eq!(fx.attempt("api-a1").1.as_deref(), Some("merged"));
 }
 
-/// A Session whose pane is dead or gone becomes `stopped` with no pane, and
-/// its place `none` (Escalation e2e-a1-q1); a `stopped` Session keeps a live pane.
+/// A dead or gone pane stops its Session before an eligible Lead restarts parked;
+/// a stopped Session with a live pane is left alone.
 #[test]
 fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     let fx = engine_on_tmux();
@@ -1981,16 +1981,13 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     let (states, panes): (Vec<&str>, Vec<Option<&str>>) =
         rows.iter().map(|r| (r.0.as_str(), r.1.as_deref())).unzip();
     assert_eq!(states, ["idle", "stopped", "stopped", "stopped", "stopped"]);
-    assert_eq!(
-        panes,
-        [
-            Some(live.as_str()),
-            None,
-            None,
-            Some(waiting.as_str()),
-            None
-        ]
-    );
+    assert_eq!(panes[0], Some(live.as_str()));
+    assert_eq!(panes[3], Some(waiting.as_str()));
+    for (index, old) in [(1, dead.as_str()), (2, "%999"), (4, "%998")] {
+        let pane = panes[index].expect("eligible Lead restarted");
+        assert_ne!(pane, old);
+        assert_eq!(new(&["list-panes", "-t", pane, "-F", "#{pane_dead}"]), "0");
+    }
     // Already stopped: its state did not change, so neither did state_at.
     assert_eq!(rows[4].2, "t");
     assert_eq!(
@@ -2018,16 +2015,23 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
         )),
         "{events:?}"
     );
-    let moved = fx.events("session-moved");
-    let none = json!({"pane": null, "window": null, "place": "none"});
-    assert_eq!(
-        moved,
-        [
-            (Some("pay".into()), None, None, none.clone()),
-            (None, None, None, none.clone()),
-            (Some("pay".into()), None, None, none)
-        ]
-    );
+    let events = fx.cpd(&["events", "list", "--kind", "session-moved"]).ok();
+    let moved = events["events"].as_array().unwrap();
+    for (index, id) in [(1, "s-dead"), (2, "s-gone"), (4, "s-shut")] {
+        let mine: Vec<_> = moved
+            .iter()
+            .filter(|event| event["session"] == id)
+            .collect();
+        assert_eq!(mine.len(), 2, "{id}: {mine:?}");
+        assert_eq!(
+            mine[0]["data"],
+            json!({"pane": null, "window": null, "place": "none"})
+        );
+        assert_eq!(mine[1]["data"]["place"], "parked");
+        assert_eq!(mine[1]["data"]["pane"], panes[index].unwrap());
+        assert!(mine[1]["data"]["window"].is_string());
+    }
+    assert_eq!(moved.len(), 6, "live panes must not move: {moved:?}");
     let places: Vec<String> = fx.cpd(&["session", "list"]).ok()["sessions"]
         .as_array()
         .unwrap()
@@ -2035,7 +2039,7 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
         .filter(|s| ["s-dead", "s-gone", "s-shut"].contains(&s["id"].as_str().unwrap()))
         .map(|s| s["place"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(places, ["none", "none", "none"]);
+    assert_eq!(places, ["parked", "parked", "parked"]);
 }
 
 /// Finding 4: a pane with a `@cpd_view` this binary does not know (made by a

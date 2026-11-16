@@ -747,6 +747,10 @@ impl Eq for Handle {}
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
+        #[cfg(test)]
+        if let Some((_, tmpdir)) = crate::env::fixture_environment() {
+            return Tmux::with_tmpdir(socket, tmpdir);
+        }
         Tmux {
             socket: socket.into(),
             tmpdir: None,

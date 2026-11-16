@@ -1395,17 +1395,22 @@ The adapter counts blocking reasons, of two kinds, and reports `blocked` while a
 
 **A durable Lead or Manager has no pane by design.** A Session whose `runner` is `durable` and whose role is `lead` or `manager` has no pane and needs none (§2.2). Engine `liveness` leaves it alone: it never marks it `stopped` for a missing pane, never restarts it, never kills a window for it and appends nothing about it (no `session-state`, no `session-moved`, no `session_restart_loop`). Its `state` is written by its host (§6.13, P1.3). A Worker's form is unchanged (§3.4 "The Worker runner and its seam"). `session send` to it starts no pane (commands.md §10.13). `park`, `history` and `fork` refuse it with `durable_session` before any write or tmux call (commands.md §10.3, §10.5, §10.12); `session open` no longer refuses it: it resumes the Session and waits for its host's socket (§6.19, commands.md §10.4); `session close` has no pane to kill and succeeds with `already` true, writing nothing and leaving the host running (§10.9); `session archive` writes `archived_at`, closes no pane and stops the host (§10.10, §6.19). The rest of this paragraph and the next is for every other Session.
 
-**A pane that is gone.** When a Lead or Manager’s pi process exits or its
-recorded pane is dead/missing, record the Session as `stopped` and clear a dead
-pane binding. It remains stopped until the User explicitly resumes it (User,
-2026-11-14); liveness never starts a replacement pi Session. Retain the Session
-identity, transcript and failure/exit evidence. Clean up only confirmed-dead
-panes/windows, and keep the exit status in the engine log when available.
+**A pane that is gone.** When a Lead or Manager's pi process exits or its
+recorded pane is dead/missing, liveness records the Session as `stopped` and
+clears the dead pane binding. Retain the Session identity, transcript and
+failure/exit evidence; clean up only confirmed-dead panes/windows, and keep the
+exit status in the engine log when available.
 
-Only an explicit User action identifying the stopped Session authorizes its
-resume. Context/Manager ensuring, incoming agent messages and background checks
-do not grant that authority. Creating a genuinely new Session and supervising
-an already-awake durable host remain separate operations.
+For an eligible live pi Lead or Manager whose recorded pane has vanished,
+liveness restarts that same Session as a parked pane, even when the cockpit
+tmux session `cpd` is missing. It ensures the tmux server and creates the
+cockpit session with the Session's parked window as its first window (§6.4),
+then starts the existing pi Session; it does not create a replacement Session.
+A missing cockpit session is not a reason to skip this restart. The existing
+restart-loop limit and its stop/report behavior remain in force: reaching that
+limit does not trigger another restart. Liveness does not restart archived or
+asleep Sessions, nor a Lead whose Plan is done. Durable Lead and Manager
+Sessions remain excluded under the durable-session rule above (§6.19).
 
 A stopped marker alone does not prove a pane or pi wrapper is dead. Resume must
 refuse a still-live tagged pane rather than kill or replace it. The selected

@@ -27,6 +27,10 @@ impl Env {
 
     /// [`Env::open`] on `ports`: what a test hands in.
     pub fn open_with(ports: &Ports) -> Result<Env, CpdError> {
+        #[cfg(test)]
+        if let Some((home, _)) = fixture_environment() {
+            return Env::open_home_with(ports, home);
+        }
         Env::open_home_with(ports, CpdHome::from_env()?)
     }
 
@@ -286,4 +290,33 @@ mod tests {
             "these files write the open sequence by hand; use Env::open: {sites:?}"
         );
     }
+}
+
+// Test-only command boundary: nested scopes restore their predecessor even on panic.
+#[cfg(test)]
+thread_local! {
+    static FIXTURE_ENV: std::cell::RefCell<Option<(CpdHome, std::path::PathBuf)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_environment() -> Option<(CpdHome, std::path::PathBuf)> {
+    FIXTURE_ENV.with(|cell| cell.borrow().clone())
+}
+
+#[cfg(test)]
+pub(crate) fn with_fixture_environment<R>(
+    home: &CpdHome,
+    tmpdir: &std::path::Path,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct Restore(Option<(CpdHome, std::path::PathBuf)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FIXTURE_ENV.with(|cell| *cell.borrow_mut() = self.0.take());
+        }
+    }
+    let previous =
+        FIXTURE_ENV.with(|cell| cell.borrow_mut().replace((home.clone(), tmpdir.to_owned())));
+    let _restore = Restore(previous);
+    f()
 }
