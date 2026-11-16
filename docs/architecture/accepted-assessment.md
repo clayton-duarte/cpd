@@ -30,7 +30,7 @@ labels source-reading versus tests not run; it is a design page, not a test
 result ([PR lifecycle scenario](pr-lifecycle-scenario.md#the-nine-transitions)).
 The SWR page describes an architecture for retaining confirmed upstream data,
 serving local reads and settling writes; those details are design, not runtime
-verification ([SWR](swr.md#1-the-rule)). The store-repair page labels its
+verification ([SWR](swr.md#1-the-idea)). The store-repair page labels its
 proposal as not implemented; it must not be cited as established behaviour
 ([store repair](store-repair.md#status)). The implementation guide describes
 where code belongs, not proof that an architecture is required
