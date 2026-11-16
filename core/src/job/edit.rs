@@ -20,6 +20,7 @@ use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::{self, Job};
+use crate::plan::prs::WorkflowRow;
 
 const COMMAND: &str = "job edit";
 
@@ -118,12 +119,13 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     let key = args.key;
 
     let home = env.home.clone();
+    let mut preflight = None;
     let decision = env
         .store
-        .read(|conn| decide(conn, &home, &plan, &key, &edits))?;
+        .read(|conn| decide(conn, &home, &plan, &key, &edits, &mut preflight, false))?;
     let (job, fields, already) = match decision {
         Decision::Already(job) => (job, Vec::new(), true),
-        Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &key, &edits)? {
+        Decision::Update { .. } => env.store.write(COMMAND, |tx| match decide(tx, &home, &plan, &key, &edits, &mut preflight, true)? {
             Decision::Already(job) => Ok((job, Vec::new(), true)),
             Decision::Update { before, after, fields, waiting_on } => {
                 update(tx, &plan, &before, &after, waiting_on.as_deref())?;
@@ -144,12 +146,20 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     Ok(Output::success(out))
 }
 
+struct TouchPreflight {
+    workflows: Vec<WorkflowRow>,
+    workflow: String,
+    locked: bool,
+}
+
 fn decide(
     conn: &Connection,
     home: &CpdHome,
     plan: &PlanId,
     key: &JobKey,
     edits: &Edits,
+    preflight: &mut Option<TouchPreflight>,
+    in_write: bool,
 ) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
     crate::job::replace_test::check_fence(conn, plan, key.as_str())?;
@@ -299,26 +309,43 @@ fn decide(
     let moved = after.workflow != before.workflow;
     if let (false, Some(spec)) = (explore, &edits.spec) {
         let workflows = load_workflows(conn, plan)?;
-        if let Some(workflow) = workflows
-            .iter()
-            .find(|p| p.key.as_str() == after.workflow_str())
-        {
-            // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the Workflow's base.
-            let mut workflow = workflow.clone();
-            let lead_exists = crate::git::run::run(
-                std::path::Path::new(&workflow.repo),
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("{}^{{commit}}", workflow.lead_branch),
-                ],
-            )
-            .is_ok_and(|o| o.code == 0);
-            if locked && !lead_exists {
-                workflow.lead_worktree = None;
+        if in_write {
+            let matches = preflight.as_ref().is_some_and(|p| {
+                p.workflows == workflows && p.workflow == after.workflow_str() && p.locked == locked
+            });
+            if !matches {
+                return Err(CpdError::new(
+                    ErrorCode::StoreFailed,
+                    "The Workflow changed during Job edit preflight; retry the edit.",
+                ));
             }
-            super::add::check_touches(&workflow, &workflows, &spec.touches)?;
+        } else {
+            if let Some(workflow) = workflows
+                .iter()
+                .find(|p| p.key.as_str() == after.workflow_str())
+            {
+                // A missing Lead Branch has no tree yet; a locked Job starts from the base.
+                let mut workflow = workflow.clone();
+                let lead_exists = crate::git::run::run(
+                    std::path::Path::new(&workflow.repo),
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        &format!("{}^{{commit}}", workflow.lead_branch),
+                    ],
+                )
+                .is_ok_and(|o| o.code == 0);
+                if locked && !lead_exists {
+                    workflow.lead_worktree = None;
+                }
+                super::add::check_touches(&workflow, &workflows, &spec.touches)?;
+            }
+            *preflight = Some(TouchPreflight {
+                workflows,
+                workflow: after.workflow_str().to_owned(),
+                locked,
+            });
         }
     }
     if edits.spec.is_some() || moved {
