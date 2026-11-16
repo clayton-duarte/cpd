@@ -93,7 +93,7 @@ Sources consulted 2026-11-16:
 explicit initialization and update semantics;
 [actions/checkout](https://github.com/actions/checkout#checkout-multiple-repos-private)
 documents private secondary-repository authentication and opt-in submodules.
-The current workflows pin checkout v7.0.1 and grant only `contents: read`.
+The current GitHub Actions workflows pin checkout v7.0.1 and grant only `contents: read`.
 
 For this initial migration, merge the skills source PR before the CPD consumer
 PR. The shared tracking issue closes only after both complete; neither partial
