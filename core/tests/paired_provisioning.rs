@@ -441,3 +441,5 @@ fn paired_future_shaping_creation() {
         );
     }
 }
+
+// Regression coverage for archived retry follows.
