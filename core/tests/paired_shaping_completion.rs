@@ -129,8 +129,11 @@ impl Fixture {
         Ports::scope(&self.ports.ports, || cpd_core::job::run(command))
     }
     fn workflow(&self, args: &[&str]) -> Result<Output, CpdError> {
-        let command = WorkflowCli::parse_from(std::iter::once("cpd").chain(args.iter().copied())).command;
-        Ports::scope(&self.ports.ports, || cpd_core::workflow::run_workflow(command))
+        let command =
+            WorkflowCli::parse_from(std::iter::once("cpd").chain(args.iter().copied())).command;
+        Ports::scope(&self.ports.ports, || {
+            cpd_core::workflow::run_workflow(command)
+        })
     }
     fn queued(&self, key: &str) {
         self.sql(&format!("INSERT INTO jobs (plan,workflow,key,title,tier,goal,context,touches,acceptance,out_of_scope,kind,status,appended,fingerprint,created_txn,created_at) VALUES ('fresh',NULL,'{key}','Scout','H3','g','c','[\"a\"]','[\"b\"]','[]','scout','queued',1,'{}',cpd_txn(),'t');", "a".repeat(64)));
@@ -254,25 +257,56 @@ fn paired_shaping_lead_finishes_only_after_all_jobs_are_final_and_can_reopen() {
     f.queued("another");
     f.job(&["cancel", "again", "--plan", "fresh", "--reason", "done"])
         .unwrap();
-    assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='plan' AND done_at IS NULL"), 1);
-    assert_eq!(f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-done'"), 1);
+    assert_eq!(
+        f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='plan' AND done_at IS NULL"),
+        1
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-done'"),
+        1
+    );
     let final_job = ["cancel", "another", "--plan", "fresh", "--reason", "done"];
     f.job(&final_job).unwrap();
     assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='done' AND locked_at IS NULL AND done_at IS NOT NULL"), 1);
-    assert_eq!(f.count("SELECT count(*) FROM jobs WHERE plan='fresh' AND status='cancelled'"), 4);
-    assert_eq!(f.count("SELECT count(*) FROM workflows WHERE plan='fresh'"), 0);
+    assert_eq!(
+        f.count("SELECT count(*) FROM jobs WHERE plan='fresh' AND status='cancelled'"),
+        4
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM workflows WHERE plan='fresh'"),
+        0
+    );
     assert_eq!(f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-done' AND json_extract(data,'$.turn')=0 AND json_array_length(json_extract(data,'$.workflows'))=0"), 2);
     f.job(&final_job).unwrap();
-    assert_eq!(f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-done'"), 2);
+    assert_eq!(
+        f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-done'"),
+        2
+    );
 }
 
 #[test]
 fn lead_promotes_a_shaping_plan_with_a_registered_workflow() {
     let f = Fixture::new();
-    f.plan(&["new", "fresh", "--context", "ctx", "--title", "Fresh", "--shaping"]).unwrap();
-    let lead: String = f.store().read(|c| Ok(c.query_row(
-        "SELECT lead_session FROM plans WHERE id='fresh'", [], |r| r.get(0)
-    )?)).unwrap();
+    f.plan(&[
+        "new",
+        "fresh",
+        "--context",
+        "ctx",
+        "--title",
+        "Fresh",
+        "--shaping",
+    ])
+    .unwrap();
+    let lead: String = f
+        .store()
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT lead_session FROM plans WHERE id='fresh'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
     unsafe { std::env::set_var("CPD_SESSION", &lead) };
     let mut universe = Universe::new(f.ports.clock.clone());
     universe.set_global("user.name", "cpd test");
@@ -284,23 +318,76 @@ fn lead_promotes_a_shaping_plan_with_a_registered_workflow() {
     repo.write("base", "base\n");
     repo.commit("base");
     repo.keyed("repo");
-    f.workflow(&["add", "api", "--plan", "fresh", "--repo", repo.dir().to_str().unwrap(),
-        "--title", "API", "--shape", "config"]).unwrap();
-    assert_eq!(f.count("SELECT count(*) FROM workflows WHERE plan='fresh' AND key='api' AND status='waiting'"), 1);
-    assert_eq!(f.count("SELECT count(*) FROM jobs WHERE plan='fresh' AND workflow='api' AND status='draft'"), 1);
+    f.workflow(&[
+        "add",
+        "api",
+        "--plan",
+        "fresh",
+        "--repo",
+        repo.dir().to_str().unwrap(),
+        "--title",
+        "API",
+        "--shape",
+        "config",
+    ])
+    .unwrap();
+    assert_eq!(
+        f.count(
+            "SELECT count(*) FROM workflows WHERE plan='fresh' AND key='api' AND status='waiting'"
+        ),
+        1
+    );
+    assert_eq!(
+        f.count(
+            "SELECT count(*) FROM jobs WHERE plan='fresh' AND workflow='api' AND status='draft'"
+        ),
+        1
+    );
     unsafe { std::env::set_var("CPD_SESSION", MANAGER) };
-    assert_eq!(f.plan(&["phase", "plan", "--plan", "fresh"]).unwrap_err().code(), ErrorCode::PlanHasLead);
-    assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='shaping'"), 1);
+    assert_eq!(
+        f.plan(&["phase", "plan", "--plan", "fresh"])
+            .unwrap_err()
+            .code(),
+        ErrorCode::PlanHasLead
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='shaping'"),
+        1
+    );
     unsafe { std::env::set_var("CPD_SESSION", &lead) };
     f.queued("pending");
-    assert_eq!(f.plan(&["phase", "plan", "--plan", "fresh"]).unwrap_err().code(), ErrorCode::ExplorePending);
-    f.job(&["cancel", "pending", "--plan", "fresh", "--reason", "done"]).unwrap();
-    assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='shaping' AND done_at IS NULL"), 1);
+    assert_eq!(
+        f.plan(&["phase", "plan", "--plan", "fresh"])
+            .unwrap_err()
+            .code(),
+        ErrorCode::ExplorePending
+    );
+    f.job(&["cancel", "pending", "--plan", "fresh", "--reason", "done"])
+        .unwrap();
+    assert_eq!(
+        f.count(
+            "SELECT count(*) FROM plans WHERE id='fresh' AND phase='shaping' AND done_at IS NULL"
+        ),
+        1
+    );
     f.plan(&["phase", "plan", "--plan", "fresh"]).unwrap();
     assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='plan' AND locked_at IS NULL AND done_at IS NULL"), 1);
     assert_eq!(f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-phase' AND json_extract(data,'$.from')='shaping' AND json_extract(data,'$.to')='plan'"), 1);
-    assert_eq!(f.count("SELECT count(*) FROM workflows WHERE plan='fresh' AND key='api' AND status='waiting'"), 1);
-    assert_eq!(f.count("SELECT count(*) FROM jobs WHERE plan='fresh' AND workflow='api' AND status='draft'"), 1);
-    assert_eq!(f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-done'"), 0);
+    assert_eq!(
+        f.count(
+            "SELECT count(*) FROM workflows WHERE plan='fresh' AND key='api' AND status='waiting'"
+        ),
+        1
+    );
+    assert_eq!(
+        f.count(
+            "SELECT count(*) FROM jobs WHERE plan='fresh' AND workflow='api' AND status='draft'"
+        ),
+        1
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM events WHERE plan='fresh' AND kind='plan-done'"),
+        0
+    );
     route.assert_supported();
 }

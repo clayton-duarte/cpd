@@ -20,7 +20,10 @@ fn promotion_trigger_preserves_rows_and_other_guards() {
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     let migrations = named_migrations();
-    let index = migrations.iter().position(|(name, _, _)| *name == MIGRATION).unwrap();
+    let index = migrations
+        .iter()
+        .position(|(name, _, _)| *name == MIGRATION)
+        .unwrap();
     assert_eq!(index + 1, migrations.len());
     let conn = prefix_database(index, &home).unwrap();
     conn.execute_batch("INSERT INTO txns (id,at,command,pid,cwd) VALUES (1,'t','fixture',1,'/');
@@ -42,26 +45,50 @@ fn promotion_trigger_preserves_rows_and_other_guards() {
         INSERT INTO events (txn,at,kind,context,plan,text,data) VALUES (1,'t','plan-created','ctx','legacy','Historical','{}');
         INSERT INTO context_records (context,id,kind,at,machine,by_plan,text)
           VALUES ('ctx','m1-n1','note','t','m1','legacy','Historical');").unwrap();
-    let queries = ["SELECT * FROM plans ORDER BY id", "SELECT * FROM jobs ORDER BY seq",
-        "SELECT * FROM events ORDER BY id", "SELECT * FROM history ORDER BY id",
-        "SELECT * FROM context_records ORDER BY seq"];
+    let queries = [
+        "SELECT * FROM plans ORDER BY id",
+        "SELECT * FROM jobs ORDER BY seq",
+        "SELECT * FROM events ORDER BY id",
+        "SELECT * FROM history ORDER BY id",
+        "SELECT * FROM context_records ORDER BY seq",
+    ];
     let before: Vec<_> = queries.iter().map(|q| rows(&conn, q)).collect();
     conn.execute_batch(migrations[index].2).unwrap();
     for (query, expected) in queries.iter().zip(before) {
         assert_eq!(rows(&conn, query), expected, "{query}");
     }
     assert!(rows(&conn, "PRAGMA foreign_key_check").is_empty());
-    assert!(conn.execute_batch("UPDATE plans SET phase='plan' WHERE id='orphan'").is_err());
-    assert!(conn.execute_batch("UPDATE plans SET phase='done',done_at='t2' WHERE id='normal'").is_err());
-    assert!(conn.execute_batch("UPDATE plans SET phase='done',done_at='t2' WHERE id='locked'").is_err());
-    assert!(conn.execute_batch("UPDATE plans SET shaping_origin=1 WHERE id='normal'").is_err());
-    assert!(conn.execute_batch("UPDATE plans SET locked_at='t2' WHERE id='orphan'").is_err());
-    conn.execute_batch("UPDATE plans SET phase='plan' WHERE id='pair';
+    assert!(
+        conn.execute_batch("UPDATE plans SET phase='plan' WHERE id='orphan'")
+            .is_err()
+    );
+    assert!(
+        conn.execute_batch("UPDATE plans SET phase='done',done_at='t2' WHERE id='normal'")
+            .is_err()
+    );
+    assert!(
+        conn.execute_batch("UPDATE plans SET phase='done',done_at='t2' WHERE id='locked'")
+            .is_err()
+    );
+    assert!(
+        conn.execute_batch("UPDATE plans SET shaping_origin=1 WHERE id='normal'")
+            .is_err()
+    );
+    assert!(
+        conn.execute_batch("UPDATE plans SET locked_at='t2' WHERE id='orphan'")
+            .is_err()
+    );
+    conn.execute_batch(
+        "UPDATE plans SET phase='plan' WHERE id='pair';
         UPDATE plans SET phase='done',done_at='t2' WHERE id='pair';
         UPDATE plans SET phase='plan',done_at=NULL WHERE id='pair';
         UPDATE plans SET phase='dispatch',locked_at='t3' WHERE id='pair';
         UPDATE plans SET phase='deploy' WHERE id='pair';
-        UPDATE plans SET phase='done',done_at='t4' WHERE id='pair';").unwrap();
-    assert_eq!(rows(&conn, "SELECT phase,locked_at FROM plans WHERE id='pair'"),
-        vec![vec![Value::Text("done".into()), Value::Text("t3".into())]]);
+        UPDATE plans SET phase='done',done_at='t4' WHERE id='pair';",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&conn, "SELECT phase,locked_at FROM plans WHERE id='pair'"),
+        vec![vec![Value::Text("done".into()), Value::Text("t3".into())]]
+    );
 }
