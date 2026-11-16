@@ -285,18 +285,28 @@ fn a_stopped_manager_without_a_pane_is_started_again_on_its_file() {
 }
 
 #[test]
+fn missing_cockpit_creates_manager_window() {
+    let fx = Fx::with_ports();
+    setup(&fx);
+    let out = fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
+    assert_eq!(out["started"], true);
+    assert_eq!(
+        manager_ids(&fx),
+        [out["manager"]["session"].as_str().unwrap()]
+    );
+    let calls = fx.calls("tmux");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "new-session"))
+    );
+    assert!(fx.tmux_state().is_some());
+}
+
+#[test]
 fn refusals_register_nothing() {
     let fx = Fx::with_ports();
     setup(&fx);
-
-    // No cockpit: refused before the Session is registered.
-    let error = refused(
-        &fx.cpd(&["context", "manager", "--context", "ctx"]),
-        "no_cockpit",
-        3,
-    );
-    assert_eq!(error["details"]["next"], "cpd watch");
-    assert!(manager_ids(&fx).is_empty());
 
     fx.cockpit();
     refused(
