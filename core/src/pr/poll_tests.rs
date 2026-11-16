@@ -926,20 +926,22 @@ fn job_merge_into_base_lead_branch_queues_stacked_update_job() {
     let mut store = Store::open(&rig.home, 5000).unwrap();
     let pay = PlanId::parse("pay").unwrap();
 
-    // A Job merges into api's Lead Branch (pro-d466): its transaction queues the dependants' update Jobs.
+    // A Job merges into api's Lead Branch; base movement alone must not refresh dependants (pro-d519).
     let queued = store
         .write("job merge", |tx| {
             crate::merge::queue_stacked_updates(tx, &pay, "cpd/pay/api", tier())
         })
         .unwrap();
 
-    assert_eq!(queued.len(), 1, "only the stacked dependant is refreshed");
-    assert_eq!(
-        update_jobs(&mut store),
-        vec![queued[0].as_str().to_owned()],
-        "exactly one update Job, for web"
+    assert!(
+        queued.is_empty(),
+        "base movement without a conflict must not queue an update: {queued:?}"
     );
-    assert_eq!(last_reason(&mut store).as_deref(), Some("base-moved"));
+    assert!(
+        update_jobs(&mut store).is_empty(),
+        "no update Job is stored"
+    );
+    assert_ne!(last_reason(&mut store).as_deref(), Some("base-moved"));
 }
 
 #[test]
