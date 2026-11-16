@@ -114,5 +114,46 @@ fn a_stopped_lead_of_a_done_plan_is_not_restarted() {
 #[test]
 fn missing_cockpit_restarts_lead_with_vanished_pane() {
     let (mut fx, _runner) = fx();
+    fx.engine
+        .tmux
+        .run(&["kill-session", "-t", "=cpd"].map(str::to_owned))
+        .unwrap();
     vanished(&mut fx, "lead1");
+    assert!(!fx.engine.tmux.has_session("cpd").unwrap());
+    assert!(
+        fx.engine
+            .tmux
+            .list_panes()
+            .unwrap()
+            .iter()
+            .all(|p| p.pane.as_str() != "%99")
+    );
+
+    liveness::run(&mut fx.engine);
+
+    assert!(
+        fx.engine.tmux.has_session("cpd").unwrap(),
+        "liveness recreates the missing cockpit"
+    );
+    let recorded: Option<String> = fx.query("SELECT tmux_pane FROM sessions WHERE id = 'lead1'");
+    let recorded = recorded.expect("the same Lead has a new recorded pane");
+    assert_ne!(recorded, "%99");
+    let panes = fx.engine.tmux.list_panes().unwrap();
+    let pane = panes
+        .iter()
+        .find(|p| p.pane.as_str() == recorded)
+        .expect("recorded pane exists");
+    assert!(!pane.dead, "the parked pane is live");
+    assert_eq!(pane.session_name, "cpd");
+    assert!(pane.window_name.starts_with("park-"));
+    assert_eq!(
+        pane.cpd_session.as_ref().map(|id| id.as_str()),
+        Some("lead1")
+    );
+    assert!(
+        fx.events("session-moved")
+            .iter()
+            .any(|e| e.3["place"] == "parked")
+    );
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
 }
