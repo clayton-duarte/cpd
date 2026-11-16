@@ -167,6 +167,12 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
         .with("expected", head)
         .with("actual", actual));
     }
+    let plan = std::env::var("CPD_PLAN")
+        .ok()
+        .and_then(|v| PlanId::parse(&v).ok());
+    if let Some(plan) = &plan {
+        main.read(|conn| check_subject(conn, plan, &format!("pr:{repo}#{number}")))?;
+    }
     let patch = match args.event.as_str() {
         "APPROVE" => Some(json!({"review_decision": "approved"})),
         _ => Some(json!({"review_decision": "changes_requested"})),
@@ -181,9 +187,6 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
     )?;
     let review = json!({"event": args.event, "commit_id": head, "queued": true});
 
-    let plan = std::env::var("CPD_PLAN")
-        .ok()
-        .and_then(|v| PlanId::parse(&v).ok());
     let reaction = if slack.is_none() && plan.is_none() {
         Value::Null
     } else {
@@ -248,6 +251,22 @@ fn request_changes(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
     Ok(())
 }
 
+fn check_subject(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    subject: &str,
+) -> Result<(), CpdError> {
+    let conflict: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM plans WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND pr_subject IS NOT NULL AND pr_subject <> ?2)",
+        [plan.as_str(), subject], |r| r.get(0))?;
+    if conflict {
+        return Err(usage(format!(
+            "Plan {plan} tracks a different pull request than {subject}."
+        )));
+    }
+    Ok(())
+}
+
 fn track_submit(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
@@ -255,14 +274,7 @@ fn track_submit(
     verdict: &str,
 ) -> Result<(), CpdError> {
     let subject = format!("pr:{pull}");
-    let conflict: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM plans WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND pr_subject IS NOT NULL AND pr_subject <> ?2)",
-        [plan.as_str(), &subject], |r| r.get(0))?;
-    if conflict {
-        return Err(usage(format!(
-            "Plan {plan} tracks a different pull request than {pull}."
-        )));
-    }
+    check_subject(tx, plan, &subject)?;
     tx.execute("UPDATE plans SET pr_subject = ?2 WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND pr_subject IS NULL", [plan.as_str(), &subject])?;
     if verdict == "APPROVE" {
         finish_plan(tx, plan)

@@ -50,8 +50,15 @@ fn review_autoarchive_regression_approval_is_not_closed() {
         me: "me".into(),
         workflows: BTreeMap::from([(("acme/pay".into(), 812), Some(pr))]),
     };
-    assert!(
-        finish_closed(&mut store, &lookup).unwrap().is_empty(),
-        "approval is not PR closure"
-    );
+    assert_eq!(finish_closed(&mut store, &lookup).unwrap().len(), 1);
+    let archived: Option<String> = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT archived_at FROM plans WHERE id='r-pay-812'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert!(archived.is_none(), "approval alone must not archive");
 }

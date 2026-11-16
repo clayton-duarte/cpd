@@ -136,9 +136,45 @@ pub(crate) fn open_plan_refs(
 }
 
 /// Whether the pull request is over for the viewer: closed, merged, or the viewer's latest review is APPROVED.
+fn approved(pr: &super::team::GhPr, me: &str) -> bool {
+    pr.reviews
+        .iter()
+        .rev()
+        .find(|r| r.author == me)
+        .is_some_and(|r| r.state == "APPROVED")
+}
+
 #[cfg(test)]
-fn is_over(pr: &super::team::GhPr, _me: &str) -> bool {
-    pr.state != super::team::GhState::Open
+fn is_over(pr: &super::team::GhPr, me: &str) -> bool {
+    pr.state != super::team::GhState::Open || approved(pr, me)
+}
+
+/// Preserve approval-based completion independently of closed-PR archival.
+pub(crate) fn finish_approved(
+    store: &mut crate::store::Store,
+    lookup: &super::team::Lookup,
+) -> Result<(), crate::error::CpdError> {
+    let plans: Vec<_> = open_plan_refs(store)?
+        .into_iter()
+        .filter(|(_, repo, number)| {
+            lookup
+                .workflows
+                .get(&(repo.clone(), *number))
+                .and_then(Option::as_ref)
+                .is_some_and(|pr| {
+                    pr.state == super::team::GhState::Open && approved(pr, &lookup.me)
+                })
+        })
+        .map(|(id, _, _)| id)
+        .collect();
+    if !plans.is_empty() {
+        store.write("review approved", |tx| {
+            plans
+                .iter()
+                .try_for_each(|id| crate::pr::review::finish_plan(tx, id))
+        })?;
+    }
+    Ok(())
 }
 
 /// Finishes every open (phase `grounding`, unarchived) `codereview` Plan whose `pr_subject` names a pull request that

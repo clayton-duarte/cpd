@@ -1,8 +1,9 @@
 //! The closed-PR fast path must use the safe archive cascade, not the timers.
 use super::testkit::Fx;
 
-// Compile-only tick seam, to be wired by the implementation Job.
-fn review_tick(_fx: &mut Fx) {}
+fn review_tick(fx: &mut Fx) {
+    super::archive_leads::run(&mut fx.engine);
+}
 
 fn fixture(state: &str) -> Fx {
     let mut fx = Fx::new("");
@@ -45,11 +46,11 @@ fn review_autoarchive_regression_working_and_blocked_defer_until_safe() {
     for state in ["working", "blocked"] {
         let mut fx = fixture("closed");
         fx.fixture(&format!(
-            "UPDATE sessions SET state='{state}' WHERE id='review-lead';"
+            "UPDATE sessions SET state='{state}', state_label=CASE WHEN '{state}'='blocked' THEN 'blocked' ELSE NULL END WHERE id='review-lead';"
         ));
         review_tick(&mut fx);
         assert!(archived(&mut fx).is_none(), "{state} must defer");
-        fx.fixture("UPDATE sessions SET state='idle' WHERE id='review-lead';");
+        fx.fixture("UPDATE sessions SET state='idle', state_label=NULL WHERE id='review-lead';");
         review_tick(&mut fx);
         assert!(archived(&mut fx).is_some(), "safe later tick must archive");
     }

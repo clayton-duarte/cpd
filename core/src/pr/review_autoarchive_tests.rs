@@ -29,11 +29,12 @@ fn review_autoarchive_regression_submit_backfills_both_verdicts() {
             })
             .unwrap();
         assert_eq!(subject.as_deref(), Some("pr:acme/pay#812"), "{verdict}");
-        store
+        let error = store
             .write("submit conflict", |tx| {
                 submit_plan_tracking_stub(tx, &plan, "acme/other#1", verdict)
             })
-            .unwrap();
+            .unwrap_err();
+        assert!(error.message().contains("different pull request"));
         let subject: Option<String> = store
             .read(|c| {
                 Ok(
