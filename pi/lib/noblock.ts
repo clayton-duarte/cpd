@@ -87,14 +87,15 @@ function detachedTimeouts(command: string): boolean {
       const c = strip(words);
       return c?.name === "timeout" && waits(c.name, c.args) !== undefined;
     }).length;
-    const visit = (node: Node, detached: boolean) => {
+    const visit = (node: Node, detached: boolean, substitution: boolean) => {
+      substitution ||= node.type === "command_substitution";
       if (node.type === "command") {
         const words = simpleCommands(node.text)[0];
         const c = words && strip(words);
         if (c?.name === "wait") unsafe = true;
         if (c?.name === "timeout" && waits(c.name, c.args)) {
           found++;
-          if (!detached) unsafe = true;
+          if (!detached || substitution) unsafe = true;
         }
       }
       const children = node.children;
@@ -102,10 +103,10 @@ function detachedTimeouts(command: string): boolean {
         const child = children[i]!;
         if (!child.isNamed) continue;
         const next = children.slice(i + 1).find((n) => n && !n.isExtra);
-        visit(child, detached || next?.type === "&");
+        visit(child, detached || next?.type === "&", substitution);
       }
     };
-    visit(tree.rootNode, false);
+    visit(tree.rootNode, false, false);
     return found > 0 && found === expected && !unsafe;
   } finally {
     tree.delete();
