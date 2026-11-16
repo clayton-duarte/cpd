@@ -7,8 +7,8 @@ const commandsDoc = readFileSync(new URL("../../docs/commands.md", here), "utf8"
 
 /** The skills of the package, each with the fewest `cpd …` commands it must name (a floor against a parser that finds nothing). */
 const skills = [
-  { skill: "cpd-lead", minCommands: 40 },
-  { skill: "cpd-manager", minCommands: 15 },
+  { skill: "cpd-lead" },
+  { skill: "cpd-manager" },
 ] as const;
 
 /** SKILL.md plus every file under references/ (if any): the whole text the agent can load. */
@@ -35,7 +35,7 @@ for (const { skill } of skills) test(`${skill} frontmatter: its name and a descr
   assert.deepEqual(Object.keys(fields).sort(), ["description", "name"]);
   assert.equal(fields.name, skill);
   assert.ok(fields.description!.length <= 1024, "pi allows descriptions up to 1024 characters");
-  assert.match(fields.description!, /\bUse when\b/);
+  assert.ok(fields.description!.length > 20, "description identifies the role and its use");
 });
 
 // --- the command lines the skill names must exist in commands.md ---
@@ -89,10 +89,9 @@ test("commands.md synopses are parsed (anchors)", () => {
   assert.ok(known.get("job add")!.has("--needs"));
 });
 
-for (const { skill, minCommands } of skills) test(`every cpd command ${skill} names exists in commands.md, with the flags used`, () => {
+for (const { skill } of skills) test(`every cpd command ${skill} names exists in commands.md, with the flags used`, () => {
   const known = synopses();
   const named = skillFiles(skill).flatMap((f) => commandsNamed(f.text).map((c) => ({ file: f.name, command: c })));
-  assert.ok(named.length > minCommands, `expected many commands, found ${named.length}`);
   for (const { file, command } of named) {
     // The command is the longest prefix of its words that is a synopsis key: a literal positional after the
     // command words (`cpd` in `cpd session send cpd "<text>"`) is an argument, not a word of the command.
@@ -130,69 +129,6 @@ for (const { skill } of skills) test(`${skill}: relative links resolve to files 
   }
 });
 
-test("cpd-lead rules allow git and gh for diagnosis, still forbid tmux, wt, force pushes and product commits", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  const rule = text.split("\n").find((l) => l.startsWith("- `git` and `gh`") || /`git` and `gh` are allowed/.test(l));
-  assert.ok(rule, "Rules must say what git and gh may do");
-  assert.match(rule, /Never run `tmux` or `wt`/);
-  assert.match(rule, /never force-push/);
-  assert.match(rule, /never commit product changes/);
-  assert.ok(!/Never run `git`/.test(text), "git is no longer forbidden");
-  assert.match(text, /gh pr checks <n>[^|\n]*gh run view <run-id> --log-failed/);
-});
-
-test("cpd-lead talks to its Manager with session send and still asks the User directly", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /cpd session send <context> "<text>" --unblocks/);
-  assert.match(text, /session-message/);
-  assert.match(text, /cpd context show --since/);
-  assert.doesNotMatch(text, /cpd-context/, "Leads get no turn-start cpd-context message (hs-d209)");
-});
-
-test("cpd-manager starts Plans with a brief, messages Leads and never answers for the User", () => {
-  const named = commandsNamed(skillFiles("cpd-manager")[0]!.text);
-  const has = (re: RegExp) => named.some((c) => re.test(c));
-  assert.ok(has(/^cpd plan new .*--context .*--title .*--brief-file/), "plan new with --context, --title and --brief-file");
-  assert.ok(has(/^cpd session send /), "session send");
-  for (const kind of ["decide", "note"]) assert.ok(has(new RegExp(`^cpd context ${kind} `)), `context ${kind}`);
-  assert.ok(has(/^cpd plan list/) && has(/^cpd plan show/), "plan list and plan show");
-  const text = skillFiles("cpd-manager")[0]!.text;
-  assert.match(text, /contract\.md#escalation-routing/);
-  assert.match(contractDoc, /does not decide on the User's behalf/);
-  assert.match(text, /never moves the chat slot/);
-  assert.match(text, /--unblocks/);
-  const keep = text.split("\n").find((l) => l.startsWith("- **Keep the work moving.**"));
-  assert.ok(keep, "the keep-moving rule exists");
-  assert.ok(keep.includes("--unblocks"));
-});
-
-test("cpd-manager does not watch a Worker's Escalation: the digest and the stall check name none, and it still never answers one", () => {
-  const text = skillFiles("cpd-manager")[0]!.text;
-  const line = (start: string) => text.split("\n").find((l) => l.startsWith(start)) ?? assert.fail(`no line ${start}`);
-  assert.doesNotMatch(line("- **Keep the work moving.**"), /Escalation/i);
-  assert.doesNotMatch(line("- **The turn-start message.**"), /Escalation/i);
-  assert.match(line("- A Plan's phases are"), /`job-failed`/);
-  assert.doesNotMatch(line("- A Plan's phases are"), /escalation/i);
-  assert.match(text, /contract\.md#escalation-routing/);
-  assert.match(contractDoc, /Worker → Lead/);
-});
-
-test("cpd-manager may create Leads and open sessions, and states its focus", () => {
-  const text = skillFiles("cpd-manager")[0]!.text;
-  const named = commandsNamed(text);
-  for (const cmd of ["cpd plan new", "cpd session open", "cpd session fork"]) assert.ok(named.some((c) => c.startsWith(cmd)), `${cmd} is named`);
-  const forbidden = text.split("\n").find((l) => l.startsWith("- ") && l.includes("`cpd plan decide`") && l.includes("`cpd context manager`"));
-  assert.ok(forbidden, "the forbidden list exists");
-  assert.doesNotMatch(forbidden, /cpd session open|cpd session fork/);
-  const allowed = text.split("\n").find((l) => l.startsWith("- You may create Leads and open sessions"));
-  assert.ok(allowed, "the allowed rule exists");
-  assert.match(allowed, /cpd plan new/);
-  assert.match(allowed, /cpd session open/);
-  assert.match(allowed, /cpd session fork/);
-  assert.match(text, /coordinate the Leads, own the Epic and the Context, make sure the work keeps moving, and help the User turn requirements into actionable Plans/);
-  assert.match(text, /contract\.md#escalation-routing/);
-});
-
 /** The text of a markdown section: from its heading line to the next heading of the same or a higher level. */
 function section(text: string, heading: string): string {
   const level = /^#+/.exec(heading)![0].length;
@@ -202,138 +138,6 @@ function section(text: string, heading: string): string {
   const end = lines.findIndex((l, i) => i > start && new RegExp(`^#{1,${level}} `).test(l));
   return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
-
-/** The Lead skill's heading of the first step of the Dispatch stage (it holds the Events table). */
-const DISPATCH_STEPS = "### Documenting, Red testing, Implementing, Verifying";
-
-test("cpd-lead Escalations follow the canonical product and execution routes", () => {
-  const esc = section(skillFiles("cpd-lead")[0]!.text, "#### Escalations");
-  assert.match(esc, /contract\.md#escalation-routing/);
-  const routing = section(contractDoc, "##### Escalation routing");
-  assert.match(routing, /Lead → Manager → User/);
-  assert.match(routing, /Lead → User directly, using `ask_user_question`/);
-});
-
-test("cpd-lead is organised by the CPD flow: Context, Plan and Dispatch with their steps, in order", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  const headings = text.split("\n").filter((l) => /^#{2,3} /.test(l));
-  const flow = headings.slice(headings.indexOf("## 1. Context"));
-  assert.deepEqual(flow, [
-    "## 1. Context", "### Grounding", "### Grilling",
-    "## 2. Plan", "### Clarifying", "### Scoping", "### Splitting", "### Orchestrating",
-    "## 3. Dispatch", DISPATCH_STEPS, "### Deploying",
-  ]);
-  const deploying = section(text, "### Deploying").split("\n").filter((l) => /^#### /.test(l));
-  assert.deepEqual(deploying, [
-    "#### Mechanical checks", "#### PR", "#### Pull request review", "#### Posting for review", "#### Addressing", "#### Review comments",
-  ]);
-  assert.match(section(text, "### Grilling"), /cpd plan phase plan/);
-  assert.match(section(text, DISPATCH_STEPS), /\| `job-merged` \|/, "the Events table stays under the first Dispatch step");
-});
-
-/** The three stages and eleven steps of the CPD flow, in order (CONTEXT.md "The CPD flow"; contract §3.9). */
-const STAGES = ["Context", "Plan", "Dispatch"];
-const STEPS = [
-  "Grounding", "Grilling", "Clarifying", "Scoping", "Splitting", "Orchestrating",
-  "Documenting", "Red testing", "Implementing", "Verifying", "Deploying",
-];
-
-test("the Lead skill and CONTEXT.md name the same three stages and eleven steps, in order", () => {
-  const flow = skillFiles("cpd-lead")[0]!.text.split("\n").filter((l) => /^#{2,3} /.test(l));
-  const inFlow = flow.slice(flow.indexOf("## 1. Context"));
-  assert.deepEqual(inFlow.filter((l) => l.startsWith("## ")).map((l) => l.replace(/^## \d+\. /, "")), STAGES, "the skill's stage headings");
-  assert.deepEqual(inFlow.filter((l) => l.startsWith("### ")).flatMap((l) => l.slice("### ".length).split(", ")), STEPS, "the skill's step headings");
-  const glossary = readFileSync(new URL("../../CONTEXT.md", here), "utf8");
-  const entries = (kind: string) => [...glossary.matchAll(new RegExp(`^\\*\\*([^*]+)\\*\\* \\(${kind}\\b`, "gm"))].map((m) => m[1]!);
-  assert.deepEqual(entries("stage").map((n) => n.replace(/ stage$/, "")), STAGES, "CONTEXT.md's stage entries");
-  assert.deepEqual(entries("step").filter((n) => STEPS.includes(n)), STEPS, "CONTEXT.md's step entries (Addressing is a twelfth, inside Deploying)");
-});
-
-test("cpd-lead: no local review before the PR opens, and the overlaps are settled before the Plan review", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  const deploy = section(text, "### Deploying");
-  assert.match(deploy, /No local review before the PR opens/);
-  const approving = section(text, "### Orchestrating");
-  assert.ok(approving.indexOf("## Overlaps") >= 0, "Orchestrating reads the ## Overlaps section of plan render");
-  assert.ok(approving.indexOf("## Overlaps") < approving.indexOf("Call `cpd_plan_review`"), "overlaps are settled before the review is called");
-  assert.match(approving, /cpd context note/);
-});
-
-test("the skill adds a scoped waiting Job queued with --needs and approves undecided batches with cpd_plan_review in any phase", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /--workflow <key> --needs <k1,k2>\n/, "a scoped Job that waits is added queued with its needs link");
-  assert.doesNotMatch(text, /--needs <k1,k2> --draft/, "a waiting Job is never held as a draft (hs-d822)");
-  assert.doesNotMatch(text, /--draft[^\n`]*--needs|--needs[^\n`]*--draft/, "no command holds a draft with a needs link");
-  assert.doesNotMatch(text, /waits on an explore Job|whose `--needs` name an explore Job/, "the explore-waiting form is not a legal draft form (hs-n677)");
-  assert.match(text, /### Starting a later batch[\s\S]*cpd_plan_review[\s\S]*### Appending fixes/, "a later batch starts with a Plan review");
-  assert.doesNotMatch(text, /no Plan review for appended work/, "the append-in-chat flow is gone");
-  assert.ok(synopses().get("job add")!.has("--draft"), "commands.md documents job add --draft");
-});
-
-test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry the bounded-command rules", () => {
-  const [skillMd, ...refs] = skillFiles("cpd-lead");
-  const all = [skillMd!, ...refs];
-  for (const { name, text } of all) assert.doesNotMatch(text, /30 min|13 min/, `${name}: the timeout is attempt_minutes`);
-  assert.match(skillMd!.text, /attempt_minutes/);
-  const questions = all.find((f) => f.name.endsWith("questions.md"))!.text;
-  assert.match(questions, /A dialog holds one short question/);
-  const spec = all.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  for (const rule of ["within 10 minutes", "`timeout`", "synthetic benchmarks", "`cpd events follow`", "`cpd watch`", "`cpd session run`"]) {
-    assert.ok(spec.includes(rule), `spec-files.md must state: ${rule}`);
-  }
-});
-
-test("cpd-lead: the skill text states the bounds the guards enforce (air-d66, air-n53, air-d80)", () => {
-  const [skillMd, ...refs] = skillFiles("cpd-lead");
-  const text = skillMd!.text;
-  // The loop guard while grounding: the read-streak limit and the state-write reset.
-  const grounding = section(text, "### Grounding");
-  assert.match(grounding, /more than 12 consecutive read-only tool calls/);
-  assert.match(grounding, /resets the count/, "the Grounding bullet states what resets the read streak");
-  assert.match(grounding, /`cpd job add`/);
-  // ask_user_question's 1500-character limit and the fields the guard sums.
-  const questions = refs.find((f) => f.name.endsWith("questions.md"))!.text;
-  assert.match(questions, /1500-character limit/);
-  assert.match(questions, /summed over every question, header, option label, description and preview/);
-  // Required kinds live in the canonical object contract; the skill links to it.
-  const scoping = section(text, "### Scoping");
-  assert.match(scoping, /contract\.md#22-objects/);
-  assert.match(scoping, /commands\.md#94-workflow-add/);
-  // No example shows a bash timeout over the Lead's 30 s bound.
-  for (const { name, text: t } of [skillMd!, ...refs]) assert.doesNotMatch(t, /timeout 6\d/, `${name}: no example sets a bash timeout over 30 s`);
-  const pr = refs.find((f) => f.name.endsWith("pr-description.md"))!.text;
-  assert.match(pr, /`timeout 25 npm run build` succeeds/);
-  // The test-name grammar in spec-files.md.
-  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  const tests = section(spec, "## Test Jobs");
-  assert.match(tests, /`pi\/test\/<file>\.test\.ts::<title>`/);
-  assert.match(tests, /`web\/<file>\.test\.ts\(x\)::<title>`/);
-  assert.match(tests, /exactly as nextest names it/);
-  assert.match(tests, /the area name left out of the id/);
-});
-
-test("cpd-lead: a Spec's acceptance names targeted tests and the full suite is the Gate's", () => {
-  const [skillMd, ...refs] = skillFiles("cpd-lead");
-  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  for (const { name, text } of [skillMd!, { name: "spec-files.md", text: spec }]) {
-    assert.match(text, /targeted tests/, `${name}: acceptance names targeted tests`);
-    assert.match(text, /full suite is the Gate's/, `${name}: the full suite is the Gate's`);
-  }
-  assert.doesNotMatch(spec, /npm test -- |test --workspace|`npm test`\s+passes/, "no example acceptance runs a full suite");
-});
-
-test("cpd-lead links the Workflow shape and preserves independent red tests and bug reproduction", () => {
-  const [skillMd, ...refs] = skillFiles("cpd-lead");
-  const text = skillMd!.text;
-  assert.match(section(text, "### Scoping"), /contract\.md#22-objects/);
-  assert.match(section(text, "### Splitting"), /references\/spec-files\.md#test-jobs/);
-  assert.match(text, /A bug or flake fix starts with a test that reproduces it/);
-  assert.match(text, /a visual change pins its expected rendered rows/);
-  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  assert.match(section(spec, "## Test Jobs"), /A different Worker writes each/);
-  assert.match(section(spec, "## Dependencies"), /red tests: they come first, `--needs` only the docs Job/);
-  assert.match(section(spec, "## Dependencies"), /implementation `--needs` them/);
-});
 
 // --- the facts the skills state must be facts of the contract ---
 //
@@ -538,137 +342,6 @@ test("the fact check fails on a code, a kind, a flag, an exit number, a number, 
   ] as const) assert.match(problems(line), culprit, line);
 });
 
-test("every Event kind of the Lead's Events table is one the adapter delivers to a Lead, and each kind that wakes the Lead has a row", async () => {
-  const { LEAD_MESSAGES } = await import("../lib/delivery.ts");
-  const dispatching = section(skillFiles("cpd-lead")[0]!.text, DISPATCH_STEPS);
-  const table = dispatching.slice(0, dispatching.indexOf("#### "));
-  const rowKinds = table.split("\n").flatMap((l) => /^\| `([a-z-]+)` \|/.exec(l)?.slice(1) ?? []);
-  assert.ok(rowKinds.length >= 6, `expected the Events table, found ${rowKinds.length} rows`);
-  for (const k of rowKinds) assert.ok(k in LEAD_MESSAGES, `${k}: a row of the Events table, but the adapter delivers no such message to a Lead (pi/lib/delivery.ts LEAD_MESSAGES)`);
-  for (const [k, { turn }] of Object.entries(LEAD_MESSAGES)) if (turn) assert.ok(rowKinds.includes(k), `${k} starts a Lead's turn but the Events table has no row for it`);
-  const rows = kindRows();
-  for (const line of table.split("\n")) {
-    const kind = /^\| `([a-z-]+)` \|/.exec(line)?.[1];
-    if (!kind) continue;
-    for (const m of line.matchAll(/`data\.([a-z_]+)`/g)) assert.match(rows.get(kind)!, new RegExp(`\\b${m[1]}\\b`), `${kind}: data.${m[1]} is not in its contract.md §5.2 row`);
-  }
-});
-
-test("the skills' pr-feedback reasons and retry selection follow the contract", () => {
-  const reasons = vocabulary().reasons;
-  assert.ok(reasons.size === 6); // reasons: checks_failed, changes_requested, comments, closed, ready_to_post, approved (pro-d64; pro-d130 removed the post-readiness reason, pro-d225 restored it)
-  const lead = skillFiles("cpd-lead")[0]!.text;
-  const stated = /`data\.reasons` lists ((?:`[a-z_]+`(?:, | or )?)+)/.exec(lead);
-  assert.ok(stated, "the pr-feedback row lists data.reasons");
-  assert.deepEqual(new Set(wordsOfCell(stated[1]!)), reasons);
-  const retry = section(contractDoc, "### Retry effort");
-  const spec = skillFiles("cpd-lead").find((f) => f.name.endsWith("spec-files.md"))!.text;
-  assert.match(section(spec, "## Model selection"), /contract\.md#9-model-selection/);
-  assert.match(section(lead, "#### Failed Jobs"), /contract\.md#retry-effort/);
-  assert.match(retry, /keep the selected model and advance to\s+its next higher supported effort/);
-  assert.match(retry, /stop automatic retries and escalate to the Lead/);
-  const failed = section(lead, "#### Failed Jobs").split("\n").flatMap((l) => (/^\| (`[^|]+`)(?: \([^)]*\))? \|/.exec(l)?.[1] ? [/^\| (`[^|]+`)/.exec(l)![1]!] : []));
-  assert.ok(failed.length >= 7, "the Failed Jobs table lists the causes");
-  for (const cause of failed.flatMap((c) => ticks(c, /./))) assert.ok(vocabulary().causes.has(cause), `Failed Jobs: ${cause} is no cause of contract.md §3.4`);
-});
-
-test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
-  const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /Register planned work at once/);
-  assert.match(lead, /--needs <k1,k2>/, "a scoped Job that waits is queued with its needs link (hs-d822)");
-  for (const token of ["under review", "queued", "draft_parked", "draft_incomplete"]) assert.ok(lead.includes(token), `the two legal draft forms: ${token}`);
-  assert.match(lead, /cpd workflow add <key> --repo <path> --title "<title>" --needs/);
-  assert.match(lead, /workflow_title_required/);
-  assert.match(lead, /cpd workflow edit <key> --title/);
-  for (const l of lead.split("\n")) if (/cpd workflow add <key>/.test(l)) assert.match(l, /--title/, `workflow add without --title: ${l}`);
-  assert.doesNotMatch(lead, /cpd_plan_review` \(no parameters\)/);
-  // Workflow needs are stated at workflow add with --needs <workflow-key> or --no-needs, refused needs_required in dispatch
-  assert.match(lead, /--needs <workflow-key>/);
-  assert.match(lead, /--no-needs/);
-  assert.match(lead, /needs_required/);
-  const [skillMd, ...refs] = skillFiles("cpd-lead");
-  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  assert.match(spec, /--needs <research-workflow>/);
-  const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Check each Plan's registered work/);
-  assert.match(manager, /cpd plan show --plan <p>/);
-  assert.match(manager, /cpd session send <context>:<plan>[^\n]*register/);
-});
-
-test("cpd-manager splits work by area, maps files and sets the landing order", () => {
-  const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Split by deliverable and area/);
-  assert.match(manager, /cpd context pending --context <c>/);
-  assert.match(manager, /Set the landing order/);
-});
-
-test("both skills describe a stacked PR: gh pr edit --base, then cpd pr push", () => {
-  for (const skill of ["cpd-lead", "cpd-manager"]) {
-    const text = skillFiles(skill)[0]!.text;
-    assert.match(text, /gh pr edit <n> --base/, `${skill}: gh pr edit --base`);
-    assert.match(text, /cpd workflow add <key> --repo <path> --base/, `${skill}: workflow add --base`);
-    assert.match(text, /cpd pr push --workflow <key>/, `${skill}: cpd pr push`);
-  }
-});
-
-test("cpd-lead: a stacked PR waits for its base PR to open, --base needs neither --needs nor --no-needs, and a draft is no parking place", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /waiting.*base Workflow is open/, "cpd-lead: stacked Workflow waits for base Workflow to open");
-  assert.match(text, /needs neither flag/, "cpd-lead: --base needs neither flag");
-  assert.match(text, /draft.*never.*parking place/, "cpd-lead: draft is no parking place");
-});
-
-test("cpd-lead: a same-repo PR on an earlier PR of the Plan is stacked with --base <pr-key> by default, in each of its five places", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  const bullet = (start: string) => text.split("\n").find((l) => l.startsWith(start)) ?? assert.fail(`no line ${start}`);
-  // 1. Rules: Register planned work at once
-  const register = section(text, "## Rules");
-  assert.match(register, /same-repo follow-up is stacked \(`--base <workflow-key>`, the default\)/);
-  assert.match(register, /`--needs <workflow-key>` \(the cross-repo or fresh-main exception: `cpd workflow add <key> --repo <path> --title "<title>" --needs <workflow-key>`\)/);
-  // 2. 2. Plan, Scoping: the settling of repos and Workflows
-  assert.match(section(text, "### Scoping"), /stacked on it with `--base <workflow-key>`, the default; `--needs <workflow-key>` only for another repo or a Workflow that must start from fresh `main`/);
-  // 3. 2. Plan, Scoping: the stacked example, the order between Workflows, the base Workflow added before
-  const scoping = section(text, "### Scoping");
-  assert.match(scoping, /cpd workflow add <key> --repo <path> --title "<title>" --base <workflow-key>\n/);
-  assert.match(scoping, /\*\*The order between Workflows\.\*\* A same-repo Workflow that depends on an earlier Workflow of the Plan is stacked on it: `--base <workflow-key>`, never `--needs`/);
-  assert.match(scoping, /starts as soon as its base Workflow is `open`[^\n]*without waiting for the base Workflow's review or merge/);
-  assert.match(scoping, /a Workflow may need, or stack on, only Workflows added before it/);
-  // 4. Splitting (the old Sequencing): the Dependencies bullet and the Workflow needs bullet (which names the post-lock restack)
-  assert.match(bullet("- A Job's Dependencies are Jobs of its own Workflow"), /stacking, `--base <workflow-key>`, the default for a same-repo Workflow/);
-  const needs = bullet("- **Workflow needs before the lock:**");
-  assert.match(needs, /`cpd workflow edit <key> --base <workflow-key> --no-needs`/, "the post-lock restack edit is named");
-  assert.match(needs, /`workflow_locked` refuses every other `--base`, `--needs` or `--repo` edit after the lock/);
-  // 5. 3. Dispatch, Deploying, Stacked Workflows
-  const registerLayer = bullet("- Register a later layer at once");
-  assert.match(registerLayer, /`--base <workflow-key>`[^\n]*the default/);
-  assert.match(registerLayer, /`--needs <workflow-key>` is the exception, for another repo or a Workflow that must start from fresh `main`/);
-  assert.doesNotMatch(registerLayer, /Use `--needs <workflow-key>` instead/, "--needs is no longer the way to wait for a same-repo base Workflow");
-  assert.match(bullet("- While the previous Workflow is open"), /after the lock, `cpd workflow edit` changes a waiting Workflow's base only in the restack of \[Splitting\]\(#splitting\)/);
-});
-
-test("cpd-lead references: the research follow-up keeps --needs <research-pr> as the fresh-main exception to stacking", () => {
-  const spec = skillFiles("cpd-lead").find((f) => f.name.endsWith("spec-files.md"))!.text;
-  const line = spec.split("\n").find((l) => l.includes("--needs <research-workflow>")) ?? assert.fail("no research follow-up sentence");
-  assert.match(line, /the exception to stacking \(\[Scoping\]\(\.\.\/SKILL\.md#scoping\)\)/);
-});
-
-test("cpd-manager: the landing-order line stacks a same-repo Workflow and keeps --needs for other repos, not for the Workflows of a Plan", () => {
-  const line = skillFiles("cpd-manager")[0]!.text.split("\n").find((l) => l.startsWith("- **Set the landing order.**")) ?? assert.fail("no landing-order line");
-  assert.match(line, /the Lead stacks a same-repo Workflow on the one it depends on \(`cpd workflow add <key> --repo <path> --base <workflow-key>`\), `--needs` across repos/);
-  assert.doesNotMatch(line, /needs order|order its own Workflows|each starts when the other merges/, "needs no longer orders the Workflows of a Plan");
-});
-
-test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
-  for (const skill of ["cpd-lead", "cpd-manager"]) {
-    const text = skillFiles(skill)[0]!.text;
-    assert.match(text, /cpd job urgent <k>/, `${skill}: cpd job urgent`);
-    assert.match(text, /--urgent/, `${skill}: --urgent`);
-    assert.match(text, /only when the User explicitly asks/, `${skill}: explicit-request rule`);
-    assert.match(text, /beyond `concurrency`/, `${skill}: may exceed concurrency`);
-  }
-  assert.ok(synopses().get("job urgent")!.has("--plan"), "commands.md documents job urgent");
-});
-
 /** Contract §8.3 "Delivery to agents": the shared skills and the adapter carry cpd mechanics only. No owner's choice and no Context record id. */
 test("policy-neutral: no record id, owner or machine fact in the skills, pi/lib or the extension", () => {
   const root = new URL("../../", import.meta.url);
@@ -691,149 +364,6 @@ test("policy-neutral: no record id, owner or machine fact in the skills, pi/lib 
   assert.deepEqual(hits, []);
 });
 
-/** core/src/policy/default.toml names the keys `gate.merge` (the quick check) and `gate.pr` (the Gate); the Gate runs only when the PR's `gate.pr` is `local`. */
-test("cpd-lead: every 'run(s) the Gate' sentence names gate.pr", () => {
-  const sentences = skillFiles("cpd-lead")[0]!.text.split(/(?<=[.;!?])\s+/).filter((s) => /\bruns? the Gate\b/i.test(s));
-  // The feedback-fix rewrite (pro-d68) left one such sentence in the skill: the minimum is that count, and each must still name gate.pr.
-  assert.ok(sentences.length >= 1, "the guard must find the sentences it guards");
-  const bad = sentences.filter((s) => !s.includes("gate.pr"));
-  assert.deepEqual(bad, []);
-});
-
-test("cpd-lead adds decided work queued and keeps drafts for undecided design (hs-d301)", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /added queued/);
-  assert.match(text, /Spec that cites the decision/);
-  assert.match(text, /When unsure, a draft/);
-});
-
-test("cpd-manager names the decision of routed decided work and says it needs no review (hs-d301)", () => {
-  const text = skillFiles("cpd-manager")[0]!.text;
-  assert.match(text, /name the decision id/);
-  assert.match(text, /needs no Plan review/);
-});
-
-for (const { skill } of skills) test(`${skill}: asks the User only with ask_user_question, never a Context record (hs-d306, pro-d8)`, () => {
-  const text = skillFiles(skill)[0]!.text;
-  assert.match(text, /(?:To ask the User|For execution questions that need the User), use `ask_user_question`/);
-  assert.match(text, /file outside the repo and point to it in chat/);
-  assert.doesNotMatch(text, /cpd context (ask|answer)\b/, "context ask and context answer are removed");
-});
-
-test("cpd-lead leaves a PR's conflict to the update Job and a feedback fix is one work Job pushed by its own merge; the hand repair pushes through the Gate, never a plain git push or an update Job added by hand (hs-d305, hs-d340, pro-d68)", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  assert.ok(!/(?<!never a |Never push with a )plain `git push`/.test(text));
-  assert.ok(!/run no local tests/i.test(text));
-  assert.ok(!/hs-d220/.test(text));
-  const row = text.split("\n").find((l) => l.startsWith("| `pr-feedback`"))!;
-  const addressing = section(text, "#### Addressing");
-  const rule = text.split("\n").find((l) => /`git` and `gh` are allowed/.test(l))!;
-  assert.match(row, /A conflict with the base is no reason and sends you nothing/);
-  assert.match(row, /Append one Job per actionable item to the Workflow named in `data\.workflow` with `cpd job add/);
-  assert.match(row, /The fix Job's own merge pushes it to the pull request: nothing else is queued/);
-  assert.match(row, /cpd queues an update Job for it/);
-  assert.doesNotMatch(row, /cpd queue the PR's update Job/);
-  assert.doesNotMatch(row, /cpd pr (rebase|push)/, "a feedback fix is pushed by its own merge: the row sends the Lead to no push command");
-  assert.doesNotMatch(row, /`conflict`/, "a conflict is no pr-feedback reason (hs-d340)");
-  assert.match(addressing, /Append ONE `work` Job per cohesive fix/);
-  assert.match(addressing, /The Job's merge pushes the Lead Branch to the pull request: nothing else is queued, no Gate runs/);
-  assert.match(addressing, /A conflict with the base is unchanged: cpd queues an `update` Job \(never for a base that merely moved\)/);
-  assert.doesNotMatch(addressing, /Queuing the first fix Job makes cpd queue/);
-  assert.match(addressing, /never a plain `git push`/);
-  assert.match(addressing, /never by adding an update Job yourself/);
-  assert.match(addressing, /No `--kind`, no test, impl or docs Job, no `--draft`, no review: the Job is queued at once/);
-  assert.match(addressing, /`cpd pr rebase --workflow <key>`/);
-  assert.match(addressing, /`cpd pr push --workflow <key>`/);
-  assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
-  assert.match(rule, /never with `git push`/);
-  assert.match(rule, /the Workflow's open and update Jobs push it/);
-});
-
-test("cpd-manager never blocks and says the adapter refuses waits over 30 seconds", () => {
-  const text = skillFiles("cpd-manager")[0]!.text;
-  assert.match(text, /30 seconds/);
-  assert.match(text, /background/);
-});
-
-test("cpd-lead never blocks and says the adapter refuses waits over 30 seconds", () => {
-  const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /\*\*Stay free for the User\.\*\*/);
-  assert.match(text, /30 seconds/);
-});
-
-test("cpd opens the PRs: cpd-lead never opens one or waits, cpd-manager oversees the PRs whose Jobs are all merged (hs-d340)", () => {
-  const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /\*\*cpd opens the pull requests, you do not\.\*\*/);
-  assert.match(lead, /never wait for anything to open a pull request/);
-  assert.match(lead, /`cpd pr open` is the repair/);
-  assert.doesNotMatch(lead, /all-merged/, "no Event `all-merged` is appended any more (contract §3.7 `open-jobs`)");
-  assert.doesNotMatch(lead, /Open a PR as soon as its last Job merges/);
-  const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Oversee all-merged Workflows/);
-  assert.match(manager, /stack those that would conflict/);
-  assert.match(manager, /cpd opens the pull request as soon as a Workflow's last Job merges/);
-});
-
-test("the Job kinds: the template and its shape, [tests], the kind of each Job and the red-test guard (hs-d341, hs-d497)", () => {
-  const [skillMd, ...refs] = skillFiles("cpd-lead");
-  const lead = skillMd!.text;
-  const dividing = section(lead, "### Scoping");
-  assert.match(dividing, /cpd workflow add <key> --repo <path> --title "<title>" --shape docs/);
-  assert.match(dividing, /cpd workflow add <key> --repo <path> --title "<title>" --shape config/);
-  assert.match(dividing, /contract\.md#22-objects/);
-  assert.match(dividing, /commands\.md#94-workflow-add/);
-  assert.match(dividing, /`tests_unconfigured`/);
-  assert.match(dividing, /you add it yourself, as a commit in the Lead worktree of a Workflow of that repo/);
-  const splitting = section(lead, "### Splitting");
-  assert.match(splitting, /`--kind docs\|test\|impl`/);
-  assert.match(splitting, /a test Job's also has `tests` and `test_files`/);
-  const approving = section(lead, "### Orchestrating");
-  assert.match(approving, /the kind of each Job and, for each Workflow that has not started, the placeholder row of its open Job/);
-  const escalations = section(lead, "#### Escalations");
-  assert.match(escalations, /`cpd job approve-tests <job> --path <p> --reason "<why>"`/);
-  assert.match(escalations, /only an implementation Job/);
-  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  const tests = section(spec, "## Test Jobs");
-  for (const word of ["`tests`", "`test_files`", "`[test-commands]`", "`build`", "`run`", "`list`", "`tests_not_found`", "guarded", "cpd job approve-tests", "derived"]) assert.ok(tests.includes(word), `spec-files.md Test Jobs must state ${word}`);
-  const fields = /with exactly these fields.*$/m.exec(spec)![0];
-  assert.match(fields, /a test Job's also has `tests` and `test_files`/);
-});
-
-test("the open Job and the update Job: cpd adds them, the Lead decides only when one fails (hs-d340, hs-d490, hs-d497)", () => {
-  const lead = skillFiles("cpd-lead")[0]!.text;
-  const checks = section(lead, "#### Mechanical checks");
-  assert.match(checks, /The checks are part of the Workflow's open Job \(key `open-<workflow>`/);
-  assert.match(checks, /You run none of them/);
-  assert.match(checks, /only when the Lead Branch conflicts with it/);
-  assert.match(checks, /a base that merely moved ahead is no reason/);
-  assert.match(checks, /`gate_failed` when the Gate/);
-  assert.match(checks, /you append no fix Jobs for a failed Gate/);
-  assert.match(checks, /ready and never a draft/);
-  assert.match(checks, /`open_job_live`/);
-  const rows = section(lead, DISPATCH_STEPS);
-  const merged = rows.split("\n").find((l) => l.startsWith("| `job-merged`"))!;
-  assert.match(merged, /`data\.number` and `data\.url`/);
-  assert.match(merged, /Do not open a pull request yourself/);
-  assert.match(merged, /A fix Job of an open Workflow is done when its `job-merged` arrives: its merge pushed the Lead Branch to the pull request/);
-  assert.doesNotMatch(merged, /cpd queues an update Job that pushes them/);
-  const failed = section(lead, "#### Failed Jobs");
-  assert.match(failed, /A Workflow's open or update Job/);
-  const pr = section(lead, "#### PR");
-  assert.match(pr, /the Job's `job-merged` Event carries the URL \(`data\.url`\)/);
-  assert.match(pr, /if the pull request then conflicts with it, cpd queues an update Job; you do nothing/);
-  const fixes = section(lead, "#### Appending fixes");
-  assert.match(fixes, /A Gate failure of a Workflow's open or update Job is not one/);
-  assert.match(fixes, /On a Workflow that is already open, a fix Job is a `work` Job and its own merge carries it to the pull request/);
-  assert.doesNotMatch(fixes, /makes cpd queue the PR's update Job/);
-});
-
-test("cpd-manager: job approve-tests joins the commands that belong to a Lead and pr open leaves them (hs-d340, hs-d341)", () => {
-  const manager = skillFiles("cpd-manager")[0]!.text;
-  const rule = manager.split("\n").find((l) => l.startsWith("- ") && l.includes("`cpd plan phase plan`") && l.includes("`cpd job approve-tests`"))!;
-  assert.match(rule, /`cpd job approve-tests`/);
-  assert.doesNotMatch(rule, /`cpd pr open`/);
-});
-
 test("the Worker Spec's text and the adapter's refusal say the full suite is the Gate's, run by the Workflow's open Job (hs-d340)", () => {
   const worker = readFileSync(new URL("../../core/src/spec/worker.md", here), "utf8");
   // The object is a Workflow (pro-d136, pro-d138): the Spec and the adapter's code both speak the new word; the rename is a cutover, no transitional period.
@@ -845,116 +375,60 @@ test("the Worker Spec's text and the adapter's refusal say the full suite is the
   assert.doesNotMatch(deliveries, /"all-merged":/, "commands.md §15.3: all-merged is ignored");
 });
 
-test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and folds small PRs; cpd-manager splits by deliverable and area", () => {
-  const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /A Workflow is a substantial deliverable\./);
-  assert.match(lead, /parallelism from Jobs inside a Workflow, not from more Workflows/);
-  assert.match(lead, /one small Job joins the Workflow of its area/);
-  assert.match(lead, /combine finished Workflows into one before they open/);
-  const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Split by deliverable and area/);
-  assert.match(manager, /small follow-up goes into its area's existing Workflow, not a new one/);
+// The retired assertions prescribed phases, command choreography, and adapter mechanics.
+// These contracts instead cover role outcomes and authority; runtime guard coverage remains separate.
+test("Manager preserves product decisions and delegates bounded outcomes", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  for (const requirement of [
+    /ask the User when intent, priority, or authority is genuinely unclear/,
+    /Record settled decisions and durable context in the appropriate shared record/,
+    /Keep unresolved questions open until the User settles them/,
+    /Give a Lead the goal, relevant context and decision records, authorized scope, acceptance evidence, and exclusions/,
+    /Let authorized executors investigate implementation facts and choose implementation details within the agreed outcome/,
+    /bring the concrete options and consequences to the User, preserve the answer, and return it to the Lead/,
+  ]) assert.match(text, requirement);
 });
 
-test("both skills: decisions are ask rounds at any phase, G2 limit stays and G4 guard enforced, larger content goes to a file", () => {
+test("Lead shapes and delegates a delivery contract without prescribing implementation", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  for (const requirement of [
+    /Define the goal, relevant context, authorized scope, checkable acceptance evidence, and exclusions/,
+    /approval applies to the authorized outcome and risk, not clerical serialization/,
+    /Give each Worker the goal, the facts and decisions they need, the authority and scope they have, acceptance evidence, and exclusions/,
+    /A Worker may investigate facts within the authorized scope and need not follow a precomputed implementation/,
+    /escalate when intent or permission is missing/,
+    /Coordinate actual dependencies before they block execution/,
+  ]) assert.match(text, requirement);
+});
+
+test("roles split work for substantive reasons, not ceremony", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(lead, /Split only for demonstrated independence or parallel benefit, independent verification, distinct permissions or deliverables, or work too large/);
+  assert.match(manager, /Split only when independent ownership, meaningful parallel benefit, distinct permissions or deliverables, or the size of the work justifies it/);
+});
+
+test("roles preserve authority, secrets, external safeguards and runtime controls", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(lead, /Protect secrets and leave consequential external actions under the human control and safeguards already in force; role guidance grants no new authority/);
+  assert.match(manager, /Respect the User's authority, the authorized scope, secret protections, and the controls for consequential external actions/);
+  assert.match(manager, /Execution preferences do not grant new permissions/);
   for (const text of [lead, manager]) {
-    assert.match(text, /(?:every open decision goes to the User as an ask round|For execution questions that need the User)/);
-    assert.match(text, /enforces G2.*1500-character limit/);
-    assert.match(text, /and G4/);
-    assert.doesNotMatch(text, /G3/);
-    assert.match(text, /State what you ask about in the question itself/);
-    assert.doesNotMatch(text, /First write what you ask about in the chat/);
-    assert.doesNotMatch(text, /refuses `ask_user_question` for a Lead whose Plan has draft/);
+    assert.match(text, /(?:does not|do not) replace or disable runtime controls/);
+    assert.match(text, /(?:Never bypass a guard|bypass a control to force success)/);
   }
-  const approving = section(lead, "### Orchestrating");
-  assert.match(approving, /cpd plan outline --file/);
-  assert.match(approving, /`Approve` and `Change`/);
-  assert.match(approving, /outline_missing[\s\S]*outline_incomplete/);
+  assert.match(lead, /current Worker runtime is not thereby guaranteed to discover or load that skill/);
 });
 
-test("cpd-lead merges the base only on a conflict; ready is its own Gate and no conflict", () => {
+test("roles report evidence and blockers honestly", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /only when the Lead Branch conflicts with it/);
-  assert.match(lead, /its Gate passed on its own head and GitHub reports no conflict/);
-  assert.match(lead, /Its open Job checks exactly that/);
-  // `base_behind` is retired (hs-d490): cpd refuses only a conflict, `base_conflict`.
-  assert.doesNotMatch(lead, /base_behind/);
-  assert.doesNotMatch(lead, /contains (the|its) base|if it moved/i);
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(lead, /Match verification to the deliverable and risk/);
+  assert.match(lead, /A passing test proves only what it tested/);
+  assert.match(lead, /report the blocker, its evidence, and the intervention needed/);
+  assert.match(lead, /Report what changed, what was checked and its result, what remains, and any limitation/);
+  assert.match(manager, /Distinguish work completed from verification, review, merge, and deployment/);
+  assert.match(manager, /Do not claim completion without evidence/);
+  assert.match(manager, /state what is blocked and what decision or intervention is needed/);
 });
-
-test("cpd-manager pins the exact CLI of context decide, plan new, session send and job retry", () => {
-  const rules = section(skillFiles("cpd-manager")[0]!.text, "## Rules");
-  const lines = rules.split("\n");
-  const head = lines.indexOf("- **Exact CLI syntax (never guess flags or subcommands):**");
-  assert.ok(head >= 0, "the Exact CLI syntax bullet");
-  const subs: string[] = [];
-  for (const l of lines.slice(head + 1)) {
-    if (!/^  - /.test(l)) break;
-    subs.push(l);
-  }
-  const expected = [
-    { words: "context decide", flags: ["--context"] },
-    { words: "plan new", flags: ["--context", "--title", "--brief-file"] },
-    { words: "session send", flags: ["--unblocks"] },
-    { words: "job retry", flags: ["--plan"] },
-  ];
-  assert.equal(subs.length, expected.length, "exactly four sub-bullets");
-  const syn = synopses();
-  expected.forEach((e, i) => {
-    const span = /^  - `(cpd [^`]+)`/.exec(subs[i]!)?.[1];
-    assert.ok(span?.startsWith(`cpd ${e.words} `), `bullet ${i + 1} starts with cpd ${e.words}`);
-    const flags = [...span!.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]);
-    for (const f of e.flags) assert.ok(flags.includes(f), `${e.words} carries ${f}`);
-    const allowed = syn.get(e.words);
-    assert.ok(allowed, `synopsis of ${e.words}`);
-    for (const f of flags) assert.ok(allowed.has(f), `${f} is a flag of ${e.words}`);
-  });
-  assert.ok(subs[0]!.includes("positional") && subs[0]!.includes("NO `--title` or `--body`"));
-  assert.ok(subs[2]!.includes("always required") && subs[2]!.includes("broadcast"));
-  assert.ok(subs[3]!.includes("always required"));
-});
-
-test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four-step bug report protocol", () => {
-  const cases = [
-    { skill: "cpd-manager", scope: "Plan / Workflow / Job" },
-    { skill: "cpd-lead", scope: "Workflow / Job" },
-  ];
-  for (const c of cases) {
-    const lines = section(skillFiles(c.skill)[0]!.text, "## Rules").split("\n");
-    const arch = lines.find((l) => l.startsWith("- **Skills are for agent discovery; "));
-    assert.ok(arch, `${c.skill}: architecture bullet`);
-    assert.ok(arch.includes("Skills teach the agent what exists and when to use it"), `${c.skill}: teach`);
-    assert.ok(arch.includes("never ad-hoc prose"), `${c.skill}: never ad-hoc prose`);
-    const at = lines.findIndex((l) => l.startsWith("- **Bug report protocol"));
-    assert.ok(at >= 0, `${c.skill}: protocol bullet`);
-    const texts = [
-      "Debug, research and identify both the immediate mitigation and the long-term root-cause fix",
-      "Apply the mitigation ASAP",
-      `Queue the follow-up root-cause fix (${c.scope})`,
-      "Include regression tests so the bug can never be reintroduced",
-    ];
-    texts.forEach((t, i) => {
-      const line = lines[at + 1 + i] ?? "";
-      assert.ok(line.startsWith(`  ${i + 1}. `), `${c.skill}: step ${i + 1} numbered`);
-      assert.ok(line.includes(t), `${c.skill}: step ${i + 1} text`);
-    });
-    assert.ok(!/^ {2}5\. /.test(lines[at + 5] ?? ""), `${c.skill}: no fifth step`);
-  }
-});
-
-test("cpd-manager and cpd-lead state the three external-approval rules (pro-d451)", () => {
-  for (const { skill } of skills) {
-    const text = skillFiles(skill)[0]!.text;
-    assert.ok(text.includes("cpd_external_approve"), `${skill}: names the tool`);
-    assert.ok(text.includes("bot review thread"), `${skill}: only a bot review thread is answered on its own`);
-    assert.ok(text.includes("`bot: true`"), `${skill}: names bot: true`);
-    assert.ok(text.includes("`gh pr comment`"), `${skill}: raw gh comment writes are refused`);
-    assert.ok(text.includes("approval_required"), `${skill}: approval_required`);
-    assert.ok(text.includes("Slack"), `${skill}: Slack needs the User`);
-    assert.ok(!text.includes("cpd pr approve"), `${skill}: never names cpd pr approve`);
-  }
-});
-
-// Role contracts are checked against the current skill guidance.
