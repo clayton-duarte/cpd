@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 128
+-- cpd-migration: breaking after 144
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
   kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested', 'curate-retire', 'curate-docs', 'loop-guard', 'deploy', 'models-changed', 'drafts-parked', 'pr-closed', 'refusal-alert', 'bug', 'green-unmerged')),
@@ -33,5 +33,20 @@ CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
 CREATE TABLE green_unmerged_periods (
   pull_request INTEGER PRIMARY KEY REFERENCES pull_requests(id),
   since INTEGER NOT NULL,
-  alerted INTEGER NOT NULL CHECK (alerted IN (0, 1))
+  alerted INTEGER NOT NULL CHECK (alerted IN (0, 1)),
+  manager_told INTEGER NOT NULL DEFAULT 0 CHECK (manager_told IN (0, 1))
 ) STRICT;
+
+-- A non-green observation breaks the period even if it returns to green before the next tick.
+CREATE TRIGGER green_unmerged_pr_reset AFTER UPDATE OF checks, state ON pull_requests
+WHEN NEW.state != 'open' OR NEW.checks != 'passed'
+BEGIN
+  DELETE FROM green_unmerged_periods WHERE pull_request = NEW.id;
+END;
+CREATE TRIGGER green_unmerged_workflow_reset AFTER UPDATE OF status, pull_request ON workflows
+WHEN OLD.pull_request IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM workflows WHERE pull_request = OLD.pull_request AND status = 'open'
+)
+BEGIN
+  DELETE FROM green_unmerged_periods WHERE pull_request = OLD.pull_request;
+END;
