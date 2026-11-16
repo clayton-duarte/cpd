@@ -197,9 +197,6 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     };
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
-    if !tmux.has_session(&cockpit)? {
-        return Err(no_cockpit(&cockpit));
-    }
 
     let id = SessionId::new_v4();
     let name = args
@@ -232,7 +229,12 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         Some(&plan),
         Path::new(&source.cwd),
     );
-    let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
+    let window_name = park_window(&id, Some(&plan));
+    let (window, pane) =
+        match crate::context::manager::ensure_cockpit(&tmux, &cockpit, &window_name, &spawn)? {
+            Some(ids) => ids,
+            None => tmux.new_window(&cockpit, &window_name, &spawn)?,
+        };
     kill_window_on_error(&tmux, &window, || {
         crate::session::row::set_pill(&tmux, &pane, None, &name, true)?;
         env.store.write("session fork", |tx| {
@@ -336,7 +338,16 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
                 lead.plan.as_ref(),
                 Path::new(&lead.cwd),
             );
-            let (window, pane) = tmux.new_window(&cockpit, &parked_window(&lead), &spawn)?;
+            let window_name = parked_window(&lead);
+            let (window, pane) = match crate::context::manager::ensure_cockpit(
+                &tmux,
+                &cockpit,
+                &window_name,
+                &spawn,
+            )? {
+                Some(ids) => ids,
+                None => tmux.new_window(&cockpit, &window_name, &spawn)?,
+            };
             kill_window_on_error(&tmux, &window, || {
                 lead.set_pill(&tmux, &pane)?;
                 // The store records the pane (no event: the one `session-moved` follows the swap, below) before the
@@ -526,8 +537,13 @@ pub(super) fn park_lead(
     slot: &Pane,
     command: &str,
 ) -> Result<(WindowId, PaneId), CpdError> {
+    let spawn = placeholder_spawn();
+    let window_name = parked_window(lead);
     let (window, placeholder) =
-        tmux.new_window(cockpit, &parked_window(lead), &placeholder_spawn())?;
+        match crate::context::manager::ensure_cockpit(tmux, cockpit, &window_name, &spawn)? {
+            Some(ids) => ids,
+            None => tmux.new_window(cockpit, &window_name, &spawn)?,
+        };
     // Until the swap, the window holds only the placeholder: a failure kills it (G11).
     kill_window_on_error(tmux, &window, || {
         tmux.set_pane_view(&placeholder, View::Chat)?;
@@ -717,7 +733,7 @@ pub(crate) fn start_parked(
     let created = if tmux.has_session(&cockpit)? {
         None
     } else if matches!(command, "session send" | "session resume") {
-        tmux.create_session(&cockpit, &window_name, &spawn)?
+        crate::context::manager::ensure_cockpit(&tmux, &cockpit, &window_name, &spawn)?
     } else {
         return Ok(None);
     };

@@ -140,24 +140,33 @@ fn park_and_open_paths_ensure_cockpit_session() {
         assert!(tmux_has_cockpit(&w), "fork ensures cockpit session");
     }
 
-    // Open path for stopped session with no pane (moves.rs:339):
-    // creates cockpit session then opens the window.
-    {
+    // Without a chat slot neither operation can swap a pane.
+    for command in ["open", "park"] {
         let w = world();
+        let err = try_cpd(&w, &[command, "stopped1"]).unwrap_err();
+        assert_eq!(err.code(), crate::error::ErrorCode::NoCockpit);
         assert!(!tmux_has_cockpit(&w));
-        let out = try_cpd(&w, &["open", "stopped1"]).unwrap();
-        assert!(out["pane"].is_string(), "{out}");
-        assert!(tmux_has_cockpit(&w), "open ensures cockpit session");
+        assert!(
+            !w.runner
+                .calls()
+                .iter()
+                .any(|call| call.args.iter().any(|arg| arg == "swap-pane"))
+        );
     }
 
-    // Park path (moves.rs:530):
-    // ensures the cockpit session exists or creates it then parks.
+    // With a chat slot, opening and parking preserve the normal swap contract.
     {
         let w = world();
-        assert!(!tmux_has_cockpit(&w));
-        let out = try_cpd(&w, &["park", "stopped1"]);
-        assert!(tmux_has_cockpit(&w), "park ensures cockpit session");
-        assert!(out.is_ok(), "{out:?}");
+        let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
+        let (_, pane) = tmux
+            .create_session("cpd", "main", &super::moves::placeholder_spawn())
+            .unwrap()
+            .unwrap();
+        tmux.set_pane_view(&pane, crate::host::View::Chat).unwrap();
+        let out = try_cpd(&w, &["open", "stopped1"]).unwrap();
+        assert!(out["pane"].is_string(), "{out}");
+        let out = try_cpd(&w, &["park", "stopped1"]).unwrap();
+        assert!(out["pane"].is_string(), "{out}");
     }
 }
 
