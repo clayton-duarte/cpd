@@ -59,23 +59,22 @@ pub(crate) fn check_complete(conn: &rusqlite::Connection, plan: &PlanId) -> Resu
 ///
 /// A `shaping` Plan with no Workflow settles once it has at least one Job and every Job is final (`merged` or
 /// `cancelled`): it moves `shaping -> done` with `done_at` set and one quiet `plan-done` `{workflows: [], turn: false}`.
-/// Both paired and historical Lead-less shaping Plans keep `locked_at` null. Idempotent.
+/// Both paired and historical Lead-less shaping Plans keep `locked_at` null. A paired shaping-origin Plan reopened to
+/// `plan` settles the same way while still unlocked and without any Workflow. Idempotent.
 pub(crate) fn settle_done(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
     just: Option<(&WorkflowKey, &str)>,
 ) -> Result<bool, CpdError> {
-    let shaping: bool = tx
+    let exploration_phase: Option<String> = tx
         .query_row(
-            "SELECT 1 FROM plans WHERE id = ?1 AND phase = 'shaping'",
+            "SELECT phase FROM plans WHERE id = ?1 AND (phase = 'shaping' OR
+              (phase = 'plan' AND shaping_origin = 1 AND lead_session IS NOT NULL AND locked_at IS NULL))",
             [plan.as_str()],
-            |_| Ok(true),
+            |r| r.get(0),
         )
-        .or_else(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Ok(false),
-            e => Err(e),
-        })?;
-    if shaping {
+        .optional()?;
+    if let Some(phase) = exploration_phase {
         let settle: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1)
                AND NOT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled'))
@@ -86,10 +85,11 @@ pub(crate) fn settle_done(
         if !settle {
             return Ok(false);
         }
+        crate::plan::close_reviews(tx, plan, &crate::plan::Closing::Done)?;
         let moved = tx.execute(
             "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE id = ?1 AND phase = 'shaping'",
-            [plan.as_str()],
+              WHERE id = ?1 AND phase = ?2",
+            [plan.as_str(), &phase],
         )?;
         if moved == 0 {
             return Ok(false);

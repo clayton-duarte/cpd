@@ -26,9 +26,9 @@ fn shaping_origin_migration_preserves_history_and_existing_guards() {
         .position(|(name, _, _)| *name == MIGRATION)
         .expect("forward shaping-origin migration is present");
     assert_eq!(
-        index + 1,
-        migrations.len(),
-        "migration sorts after all existing migrations"
+        migrations[index + 1].0,
+        "20261115T1201-shaping-promotion",
+        "the promotion migration follows shaping-origin"
     );
     let conn = prefix_database(index, &home).unwrap();
     conn.execute_batch("INSERT INTO txns (id,at,command,pid,cwd) VALUES (1,'t','fixture',1,'/');
