@@ -474,3 +474,20 @@ fn review_feedback_regression_live_review_subject_is_polled_without_slack() {
     rig.pass(0).unwrap();
     assert!(mentions(&rig.graphql()[0], 1));
 }
+
+#[test]
+fn audit_fix_review_subjects_do_not_starve() {
+    let mut rig = PollRig::new();
+    for n in 1..=11 {
+        let p = gh_pr(n);
+        rig.seed(&p, false);
+        rig.seed_detail(&p);
+        rig.state().world.insert(("acme/pay".into(), n), p);
+        rig.store.write("fixture", |tx| {
+            tx.execute_batch(&format!("INSERT OR IGNORE INTO contexts (id,title,created_at,created_on) VALUES ('codereview','Review','t','m'); INSERT INTO plans (id,context,title,phase,created_at,pr_subject,done_at) VALUES ('review-{n}','codereview','Review','done','t','pr:acme/pay#{n}','t');"))?;
+            Ok::<(), crate::error::CpdError>(())
+        }).unwrap();
+    }
+    for tick in 0..4 { rig.pass(tick * 10).unwrap(); }
+    assert!((1..=11).all(|n| rig.graphql().iter().any(|q| mentions(q, n))), "every review subject must eventually be polled");
+}

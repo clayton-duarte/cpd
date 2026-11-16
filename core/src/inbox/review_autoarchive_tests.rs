@@ -94,3 +94,17 @@ fn review_feedback_regression_done_approval_opens_no_write() {
     assert_eq!(count(&mut store), before);
     assert_eq!(open_plan_refs(&mut store).unwrap().len(), 1);
 }
+
+#[test]
+fn audit_fix_approval_failure_does_not_block_other_plan() {
+    let (_dir, mut store) = fixture("grounding");
+    store.write("fixture", |tx| {
+        tx.execute_batch("INSERT INTO plans (id,context,title,phase,created_at,pr_subject) VALUES ('a-bad','codereview','Bad','plan','t','pr:acme/pay#812');")?;
+        Ok::<(), crate::error::CpdError>(())
+    }).unwrap();
+    let pr = GhPr { title: "PR".into(), draft: false, state: GhState::Open, author: "other".into(), decision: None, reviews: vec![Review { author: "me".into(), state: "APPROVED".into(), commit_oid: None }], head_oid: None, checks_state: None };
+    let lookup = Lookup { me: "me".into(), workflows: BTreeMap::from([(("acme/pay".into(), 812), Some(pr))]) };
+    assert!(super::review_plan::finish_approved(&mut store, &lookup).is_err());
+    let phase: String = store.read(|c| Ok(c.query_row("SELECT phase FROM plans WHERE id='r-pay-812'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(phase, "done", "another plan's failure must not roll back this approval");
+}
