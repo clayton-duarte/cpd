@@ -1,4 +1,4 @@
-import type { ToolItem, TranscriptItem } from "../../protocol/domain.ts";
+import type { AssistantBlock, ToolItem, TranscriptItem } from "../../protocol/domain.ts";
 
 export type ChainStep =
   | {
@@ -111,27 +111,44 @@ export function groupRows(items: readonly TranscriptItem[]): Row[] {
       continue;
     }
     if (item.kind === "assistant") {
-      const thinkingBlocks = item.blocks.filter((b) => b.type === "thinking");
-      const textBlocks = item.blocks.filter(
-        (b) => b.type === "text" && b.text.trim().length > 0,
-      );
-      thinkingBlocks.forEach((b, idx) => {
-        const isLastBlock = item.blocks[item.blocks.length - 1] === b;
-        chainBuffer.push({
-          kind: "thinking",
-          key: `${item.id}:thinking:${idx}`,
-          text: b.text,
-          ...(item.at === undefined ? {} : { at: item.at }),
-          running: item.streaming === true && isLastBlock,
-        });
-      });
-      if (textBlocks.length > 0 || (item.streaming && thinkingBlocks.length === 0)) {
+      let textBlocks: Extract<AssistantBlock, { type: "text" }>[] = [];
+      let textStart = 0;
+      let thoughtIndex = 0;
+      let emittedText = false;
+      let hasThinking = false;
+      let hasText = false;
+      const commitText = (last: boolean): void => {
+        if (textBlocks.length === 0) return;
         commitChain();
         rows.push({
           kind: "item",
-          key: item.id,
-          item: { ...item, blocks: textBlocks },
+          key: emittedText ? `${item.id}:text:${textStart}` : item.id,
+          item: { ...item, streaming: item.streaming && last, blocks: textBlocks },
         });
+        emittedText = true;
+        textBlocks = [];
+      };
+      item.blocks.forEach((block, idx) => {
+        if (block.type === "thinking") {
+          commitText(false);
+          hasThinking = true;
+          chainBuffer.push({
+            kind: "thinking",
+            key: `${item.id}:thinking:${thoughtIndex++}`,
+            text: block.text,
+            ...(item.at === undefined ? {} : { at: item.at }),
+            running: item.streaming === true && idx === item.blocks.length - 1,
+          });
+        } else if (block.text.trim().length > 0) {
+          if (textBlocks.length === 0) textStart = idx;
+          hasText = true;
+          textBlocks.push(block);
+        }
+      });
+      commitText(true);
+      if (item.streaming && !hasThinking && !hasText) {
+        commitChain();
+        rows.push({ kind: "item", key: item.id, item: { ...item, blocks: [] } });
       }
       continue;
     }
