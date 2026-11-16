@@ -16,7 +16,7 @@ fn illegal(plan: &PlanRow, to: Phase) -> CpdError {
     CpdError::new(
         ErrorCode::IllegalTransition,
         format!(
-            "Plan {} cannot move from {} to {} by hand: only grounding or paired shaping → plan is allowed (§3.1).", 
+            "Plan {} cannot move from {} to {} by hand: only grounding or paired shaping → plan is allowed (§3.1).",
             plan.id,
             plan.phase.as_str(),
             to.as_str()
