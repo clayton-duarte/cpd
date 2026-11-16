@@ -118,7 +118,7 @@ impl Fakes {
     }
 }
 
-/// Scoped observation of production write transactions, for in-process fakes.
+// Scoped observation of production write transactions, for in-process fakes.
 #[cfg(feature = "fakes")]
 thread_local! {
     static WRITE_OBSERVER: RefCell<Option<Arc<std::sync::atomic::AtomicBool>>> = const { RefCell::new(None) };
