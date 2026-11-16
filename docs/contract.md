@@ -6630,6 +6630,14 @@ compatibility evidence; they do not restore that selection policy.
 
 A **policy** says how cpd and its agents work for one GitHub owner or repo: what cpd's commands do where the owners differ, and what the agents are told (hs-d288; design `docs/research/policy-architecture.md` Option 1, evidence `docs/research/repo-policy.md`; where they differ, the decisions cited here win). Policies have four precedence layers (most specific wins): the built-in default, machine, owner and repository. The machine is never part of the key, but the machine, whether the same one or different across runs, so a policy resolves the same for every key on one machine and differently across machines (hs-d9, hs-d12).
 
+#### Owner role-selection resolver contract
+
+This is the decided contract for the independent owner-scoped resolver prerequisite (air-d195, air-d199, air-d208), not a claim that it is deployed or that curation or other consumers are wired to it. It does not assert dispatch integration, inference, credentials or runtime availability. The intended selection and retry behavior of new work is defined in §9; legacy dispatch is not evidence that the new policy is deployed.
+
+The resolver selects a complete `role_selection` for an owner, independent of host or repo. An owner table replaces the shared selection atomically, not role by role. Without an owner table, the shared selection comes from optional `$CPD_HOME/policy/default.toml`, or from the compiled air-d195 defaults if that file does not provide one. `role_selection` is forbidden in host and repo policy. The owner `missionlane` must provide explicit roles using Bifrost; it cannot inherit the shared default or guessed model mappings (air-d199).
+
+A selection contains Manager, Lead and Worker, each with a full `provider/model` reference and a nonnegative integer effort. All three use one provider. Pi is the sole authority for whether each exact model and effort is supported: unsupported selections or unavailable capability evidence are refused, not guessed. Auxiliary consumers reuse the Worker selection (air-d208); there is no separate judge or host-specific role policy. Capability evidence is not proof of credentials, availability or successful inference.
+
 #### Policy domains
 
 - A **domain** is a typed slot of a policy, owned by cpd's code. Its value has up to two parts: **typed keys**, closed values cpd's own code branches on, parsed once, unknown ones refused; and **`text`**, Markdown for agents, never parsed by cpd. A policy is the fixed set of domains below: every domain has a value, always.
@@ -6882,12 +6890,14 @@ offers no effort setting records that fact rather than receiving a fabricated
 level. Validate the pair against the selected model's capabilities; reject an
 unknown model or unsupported effort rather than clamping or substituting it.
 
-Manager, Lead, and Worker defaults are independent selections. Auxiliary work
-also has a named selection. Role authority and responsibility are independent
+Manager, Lead and Worker each have a model/effort pair within the complete
+owner selection of [§8.3](#owner-role-selection-resolver-contract). Auxiliary
+consumers reuse the Worker selection and retain that selection’s provenance. Role authority and responsibility are independent
 of model choice: choosing a model does not grant another role's permissions.
 There is no built-in strength ordering between different models.
 
-Existing policy precedence (§8.3) still applies. Resolve and retain the selection
+Role-selection scope and atomic replacement follow the owner resolver (§8.3);
+other policy domains retain their existing precedence. Resolve and retain the selection
 and its source for each Job and Attempt. A policy change alone must not silently
 change a running Attempt. Report configured selection separately from observed
 runtime selection; when the latter is unknown, say so.
