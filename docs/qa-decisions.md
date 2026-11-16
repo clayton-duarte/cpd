@@ -257,3 +257,35 @@ The User merged skills#6 on 2026-11-13. CPD now pins reviewed source 53523a3e5fc
 
 
 The User merged skills#7. CPD pins reviewed source 5569e37c4f09e079d7be30dce177eb2c351340c3, including cross-process weekly-window binding and required descriptors for weekly creation. Compatibility coverage supplies a synthetic approved current-window descriptor rather than bypassing this requirement. The recorded active run ID/start and shared repository scope remain unchanged.
+
+
+## 2026-11-16 — calendar pacing replaces the fixed weekly floor
+
+The User chose `d * (100 / 7)` as the remaining reserve, Monday `d=6` down to
+Sunday `0`, specifically allowing Sunday to spend the old balance down to zero.
+The User confirmed that the new week's Monday allocation may start on Sunday
+evening and chose **8 p.m. Toronto time** to allow for the roughly 7 p.m. reset.
+This supersedes the 2026-11-13 fixed 50% stop rule; cardinal caps stay null and
+all repositories remain in the same account/budget group.
+
+Clarification and critique: this is cumulative pacing with carryover, not a hard
+14.3% daily cap. Sunday zero permits exhaustion without requiring waste. Old
+credits expire at the actual provider reset, not at 8 p.m.; the release time only
+delays new-window spending. A rounded sampled meter cannot reserve the cost of
+in-flight work or promise an exact landing at zero, and other account consumers
+reduce available headroom. Stop at the floor, not strictly below it: otherwise
+Sunday's `remaining >= 0` would never refuse work.
+
+Use fresh official balance/reset telemetry, calendar parts in America/Toronto,
+and the upstream guard's optional daily_pacing policy. Before the actual reset,
+Sunday's old-window reserve is zero. After it, reserve 100% until 8 p.m., then
+85.7% through Monday. Reject an unexpected reset weekday. The reader uses
+`--min-remaining 0`; only the guard computes the moving floor. Existing fixed
+threshold consumers retain their old behavior. Run-window binding, explicit
+User authorization, shared attribution and User-only merge remain unchanged.
+This is a bounded policy/tooling update, not a resumed QA loop or quota reset.
+
+Canonical implementation and its tests live in the skills source PR; this
+consumer is prepared against its immutable commit and must merge after it.
+
+Source proposal: [skills #8](https://github.com/clayton-duarte/skills/pull/8).

@@ -6,7 +6,7 @@ Migration tracking: [#1152](https://github.com/clayton-duarte/cpd/issues/1152).
 CPD's `tools/repo-qa` is a pinned, unmodified consumer snapshot, not another
 source of truth. [tools/repo-qa.upstream.json](../tools/repo-qa.upstream.json) records
 the immutable upstream commit, package path and SHA-256 of every package file.
-The pin is `b62b929017b7bdafded41763b10ec1eb0c1fae95`. CPD tests reject changed, added, removed or
+The proposed daily-pacing pin is `3d67f3d920c7419308f49fa846ec55b3c45e00a3` (source review pending). CPD tests reject changed, added, removed or
 non-file entries that differ from that snapshot.
 
 The User asked for a standalone source repository. Keeping a pinned copy preserves
@@ -49,3 +49,11 @@ Tell a new agent to clone `clayton-duarte/skills` and read
 the agent's supported skill-install location, record its source commit, and follow
 its adoption guide. Config/profile/permissions must be grounded in the new target
 repo. Do not copy CPD machine data, active run IDs or an assumed allowance.
+
+
+For the 2026-11-16 daily pacing update, this consumer PR is prepared as a draft
+against the source branch's immutable commit so both changes can be reviewed.
+Merge the source PR first, then this consumer. This does not activate an
+unreviewed pin on main or authorize a new QA run.
+
+Source proposal: [skills #8](https://github.com/clayton-duarte/skills/pull/8).

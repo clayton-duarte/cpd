@@ -76,8 +76,8 @@ def main():
         child_environment["CODEX_HOME"] = str(auth_dir)
     else:
         auth_dir = None
-    if not 0 < args.min_remaining <= 100:
-        parser.error("--min-remaining must be in (0,100]")
+    if not 0 <= args.min_remaining <= 100:
+        parser.error("--min-remaining must be in [0,100]; use 0 when the guard enforces daily pacing")
     def terminate(*_):
         raise KeyboardInterrupt()
     signal.signal(signal.SIGTERM, terminate)

@@ -1,10 +1,10 @@
 {
   "version": 1,
   "repository": "https://github.com/clayton-duarte/skills",
-  "revision": "5569e37c4f09e079d7be30dce177eb2c351340c3",
+  "revision": "3d67f3d920c7419308f49fa846ec55b3c45e00a3",
   "path": "skills/repo-qa",
   "files": {
-    "README.md": "012f219fdad443c57405cb0fd65ad79ebb2b1344c4fa708f9d7726ae5d802bc5",
+    "README.md": "92c21961adaf4e2c43aed7b772b5005c17b57e1e479befdbf3ce8c19834cbcf9",
     "SKILL.md": "b8771af2caa16fc7eef74f563a3e9dd4f46a0695234ea420a6cc46213bddded6",
     "assets/config.example.json": "f2172748341b34dca9712a60cf8f49766821b241dd1e770c7e77c7b23b523eb4",
     "assets/handoff.md": "901491f06fceec08b60e6c0018f97efcf8ba2d3ac52bef6676d563d80d82e5db",
@@ -12,12 +12,12 @@
     "assets/pr.md": "c8508959c60d53fef894ac4c4467d1ebfacbea4b9d74489a9171ebd4ed5fef82",
     "assets/profile.md": "cac26bbe9441cdb656471e011888476959ced4a8001952227ed8821d1ade1bb6",
     "assets/run.example.json": "15791a56d6a09e5348466adfd1a811897a14297506bb931c9d15d2026a2342a0",
-    "references/PROTOCOL.md": "918113b0ea5c5ea1f043fa45c632b462263a38f9cee438624dd8b187e8d1d260",
-    "references/RESEARCH.md": "0437e92d3fc19c85bb2bd746bc961c5cfa070fc4b359629e4caa0c9fca39a762",
-    "scripts/codex-usage-reader.py": "825ca678e746cdf4438fce88489f8934b3ad5ffa5e768e7fa7311d934ca1dd26",
-    "scripts/codex-usage-reader.test.py": "07e1663da227eaed5f6edb23ac4ad64a262e19f4ae719caca5cf55acbd35a3b9",
+    "references/PROTOCOL.md": "bc32a723c20f9e5914da7758d747b12c34d9bdeb97369504e6b5089af0b6829c",
+    "references/RESEARCH.md": "e08f71924568db9c0733b2a99f89a43b658b863aa35cc3cfc2c929447c408093",
+    "scripts/codex-usage-reader.py": "bd42ef9b7e22a4fb113f91697e4978a7055c3eacc426f0de7eca71a051bdf1a1",
+    "scripts/codex-usage-reader.test.py": "a21300ecfa8541dbeaa87999be8a9908b435fcfad220959befd22ae3c0b4a0b6",
     "scripts/portability.test.mjs": "678be8f938f0e2145b35fe591af7de4f00d54e7bf5b152929ba9b0474784f7d7",
-    "scripts/qa.mjs": "9e748d3a09e85816de5c092e0a15ef3cd1b4ca0eb34a5f6012fc49a1ed1cc3b7",
-    "scripts/qa.test.mjs": "99e9b2af074764a5e6f6e52f3b11a0540f0ae8545b3b7557b46cac7bd04bf079"
+    "scripts/qa.mjs": "50a0df581e8d40b2f66b71c1bc3514b95fe99dd57ed83edce5ed697fbd0143ee",
+    "scripts/qa.test.mjs": "6b536300f411f829406d27024dcff018c6d8380ab4cfa7212517ba8c87f2decc"
   }
 }

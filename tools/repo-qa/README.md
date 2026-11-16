@@ -214,6 +214,54 @@ Polling and rounded account percentages cannot reserve the cost of the final
 response or exclude concurrent consumers; this is a sampled stop policy, not an
 exact usage ceiling. The reader alone cannot interrupt a running model response.
 
+## Calendar daily pacing of a weekly allowance
+
+Instead of a fixed percentage floor, a User may configure:
+
+```json
+"weekly_allowance": {
+  "daily_pacing": {"timezone": "America/Toronto", "sunday_release_hour": 20},
+  "max_age_seconds": 60
+}
+```
+
+Do not also set `min_remaining_percent`. This is an optional operating policy,
+not the example configuration's default. With `limits: null`, it replaces the
+fixed floor without reintroducing issue/PR caps. Fresh official usage, account
+availability, spend-control and immutable run-window checks still apply.
+
+Reserve `d * 100 / 7` percent, with Monday `d=6`, Tuesday `5`, through Sunday
+`0`. Available to spend now is `max(0, live_remaining - reserve)`. Unused
+allowance carries forward, including savings from other days; all account usage
+consumes the same balance. Stop when the remaining percentage reaches or falls
+below the reserve. Use full precision for decisions, round only for display:
+
+| Day (configured timezone) | Remaining floor |
+|---|---:|
+| Monday | 85.7% |
+| Tuesday | 71.4% |
+| Wednesday | 57.1% |
+| Thursday | 42.9% |
+| Friday | 28.6% |
+| Saturday | 14.3% |
+| Sunday before the actual reset | 0% |
+
+The official `resets_at` determines the real window, not an assumed 100% reading.
+The reset must be Sunday in the configured timezone; a different day refuses
+work until the policy is reconciled. After a confirmed Sunday reset, reserve
+100% until the configured release hour (20 means 8 p.m.). Then release Monday's
+allocation and retain its 85.7% floor through Monday. A later actual reset does
+not release new credits early. Calendar boundaries use the IANA timezone,
+including daylight saving, rather than seven fixed 24-hour slices.
+
+Run the existing usage reader with `--min-remaining 0` for this mode, so a static
+reader threshold does not suppress valid readings later in the week. The reader
+reports telemetry; the JS guard enforces the moving floor and exposes
+`weekly_allowance.min_remaining_percent` and `spendable_percent` in status.
+An exact floor has no spending headroom. Missing/stale usage still fails closed.
+This does not start a loop, schedule a wake-up, or authorize a new run after a
+weekly reset; the existing explicit run/window policy remains in force.
+
 ## Verify the kit
 
 No npm dependencies or repository services are needed:
