@@ -117,3 +117,48 @@ impl Fakes {
         }
     }
 }
+
+// Scoped observation of production write transactions, for in-process fakes.
+#[cfg(feature = "fakes")]
+thread_local! {
+    static WRITE_OBSERVER: RefCell<Option<Arc<std::sync::atomic::AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Installs a thread-local transaction observer for the duration of `f`.
+#[cfg(feature = "fakes")]
+pub fn observe_writes<R>(observer: Arc<std::sync::atomic::AtomicBool>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Arc<std::sync::atomic::AtomicBool>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            WRITE_OBSERVER.with(|cell| *cell.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = WRITE_OBSERVER.with(|cell| cell.borrow_mut().replace(observer));
+    let _restore = Restore(previous);
+    f()
+}
+
+/// Tracks an acquired transaction until it has committed or rolled back.
+#[cfg(feature = "fakes")]
+pub(crate) struct WriteObservation(Option<Arc<std::sync::atomic::AtomicBool>>);
+
+#[cfg(feature = "fakes")]
+impl WriteObservation {
+    pub(crate) fn new() -> Self {
+        Self(WRITE_OBSERVER.with(|cell| cell.borrow().clone()))
+    }
+    pub(crate) fn acquired(&self) {
+        if let Some(observer) = &self.0 {
+            observer.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+#[cfg(feature = "fakes")]
+impl Drop for WriteObservation {
+    fn drop(&mut self) {
+        if let Some(observer) = &self.0 {
+            observer.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
