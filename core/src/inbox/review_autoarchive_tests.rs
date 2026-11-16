@@ -99,7 +99,7 @@ fn review_feedback_regression_done_approval_opens_no_write() {
 fn audit_fix_approval_failure_does_not_block_other_plan() {
     let (_dir, mut store) = fixture("grounding");
     store.write("fixture", |tx| {
-        tx.execute_batch("INSERT INTO plans (id,context,title,phase,created_at,pr_subject) VALUES ('a-bad','codereview','Bad','plan','t','pr:acme/pay#812');")?;
+        tx.execute_batch("INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at) VALUES ('bad-lead','lead','codereview','a-bad','Lead','/','S3','idle','t','t'); INSERT INTO plans (id,context,title,phase,lead_session,created_at,pr_subject) VALUES ('a-bad','codereview','Bad','plan','bad-lead','t','pr:acme/pay#812');")?;
         Ok::<(), crate::error::CpdError>(())
     }).unwrap();
     let pr = GhPr { title: "PR".into(), draft: false, state: GhState::Open, author: "other".into(), decision: None, reviews: vec![Review { author: "me".into(), state: "APPROVED".into(), commit_oid: None }], head_oid: None, checks_state: None };
