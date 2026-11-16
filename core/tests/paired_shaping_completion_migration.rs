@@ -4,7 +4,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::store::testing::{named_migrations, prefix_database};
 use rusqlite::{Connection, types::Value};
 
-const MIGRATION: &str = "20261115T1200-shaping-origin";
+const MIGRATION: &str = "20261116T1802-shaping-origin";
 const PLAN_COLUMNS: &str = "id,context,title,jira,phase,lead_session,created_at,locked_at,done_at,archived_at,outline,deleted_at,pr_subject,changes_requested_at,reviewed_repo,reviewed_number,reviewed_title";
 
 fn rows(conn: &Connection, sql: &str) -> Vec<Vec<Value>> {
@@ -27,7 +27,7 @@ fn shaping_origin_migration_preserves_history_and_existing_guards() {
         .expect("forward shaping-origin migration is present");
     assert_eq!(
         migrations[index + 1].0,
-        "20261115T1201-shaping-promotion",
+        "20261116T1803-shaping-promotion",
         "the promotion migration follows shaping-origin"
     );
     let conn = prefix_database(index, &home).unwrap();

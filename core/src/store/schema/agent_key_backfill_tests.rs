@@ -258,15 +258,15 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261113T0900-pr-rereview-asks",
             "20261113T1000-pr-open-threads",
             "20261114T1100-review-thread-completeness",
-            "20261114T1101-paired-shaping",
-            "20261115T1200-shaping-origin",
-            "20261115T1201-shaping-promotion",
             "20261116T1800-green-unmerged",
+            "20261116T1801-paired-shaping",
+            "20261116T1802-shaping-origin",
+            "20261116T1803-shaping-promotion",
         ]
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261116T1800-green-unmerged")
+        Some("20261116T1803-shaping-promotion")
     );
 }
 

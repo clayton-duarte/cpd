@@ -4,7 +4,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::store::testing::{named_migrations, prefix_database};
 use rusqlite::{Connection, types::Value};
 
-const MIGRATION: &str = "20261115T1201-shaping-promotion";
+const MIGRATION: &str = "20261116T1803-shaping-promotion";
 
 fn rows(conn: &Connection, sql: &str) -> Vec<Vec<Value>> {
     let mut stmt = conn.prepare(sql).unwrap();

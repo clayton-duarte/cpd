@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 147
+-- cpd-migration: breaking after 148
 -- Permit paired shaping Plans to enter planning and unlocked exploration rounds to settle.
 -- This changes only the phase trigger; all rows, CHECKs, and other triggers remain unchanged.
 DROP TRIGGER plans_phase;

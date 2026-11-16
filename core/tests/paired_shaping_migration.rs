@@ -20,7 +20,7 @@ fn paired_shaping_migration_preserves_rows_history_and_constraints() {
     let migrations = named_migrations();
     let index = migrations
         .iter()
-        .position(|(name, _, _)| *name == "20261114T1101-paired-shaping")
+        .position(|(name, _, _)| *name == "20261116T1801-paired-shaping")
         .unwrap();
     let conn = prefix_database(index, &home).unwrap();
     conn.execute_batch(
