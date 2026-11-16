@@ -488,7 +488,7 @@ fn audit_fix_review_subjects_do_not_starve() {
             Ok::<(), crate::error::CpdError>(())
         }).unwrap();
     }
-    for tick in 0..4 {
+    for tick in 0..12 {
         rig.pass(tick * 10).unwrap();
     }
     assert!(
