@@ -110,3 +110,9 @@ fn a_stopped_lead_of_a_done_plan_is_not_restarted() {
     liveness::run(&mut fx.engine);
     assert_eq!(new_windows(&runner), 0);
 }
+
+#[test]
+fn missing_cockpit_restarts_lead_with_vanished_pane() {
+    let (mut fx, _runner) = fx();
+    vanished(&mut fx, "lead1");
+}
