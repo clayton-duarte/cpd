@@ -8,11 +8,11 @@ use crate::common;
 use std::path::Path;
 
 use common::fx::Fx;
-use common::{Run, refused};
+use common::{refused, Run};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::store::Store;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 // ---------- fixtures ----------
 
@@ -323,8 +323,9 @@ fn cancels_jobs_closes_open_pull_requests_and_the_lead_and_archives_the_plan() {
         1
     );
     assert_eq!(
-        fx.env
-            .query::<i64>("SELECT count(*) FROM sessions WHERE plan = 'pay' AND archived_at IS NULL"),
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM sessions WHERE plan = 'pay' AND archived_at IS NULL"
+        ),
         0
     );
     assert_eq!(events(&fx, "plan-archived").len(), 1);
