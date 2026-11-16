@@ -41,7 +41,7 @@ Rejected lines by cause: short 0, topic 0, target 0, missing 0, unknown 0, repea
 
 Topics: 20 in all (before 18); counts cockpit 82, plan 68, planning 47, testing 46, lead 41, architecture 33, install 27, code-sharing 24, process-lifecycle 16, engine 15, context 13, dotfiles 12, pr-polling 10, plannotator 7, config 7, machines 5, switch-over 4, archive 3, cut-over 2, retention 1. Near-duplicates: `plan` / `planning` (68 and 47 records on two topics that mean the same), `switch-over` / `cut-over`; `retention` used once. No format error. (Different topics from the first measurement: the run is a different sample of the model's choices.)
 
-Retirement proposals: 105 (22% of 463): 100 `documented`, 3 `duplicate`, 2 `superseded`. `documented` targets: `docs/contract.md` 71, `docs/commands.md` 26, `docs/implementing.md` 2, `docs/ui-preview.md` 1 (all in `/home/clayton/projects/cpd`). Doc candidates: 11, all `pending`.
+Retirement proposals: 105 (22% of 463): 100 `documented`, 3 `duplicate`, 2 `superseded`. `documented` targets: `docs/contract.md` 71, `docs/commands.md` 26, `docs/implementing.md` 2, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` 1 (all in `/home/clayton/projects/cpd`). Doc candidates: 11, all `pending`.
 
 ## 3. Hand check
 

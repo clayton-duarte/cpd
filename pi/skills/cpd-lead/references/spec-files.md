@@ -1,4 +1,4 @@
-# Spec files, sizing, Tiers and Dependencies
+# Spec files, sizing, model selection and Dependencies
 
 A Worker is a fresh session that sees only its Spec. Whatever it needs must be in the spec file.
 
@@ -55,19 +55,16 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 - Jobs with disjoint `touches` and no data flow between them need no Dependency. Shared files such as lockfiles, `package.json`, config and index or route registries count as shared.
 - Dependencies cannot form a cycle (`dependency_cycle`), cannot name an unknown Job (`needs_unknown`) and cannot name a cancelled or failed Job (`needs_unavailable`).
 
-## Tiers
+## Model selection
 
-Format `<letter><effort>`: letters `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini), ranked G < H < S < O; effort `0`–`4` (a digit only where the model offers that effort; digits may skip), or `X` for any model (the effort order is 0 < 1 < X < 2 < 3 < 4, so X sends no effort; air-d16, air-d17, air-d21); effort 5 is never valid. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is inside the worker range**, from `worker_tier` through the highest valid rung at or below `lead_tier` (contract §9 "Roles and ranges"). Read that range from `cpd tiers` and the config, never from a fixed list; the explore kinds have their own ranges ([Explore Jobs](#explore-jobs)). A Worker's ladder climbs to the next valid effort inside the letter (contract §9 'Next rung') and stops at the range's ceiling. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. A Lead's Tier is in the lead range (`lead_tier` through the highest valid rung at or below `manager_tier`), a Manager's in the manager range (`manager_tier` up to the top valid rung); both are set by the config, not by you. `GX` is the auxiliar's Tier (the distiller, `context_distill_tier`, default `GX`); G is a letter like the others, and a Job's Tier of letter G is refused unless the worker range holds it.
-
-| Work | Tier | Why |
-|---|---|---|
-| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`no_submit`) raises effort by one on the next Attempt, and a `crashed` or `merge_conflict` Attempt is retried at the same Tier, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. A `gate_failed` is retried once at the same Tier and uses a try. |
-| Docs, config, mechanical edits | `H3` | Cheap and enough. |
-| A Workflow's open and update Jobs | `worker_tier` (default `H3`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
+Before selecting a model or effort for a Job, read the
+[selection contract](../../../../docs/contract.md#9-model-selection). Use the
+role's resolved selection or an explicitly authorized selection; letter tiers
+are not a substitute for an exact model and effort.
 
 ## A feedback fix Job
 
-On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>`.
+On an open Workflow a fix is one `work` Job (no `--kind` or `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>`.
 
 ## Test Jobs
 
@@ -98,14 +95,14 @@ A Workflow that changes behaviour has a test Job and an implementation Job; when
 
 A Research Job is an ordinary Workflow Job that writes `docs/research/<topic>.md` and goes through review; it is not an explore Job (`--kind scout|research`, no Workflow, queued at once, artefact in `$CPD_HOME/run/<plan>/explore/<job-key>.md`: [Explore Jobs](#explore-jobs)). Grounding that reads a codebase, compares libraries or checks an API against its source goes to an explore Job as one.
 
-- Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier letter `S`, effort 1 or above or `X` (air-d16, air-d17, air-d21), up to the worker range's ceiling.
+- Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Resolve model and effort under the contract.
 - Put it in the Plan first and add the follow-ups right after the lock queued with `--needs <research-job>` (same Workflow), listing them in its `context`: they wait on it, never as drafts. Tell the User what the batch holds. A follow-up that is its own Workflow is added right after the lock with `cpd workflow add <key> --repo <path> --title "<title>" --needs <research-workflow>` so it waits on the research Workflow's merge, and its Jobs are added queued with `--jobs <file.json>`; the research findings are read from main when it starts. This is the exception to stacking ([Scoping](../SKILL.md#scoping)): the follow-up reads what is on `main`, so it does not stack (`--base`) on the research Workflow.
 - A research Job obeys the [bounded commands](#bounded-commands): it commits its findings file early and measures only under `timeout`, with real data, never a synthetic benchmark.
 - Promoting an explore finding into the repo (a `docs/research/*.md` file) is an ordinary docs Job the Lead adds ([Explore Jobs](#explore-jobs)).
 
 ## Explore Jobs
 
-The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (Tier letter `H`, effort 1 or above or `X` (air-d16, air-d17, air-d21), up to the worker range's ceiling); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs; Tier letter `S`, effort 1 or above or `X` (air-d16, air-d17, air-d21), up to the worker range's ceiling). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout|research` (`--kind scout` or `--kind research`) and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
+The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (model selection follows the contract); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout|research` (`--kind scout` or `--kind research`) and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
 
 The file passed as `--spec` has exactly these four fields, all required, and no others (`spec_invalid`, exit 2, with the JSON path, for `touches`, `tests`, `test_files` or `resources`):
 
@@ -155,7 +152,7 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
 Add the Job and read its summary when it merges (`job-merged`). Its file stays where the Worker wrote it, `$CPD_HOME/run/<plan>/explore/<job-key>.md`: the Lead never reads it (the adapter refuses it). Cite that path in the Spec of each Job that needs the finding, so its Worker reads it.
 
 - **Dependencies.** An explore Job may need only other explore Jobs, and no other Job may need one (`explore_needs_mixed`, exit 3).
-- **Tier.** A scout is letter `H` and a research Job letter `S`, each at effort 1 or above or `X` (air-d16, air-d17, air-d21), and at most the worker range's ceiling (read it from `cpd tiers` and the config); any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A `no_submit` Attempt retries at the next valid effort inside its letter (contract §9 'Next rung'), never landing on `X` when the model has efforts ≥ 1 (air-d16, air-d17, air-d21); a `crashed` or `merge_conflict` Attempt retries at the same Tier; after the top rung a `no_submit` fails the Job.
+- **Model selection and retries.** For scout and research Jobs, resolve selection and retry effort under the [contract](../../../../docs/contract.md#9-model-selection).
 - **Worker.** An explore Worker may `cpd ask`: answer it as any Escalation. It may read the Context's records, read-only.
 - **Refusals.** `explore_workflow_forbidden` (`--workflow`) and `explore_no_draft` (`--draft`): both exit 3. `illegal_phase` is not raised for an explore Job in any phase, `done` included: from `dispatch`, `deploy` or `done` the add moves the Plan back to `plan`. `cpd plan phase plan` is refused `explore_pending` (exit 3) while an explore Job of the Plan is queued, running or failed; `details.jobs` lists them.
 - **A Manager's explore.** A Manager explores before a Lead exists through its own Lead-less shaping Plan: its explore Spec is the same, and its artefact is at `run/<plan>/explore/<key>.md` of that Plan.

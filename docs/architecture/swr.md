@@ -1,6 +1,6 @@
 # Stale-while-revalidate (SWR)
 
-Status: **normative for the SWR Jobs** (Plan `external-sync-arch`: `swr-core`, then one Workflow per datasource). Where merged code later differs from this page, the code wins; the names here are the contract the next Jobs build on. Vocabulary: [CONTEXT.md — Data](../../CONTEXT.md). The schema is [contract §4.4](../contract.md); the engine step `swr` is [contract §4.7](../contract.md); the commands are [commands §32](../commands.md).
+Status: **normative for the SWR Jobs** (Plan `external-sync-arch`: `swr-core`, then one Workflow per datasource). Vocabulary: [CONTEXT.md — Data](../../CONTEXT.md). The schema is [contract §4.4](../contract.md); the engine step `swr` is [contract §4.7](../contract.md); the commands are [commands §32](../commands.md).
 
 Decisions: pro-d440 (architecture), pro-d441 (GitHub), pro-d443 (Jira), pro-d444 (Slack), pro-d446 (name `swr`), pro-d447 (check-level `excused_labels` kept), pro-d448 (all sources, one DAG), pro-d449 (cpd is the backend; clients call cpd).
 

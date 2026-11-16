@@ -88,7 +88,7 @@ The checker lists every failure at once (`check()` collects all problems), and e
 
 From `record_curations` (526 rows) and `record_retirements` (137 rows), all `pending`.
 
-- **Retirements:** 131 `documented` (96%), 3 `duplicate`, 3 `superseded`. Targets of `documented`: `docs/contract.md` 91, `docs/commands.md` 34, `docs/implementing.md` 3, `docs/ui-preview.md` 1, `CONTEXT.md` 1, `BACKLOG.md` 1 (all `/home/clayton/projects/cpd:`). 137 of 526 records (26%) proposed for retirement.
+- **Retirements:** 131 `documented` (96%), 3 `duplicate`, 3 `superseded`. Targets of `documented`: `docs/contract.md` 91, `docs/commands.md` 34, `docs/implementing.md` 3, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` 1, `CONTEXT.md` 1, `BACKLOG.md` 1 (all `/home/clayton/projects/cpd:`). 137 of 526 records (26%) proposed for retirement.
 - **Doc candidates:** 34 (`doc_candidate = pending`, `doc_paths = []` in all 34), 0 `sent`; 19 of them from the last run alone.
 - **Kinds curated** (join on context and id): decision 286, note 226, answer 7, question 7 = 526; never `plan` or `brief`.
 

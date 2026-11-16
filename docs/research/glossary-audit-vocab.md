@@ -6,7 +6,7 @@ Reading rule used in every table: a verdict ignores the purely mechanical `objec
 
 ## Coverage
 
-Part: CONTEXT.md, README.md, BACKLOG.md, docs/implementing.md, docs/versioning.md, docs/mark.md, docs/ui-preview.md, docs/cockpit-parity.md, docs/interface.md (Description column only), and the title, status and first paragraph of each docs/adr/*.md. Line counts from `wc -l`.
+Part: CONTEXT.md, README.md, BACKLOG.md, docs/implementing.md, docs/versioning.md, docs/mark.md, docs/contract.md#37b-the-serve-process-runtime-and-port-supervision, docs/cockpit-parity.md, docs/interface.md (Description column only), and the title, status and first paragraph of each docs/adr/*.md. Line counts from `wc -l`.
 
 | File | Lines | Range | How read |
 |---|---|---|---|
@@ -17,7 +17,7 @@ Part: CONTEXT.md, README.md, BACKLOG.md, docs/implementing.md, docs/versioning.m
 | docs/implementing.md | 686 | 283-686 | skimmed: read only the headings (`rg -n '^#'`), every line that holds a PR, pull request, `pr` or workflow token, and lines 407-417 in full. Not read word by word: the fake tmux, git route, Fx fixtures, test kit, leak check, dependencies, install, adapter swap, portability check, scoped loop, debuginfo, build jobs, version string, compact-tools, ask_user_question and pi version sections. Vocabulary there, other than PR and workflow, is unaudited |
 | docs/versioning.md | 45 | 1-45 | read in full |
 | docs/mark.md | 13 | 1-13 | read in full |
-| docs/ui-preview.md | 33 | 1-33 | read in full |
+| docs/contract.md#37b-the-serve-process-runtime-and-port-supervision | 33 | 1-33 | read in full |
 | docs/cockpit-parity.md | 232 | 1-232 | read in full |
 | docs/interface.md | 172 | 1-172 | Description column only (column 2 of the table, lines 6-172, by `awk -F'\|' '{print $3}'`); the Command, Callers and Cockpit columns are generated and were not read as vocabulary. Only the Description cells with a PR token were read word by word; the others were skimmed by the same `rg` |
 | docs/adr/0001..0014 | 14 files | title, status, first paragraph (lines 1-12 of each) | read; history, no change proposed. Where a term was born is in `## Terms` (rows that cite docs/adr) |
@@ -30,7 +30,7 @@ Commands behind each count (from the worktree; the numbers are in `## Counts`):
 |---|---|
 | Entries in CONTEXT.md | `rg -n '^\*\*' CONTEXT.md \| wc -l` gives 78 (every entry heading starts a line with `**`) |
 | `_Avoid_` lines | `rg -n '^_Avoid_' CONTEXT.md \| wc -l` gives 60 |
-| Capital `PR` or `PRs`, per file | `rg -o -w 'PRs?' <file> \| wc -l`: CONTEXT.md 66, README.md 0, BACKLOG.md 1, docs/implementing.md 36, docs/versioning.md 3, docs/mark.md 0, docs/ui-preview.md 3, docs/cockpit-parity.md 22, docs/interface.md 12 (whole file, generated columns included) |
+| Capital `PR` or `PRs`, per file | `rg -o -w 'PRs?' <file> \| wc -l`: CONTEXT.md 66, README.md 0, BACKLOG.md 1, docs/implementing.md 36, docs/versioning.md 3, docs/mark.md 0, docs/contract.md#37b-the-serve-process-runtime-and-port-supervision 3, docs/cockpit-parity.md 22, docs/interface.md 12 (whole file, generated columns included) |
 | `pull request` in any case | `rg -oi 'pull requests?' <file> \| wc -l`: CONTEXT.md 15, README.md 2, docs/cockpit-parity.md 1, docs/interface.md 7 (whole file) |
 | The token set the occurrence table is complete over | `rg -o '\b(PRs?\|prs\|pr\|pr_\w+\|pull_requests)\b\|[Pp]ull [Rr]equests?' <file>`; every token of this set in the part (interface.md: Description column) is in one row, checked by a script: per-line counts equal, every quote found on its line |
 | Workflow in any case | `rg -oiw 'workflows?' <file> \| wc -l`: CONTEXT.md 6, BACKLOG.md 1, docs/cockpit-parity.md 11 |
@@ -81,7 +81,7 @@ One row per term or word-to-watch used in more than one sense, used loosely, sta
 | Scope | CONTEXT.md:272 | "Where a Domain's value is set" | 'out of scope' (132); Policy key Avoid 'scope' (285) | loose | none; keep the Avoid for Policy key |
 | Policy | CONTEXT.md:264 | "How cpd and its agents work for one GitHub owner or repo" | `cpd config`, `config.toml` (docs/implementing.md:32) while Avoid lists 'config' (265) | overloaded | Avoid 'config' only for the Policy; say `cpd config` is machine config |
 | Domain | CONTEXT.md:268 | "One typed slot of a Policy, owned by cpd's code" | Deploy stage (66); Domain `pr` (see PR occurrences) | loose | list Domains in the contract only |
-| Slot | CONTEXT.md:292 | "The number of available concurrent units of a determined resource: one concurrent unit of it." | Resource (288) 'limited number of slots'; chat slot of the cockpit (docs/ui-preview.md:17) | wrong | 'One concurrent unit of a Resource' |
+| Slot | CONTEXT.md:292 | "The number of available concurrent units of a determined resource: one concurrent unit of it." | Resource (288) 'limited number of slots'; chat slot of the cockpit (docs/contract.md#37b-the-serve-process-runtime-and-port-supervision:17) | wrong | 'One concurrent unit of a Resource' |
 | Skipped | CONTEXT.md:299 | "A Ready Job that E3 could not start for want of a pool" | upstream GitHub check conclusion `skipped`; Ready has no entry | loose | define Ready; say 'Skipped Job' |
 | Attach | CONTEXT.md:310 | "one explicit `cpd mcp attach <name>`" | tmux attach (README.md:22 'Install and attach', `cpd tui --attach`) | overloaded | 'attach an MCP server' versus 'attach the cockpit' |
 | Distilled Context | CONTEXT.md:100 | "The curator at work: the distiller runs once per batch of uncurated records" | digest (216); Avoid 'model digest' (101) | overloaded | the term names a process, not a Context: 'Distiller' |
@@ -117,7 +117,7 @@ One row per term or word-to-watch used in more than one sense, used loosely, sta
 | Reviewer born | docs/adr/0002-review-before-merge.md:1 | "Attempts are reviewed before they are merged, by a forked read-only Reviewer" | removed by R19 | ok | history |
 | Ledger born | docs/adr/0004-beads-ledger.md:8 | "Each Workflow's Jobs, Dependencies, Attempts, reviews" | cpd 2's Ledger is SQLite | ok | history |
 
-Terms fine, in one line: Clarifying, Specifying, Approving, Dividing, Sequencing, Dispatching, Context record, Context store, Job kind, Update Job, Dependency, Attempt, Ledger, Inbox, Inbox item, Cockpit, Engine, Feedback item, PR poll and PR post as words, User, Manager, Pending work, Lead, Worker, Escalation, Tier, Axiom, Exposure, Policy key, Resource, Tenant, Machine policy, MCP server, Resolved policy, Fallback, φ, CPD, README.md, docs/mark.md, docs/ui-preview.md (apart from its PR words).
+Terms fine, in one line: Clarifying, Specifying, Approving, Dividing, Sequencing, Dispatching, Context record, Context store, Job kind, Update Job, Dependency, Attempt, Ledger, Inbox, Inbox item, Cockpit, Engine, Feedback item, PR poll and PR post as words, User, Manager, Pending work, Lead, Worker, Escalation, Tier, Axiom, Exposure, Policy key, Resource, Tenant, Machine policy, MCP server, Resolved policy, Fallback, φ, CPD, README.md, docs/mark.md, docs/contract.md#37b-the-serve-process-runtime-and-port-supervision (apart from its PR words).
 
 ## Entries
 
@@ -226,7 +226,7 @@ Every word that names two or more entries, or has two or more senses inside CONT
 | digest | Context digest (CONTEXT.md:18, 100), Plans digest (CONTEXT.md:216) | two |
 | lock | Locked (CONTEXT.md:155), `plan lock` (CONTEXT.md:60), kernel `flock` (CONTEXT.md:288) | three; Resource's Avoid word is a real term |
 | check | Mechanical checks (CONTEXT.md:68), Quick check (CONTEXT.md:239), CI checks of a pull request (CONTEXT.md:194), Avoid word under Gate (CONTEXT.md:237) | four |
-| Slot | Resource slot (CONTEXT.md:291), Worker slots (CONTEXT.md:288), chat slot (docs/ui-preview.md:17) | three |
+| Slot | Resource slot (CONTEXT.md:291), Worker slots (CONTEXT.md:288), chat slot (docs/contract.md#37b-the-serve-process-runtime-and-port-supervision:17) | three |
 | Scope | policy Scope (CONTEXT.md:271), 'out of scope' (CONTEXT.md:132) | two |
 | owner | GitHub owner (CONTEXT.md:264), the User 'owns the ticket' (CONTEXT.md:200) | two |
 | base | base branch (CONTEXT.md:112), 'the PR's base' (CONTEXT.md:124), 'base PR' (CONTEXT.md:194) | three |
@@ -317,7 +317,7 @@ Every token of the set `PR`, `PRs`, `pull request(s)`, `pr` (command, flag, modu
 | BACKLOG.md | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | docs/implementing.md | 65 | 25 | 11 | 0 | 0 | 18 | 11 |
 | docs/versioning.md | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
-| docs/ui-preview.md | 3 | 2 | 0 | 0 | 0 | 1 | 0 |
+| docs/contract.md#37b-the-serve-process-runtime-and-port-supervision | 3 | 2 | 0 | 0 | 0 | 1 | 0 |
 | docs/cockpit-parity.md | 34 | 0 | 25 | 0 | 0 | 3 | 6 |
 | docs/interface.md | 19 | 10 | 7 | 0 | 0 | 2 | 0 |
 | docs/adr/0005-cpd-cli-control-plane.md | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -468,9 +468,9 @@ Every token of the set `PR`, `PRs`, `pull request(s)`, `pr` (command, flag, modu
 | docs/implementing.md:656 | 2 | mixed | One PR per upstream release, its title the release | decide: same as line 623 |
 | docs/versioning.md:20 | 2 | pull request | Two PRs that each add a migration | PR (unchanged) |
 | docs/versioning.md:36 | 1 | pull request | The commit subjects are the PR titles plus | PR (unchanged) |
-| docs/ui-preview.md:9 | 1 | object | The Lead adds a throwaway PR to the Plan | Workflow |
-| docs/ui-preview.md:9 | 1 | mixed | The PR is never opened; it is cancelled | decide: never opened: its pull request; cancelled: the object's status |
-| docs/ui-preview.md:11 | 1 | object | From the PR's Lead worktree, run: | Workflow |
+| docs/contract.md#37b-the-serve-process-runtime-and-port-supervision:9 | 1 | object | The Lead adds a throwaway PR to the Plan | Workflow |
+| docs/contract.md#37b-the-serve-process-runtime-and-port-supervision:9 | 1 | mixed | The PR is never opened; it is cancelled | decide: never opened: its pull request; cancelled: the object's status |
+| docs/contract.md#37b-the-serve-process-runtime-and-port-supervision:11 | 1 | object | From the PR's Lead worktree, run: | Workflow |
 | docs/cockpit-parity.md:9 | 1 | pull request | current source draws only the PR there | PR (unchanged) |
 | docs/cockpit-parity.md:14 | 1 | pull request | "PRs and their feedback, the engine's state" | PR (unchanged) |
 | docs/cockpit-parity.md:14 | 1 | pull request | PRs listed by Plan label | PR (unchanged) |
@@ -527,7 +527,7 @@ RULES (mechanical, no row each; the counts are `object` tokens from `## PR occur
 
 - R1. `object` PR becomes Workflow in CONTEXT.md: 42 tokens (Introduction 0; Phases 4; The CPD flow 5; Work units 20; Runtime 3; Roles 2; Outcomes 6; Axioms and Policies 2).
 - R2. `object` PR becomes Workflow in docs/implementing.md: 25 tokens, of which 16 are keys of Plan tests-mock work units (for example `PR ports2`, `PR testkit2`) and 9 are `pr` command or table words (line 46).
-- R3. `object` PR becomes Workflow in docs/ui-preview.md: 2 tokens; docs/interface.md: 10 Description tokens (fix the clap help text, then regenerate with `CPD_BLESS=1 scripts/cargo.sh test -p cpd --test interface`).
+- R3. `object` PR becomes Workflow in docs/contract.md#37b-the-serve-process-runtime-and-port-supervision: 2 tokens; docs/interface.md: 10 Description tokens (fix the clap help text, then regenerate with `CPD_BLESS=1 scripts/cargo.sh test -p cpd --test interface`).
 - R4. `pull request` tokens (87) stay as they are; 'PR' keeps this meaning. No change in docs/cockpit-parity.md, docs/versioning.md, README.md.
 - R5. docs/adr: no change, history (4 tokens, listed above).
 
@@ -575,7 +575,7 @@ RULES (mechanical, no row each; the counts are `object` tokens from `## PR occur
 | docs/implementing.md:604 | mixed: "The PR follows the TDD order" (also :631); 'One PR per upstream release, its title the release' (:623, :656) | shape tdd belongs to the Workflow; title and body belong to the pull request |
 | docs/versioning.md:5 | Replace "Today it is **13**" by the rule only | code has PROTOCOL 17 |
 | docs/versioning.md:6 | Replace "Today it is **45**" by the rule only | code has 75 migration files |
-| docs/ui-preview.md:9 | mixed: "The PR is never opened; it is cancelled after the preview." is a Workflow that never opens its pull request | status of the object, event of the pull request |
+| docs/contract.md#37b-the-serve-process-runtime-and-port-supervision:9 | mixed: "The PR is never opened; it is cancelled after the preview." is a Workflow that never opens its pull request | status of the object, event of the pull request |
 | BACKLOG.md:6 | Ask the User: "Move CI from `ubuntu-24.04` to `ubuntu-26.04`" is still wanted | no `.github` in the repo (verified); the repo policy says no GitHub Actions |
 | BACKLOG.md:16 | Reword "Remote workflows" and mixed "Estimated 7 PRs" | Workflow is a live term: 'Remote workflows' would read as the new object |
 | docs/cockpit-parity.md:1 | Move the file to docs/research or docs/archive, or leave it as history | "cpd 2 cockpit: parity checklist (an audit against the running cpd 1 cockpit)" uses the cpd 1 Workflow 11 times (lines 33 to 227) and the Dispatch column; history keeps old words |
@@ -587,7 +587,7 @@ RULES (mechanical, no row each; the counts are `object` tokens from `## PR occur
 | Measure | Number |
 |---|---|
 | Files in the part | 23 (9 named files and 14 ADRs) |
-| Lines read in full | 998 (CONTEXT.md 323, README.md 54, BACKLOG.md 16, docs/implementing.md 1-282, docs/versioning.md 45, docs/mark.md 13, docs/ui-preview.md 33, docs/cockpit-parity.md 232) |
+| Lines read in full | 998 (CONTEXT.md 323, README.md 54, BACKLOG.md 16, docs/implementing.md 1-282, docs/versioning.md 45, docs/mark.md 13, docs/contract.md#37b-the-serve-process-runtime-and-port-supervision 33, docs/cockpit-parity.md 232) |
 | Lines skimmed | 404 (docs/implementing.md 283-686) and the docs/interface.md Description column |
 | Entries in CONTEXT.md (`rg -n '^\*\*' CONTEXT.md \| wc -l`) | 78 |
 | Rows in `## Entries` | 78 (equals the entries: yes) |
@@ -606,5 +606,5 @@ RULES (mechanical, no row each; the counts are `object` tokens from `## PR occur
 | Occurrences with sense `mixed` | 51 |
 | Occurrences with sense `other` | 17 |
 | `pull request` tokens by file | CONTEXT.md 36, README.md 2, docs/implementing.md 11, docs/versioning.md 3, docs/cockpit-parity.md 25, docs/interface.md 7, docs/adr/0005-cpd-cli-control-plane.md 1, docs/adr/0006-rebase-trunk-based.md 1, docs/adr/0009-cockpit-replaces-herdr.md 1 |
-| Capital `PR` or `PRs` (whole files, `rg -o -w`) | CONTEXT.md 66, docs/implementing.md 36, docs/cockpit-parity.md 22, docs/interface.md 12, docs/versioning.md 3, docs/ui-preview.md 3, BACKLOG.md 1 |
+| Capital `PR` or `PRs` (whole files, `rg -o -w`) | CONTEXT.md 66, docs/implementing.md 36, docs/cockpit-parity.md 22, docs/interface.md 12, docs/versioning.md 3, docs/contract.md#37b-the-serve-process-runtime-and-port-supervision 3, BACKLOG.md 1 |
 | Workflow (any case) in the part | CONTEXT.md 6, BACKLOG.md 1, docs/cockpit-parity.md 11, docs/adr first paragraphs 8 (0001: 3, 0003: 1, 0004: 1, 0005: 1, 0011: 2, counting `workflow preparation`) |

@@ -4,7 +4,7 @@
 
 The WebUI busy indicator must respect session state. A stopped Session is never shown as thinking or waiting for a tool result, even when its transcript ends with a tool result or an assistant tool-use stop reason. It is shown as stopped and awaiting an explicit user action.
 
-The engine does not automatically restart a Session when its pi process exits, whether cleanly or unexpectedly. The Session remains stopped until the user explicitly resumes it.
+The engine does not automatically restart a Lead or Manager Session when its pi process exits, whether cleanly or unexpectedly (User, 2026-11-14). The Session remains stopped until the User explicitly resumes it. Job retries and desired-awake durable-host supervision follow their separate rules; neither is an implicit resume of the stopped pi Session.
 
 ## Explicit Resume for the selected stopped Session
 
