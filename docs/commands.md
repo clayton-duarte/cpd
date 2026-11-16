@@ -5716,6 +5716,12 @@ Removed by R19 (no Job-level Reviewer).
 
 Removed by hs-n641. The Worker latitude that hs-d512 allowed (a file outside `touches` when a test could not pass without it, listed in the commit message) is gone: the enforced `touches` check (contract §7.5) refuses such a path with `touches_violation`. The escape is the Lead's `job approve-touches` (§5.9a): a Worker that needs a path outside its `touches` asks (`cpd ask`) and the Lead approves it.
 
+### 16.5 Durable Worker report publication
+
+A `durable` Worker publishes its end report to `run/<plan>/attempts/<attempt>.report.json` after each settled submission and once more when it terminates (§3.4, contract §6.12). These publications for one Attempt may overlap: settled-submission callbacks are independent, and the termination publication may begin while a callback is still in flight. Every publication therefore uses its own unique temporary file in the report's directory; it must never share a temporary path with another publication. It writes the complete JSON report to that temporary file, then renames that file over the report path. The rename is atomic: a reader sees either the previous complete report or the new complete report, never a partial report. A publication may replace another publication's report if it completes later; every completed report remains a complete, valid report, without a promise that the last rename reflects the newest snapshot. A failed write or rename is an error, not a successful publication; the publisher cleans up its own temporary file when possible and surfaces the failure through the Worker's error handling. It must not remove another publication's temporary file.
+
+This publication contract specifies the required concurrent behavior; it makes no claim about the cause of any reported incident or that an incident has been mitigated.
+
 ## 18. Changes from cpd 1
 
 
