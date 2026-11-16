@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 const here = new URL("./", import.meta.url);
 const commandsDoc = readFileSync(new URL("../../docs/commands.md", here), "utf8");
 
-/** The skills of the package, each with the fewest `cpd …` commands it must name (a floor against a parser that finds nothing). */
+/** Role skills whose stated commands and facts must agree with the documentation. */
 const skills = [
   { skill: "cpd-lead" },
   { skill: "cpd-manager" },
@@ -312,7 +312,7 @@ function factProblems(files: { name: string; text: string }[]): string[] {
   return problems;
 }
 
-test("`cpd-context`, the turn-start message the Manager skill names, is the adapter's message type", () => {
+test("`cpd-context` is the adapter's turn-start message type", () => {
   assert.match(updatesSource, /CONTEXT_TYPE = "cpd-context"/, "`cpd-context` is the adapter's message type");
 });
 
