@@ -653,6 +653,8 @@ function createEventsDialect(): Dialect {
   const costed = new Set<string>();
   let live: EventsLive | null = null;
   let liveCount = 0;
+  const compactions = new Set<number>();
+  let failureId: string | undefined;
 
   type Out = DialectOutput;
   const newOut = (): Out => ({ append: [], update: [], deltas: [] });
@@ -667,6 +669,24 @@ function createEventsDialect(): Dialect {
       items[at] = item;
       out.update.push(item);
     }
+  };
+  const clearFailure = (out: Out): void => {
+    if (failureId === undefined) return;
+    const at = index.get(failureId);
+    if (at !== undefined) {
+      items.splice(at, 1);
+      index.clear();
+      items.forEach((item, i) => index.set(item.id, i));
+      out.replaced = true;
+    }
+    failureId = undefined;
+  };
+  const putFailure = (raw: unknown, out: Out): void => {
+    const failure = obj(raw, "compaction failure");
+    const id = `cf:${num(failure.taskId, "compaction taskId")}`;
+    if (failureId !== id) clearFailure(out);
+    failureId = id;
+    put({ kind: "fold", id, foldKind: "cpd", title: `Compaction failed (${str(failure.reason, "compaction reason")})`, body: str(failure.error, "compaction error"), defaultOpen: true }, out);
   };
   const get = (id: string): TranscriptItem | undefined => {
     const at = index.get(id);
@@ -765,6 +785,7 @@ function createEventsDialect(): Dialect {
         put({ kind: "orphanResult", id: `orphan:${callId}`, callId, name: str(message.toolName, "toolName"), result }, out);
       }
     } else if (kind === "pi.compaction") {
+      clearFailure(out);
       const message = obj(arr(entry.model, "compaction model")[0], "compaction model[0]");
       put({ kind: "compaction", id: `c:${entryId}`, ...isoOf(message), summary: textOf(message.content) }, out);
     } else if (kind === "cpd-skills" && Array.isArray(entry.model) && entry.model.length === 0) {
@@ -823,11 +844,16 @@ function createEventsDialect(): Dialect {
     index.clear();
     alias.clear();
     costed.clear();
+    compactions.clear();
+    for (const raw of arr(snap.compactions ?? [], "snapshot.compactions")) compactions.add(num(obj(raw, "compaction").taskId, "compaction taskId"));
+    facts.compacting = compactions.size > 0;
+    failureId = undefined;
     live = null;
     facts.costUsd = 0;
     delete facts.lastContextTokens;
     const sink = newOut();
     for (const e of entries) ingest(e, sink);
+    if (snap.compactionFailure !== undefined) putFailure(snap.compactionFailure, sink);
     facts.queued = queued;
     setAgent(agent);
     facts.busy = snap.run !== undefined;
@@ -913,7 +939,7 @@ function createEventsDialect(): Dialect {
     }
   };
 
-  const NO_OUTPUT = new Set(["turn_start", "turn_end", "submission", "auto_retry_start", "auto_retry_end", "deferred_poll", "task_failed", "compaction_start", "compaction_end", "tool_execution_update", "usage_changed"]);
+  const NO_OUTPUT = new Set(["turn_start", "turn_end", "submission", "auto_retry_start", "auto_retry_end", "deferred_poll", "task_failed", "tool_execution_update", "usage_changed"]);
 
   const applyEvent = (raw: unknown, out: Out): void => {
     const event = obj(raw, "event");
@@ -925,8 +951,20 @@ function createEventsDialect(): Dialect {
         out.queued = r.queued;
         out.agent = r.agent;
         out.busy = r.busy;
+        out.compacting = facts.compacting;
         return;
       }
+      case "compaction_start":
+        compactions.add(num(event.taskId, "compaction taskId"));
+        facts.compacting = compactions.size > 0;
+        out.compacting = facts.compacting;
+        return;
+      case "compaction_end":
+        compactions.delete(num(event.taskId, "compaction taskId"));
+        facts.compacting = compactions.size > 0;
+        out.compacting = facts.compacting;
+        if (event.error !== undefined) putFailure(event, out);
+        return;
       case "run_start":
         facts.busy = true;
         out.busy = true;
