@@ -5,8 +5,10 @@ and its permanent 20/10 limits through [#1132](https://github.com/clayton-duarte
 The portable implementation was adopted through [#1149](https://github.com/clayton-duarte/cpd/pull/1149).
 Canonical ownership moved to [`clayton-duarte/skills`](https://github.com/clayton-duarte/skills)
 in [#1152](https://github.com/clayton-duarte/cpd/issues/1152); CPD retains a [pinned consumer](qa-source.md).
-The User explicitly starts/resumes each run; copying the kit or merging its setup
-never starts a loop. The User authorized the continuous weekly-gated run recorded in #1187.
+The User authorizes QA; copying the kit or merging its setup never starts a loop.
+The User has authorized recurring daily wakes of the same session on homeserver:
+[standing authority](https://github.com/clayton-duarte/cpd/issues/1115#issuecomment-6921840796).
+See [schedule setup and limits](qa-schedule.md). Weekly approval is not required.
 
 Read [the reusable QA Protocol](../tools/repo-qa/references/PROTOCOL.md) for the
 quality definition, exploration, prioritization, research, implementation and
@@ -75,8 +77,9 @@ of the weekly allowance**, using the authenticated weekly window.
 Stop at or below the reserve, or when fresh usage cannot be verified. Unused
 allocation carries forward. Allocation releases continuously, not at midnight.
 There is no assumed reset weekday or Sunday 8 p.m. release hold; DST does not
-change elapsed-time pacing. A new window still requires explicit User run
-authorization. This User decision (2026-11-16) supersedes calendar daily pacing,
+change elapsed-time pacing. Under recorded standing scheduled authority, a new
+window requires fresh telemetry, not renewed User approval. This User decision
+(2026-11-16) supersedes calendar daily pacing,
 the fixed 50% floor and former 20/10 count policy. Use full precision for decisions.
 Configured PR base remains `main` in all three repos.
 CPD remains the product priority; skills changes maintain the shared toolkit.
@@ -99,6 +102,9 @@ node scripts/qa.mjs --run /path/to/qa-run.json issue clayton-duarte/cpd 'Concret
 node scripts/qa.mjs --run /path/to/qa-run.json pr clayton-duarte/cpd qa/123-fix 'Concrete change' /tmp/qa-pr.md
 ```
 
+Run descriptors are optional immutable audit/cap scopes under standing scheduled
+authority; descriptor-free status may authorize creation when live allowance
+permits. Official windows are audit data, not weekly approval gates.
 Run descriptors contain authorization/start/limits, not counters. Before a new
 bounded run, recover/create its exact JSON using the kit's template, record it
 in an existing QA issue comment (setup anchor [#1115](https://github.com/clayton-duarte/cpd/issues/1115)
@@ -149,10 +155,11 @@ decisions and the latest canonical handoff. Recheck every open attributed QA PR 
 same run's GitHub counts, verify current base and clean worktree ownership, then
 continue only the User-started run. Issues retain research and self-contained
 reproducers; PRs retain implementation/validation. User alone reviews and merges.
-No CPD adoption, scheduler, live access or agent spawning is enabled.
+Only the specifically authorized daily same-session wake is in scope; no agent
+spawning, product deployment or unrelated live access is enabled.
 
 
-## Recorded continuous run (2026-11-13; historical pacing)
+## Recorded continuous run (2026-11-13; historical pacing and authority)
 
 The User explicitly lifted cardinal limits and authorized continuous QA until the
 weekly allowance is under50%; exactly50% permitted continuation under that
@@ -209,7 +216,12 @@ CI/review feedback separately. When the CLI connection is unavailable, native
 GitHub API inspection supplies the same read-only inputs. The standing User
 policy applies independently of a consumer update.
 
-Weekly creation requires the same immutable `--run` descriptor. Its recorded start must belong to the current official allowance window; a fresh CLI process or reusable login cannot renew an old run after reset. Descriptor-free status is read-only inspection with `run_required:true` and creation disabled. User-merged skills#7 enforces this across sessions.
+The default toolkit policy from skills #7 binds descriptors to one weekly
+window. CPD now opts into recorded standing scheduled authority: no weekly
+approval or new descriptor is required at reset. Optional descriptors retain
+their ID/start, caps and counts across windows. Fresh authenticated allowance,
+account/spend controls and the computed reserve always apply. A reset change
+during an operation aborts that operation; refresh before another attempt.
 
 
 ## 2026-11-16 pacing and interpretation
@@ -222,7 +234,8 @@ reports the computed `min_remaining_percent` and `spendable_percent`.
 
 The static reader threshold must be zero for this mode. Missing or stale data,
 account unavailability, spend controls, invalid/expired telemetry and expired
-run authority still refuse work. No new loop, scheduler, login, deployment or
-automatic weekly authorization is started by this policy update.
+standing authority still refuse work. The daily cron wake is separately
+authorized; setup does not start an immediate loop or authorize product
+deployment, a new login or another operator.
 
 Previous calendar source: [skills #8](https://github.com/clayton-duarte/skills/pull/8).

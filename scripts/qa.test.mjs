@@ -1,5 +1,6 @@
 import "../tools/repo-qa/scripts/qa.test.mjs";
 import "../tools/repo-qa/scripts/portability.test.mjs";
+import "./qa-wake.test.mjs";
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
