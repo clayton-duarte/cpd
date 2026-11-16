@@ -80,7 +80,10 @@ function detachedTimeouts(command: string): boolean {
     if (tree.rootNode.hasError) return false;
     let found = 0;
     let unsafe = false;
-    const expected = simpleCommands(command).filter((words) => {
+    const commands = simpleCommands(command);
+    // A wrapper such as `builtin wait` can wait too; conservatively refuse any wait word.
+    if (commands.some((words) => words.some((word) => word.split("/").pop() === "wait"))) return false;
+    const expected = commands.filter((words) => {
       const c = strip(words);
       return c?.name === "timeout" && waits(c.name, c.args) !== undefined;
     }).length;
