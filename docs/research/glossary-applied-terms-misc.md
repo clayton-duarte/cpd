@@ -8,8 +8,8 @@ Attempt terms-misc-a1 of Job terms-misc, Plan glassary. Rows are the Spec's ROWS
 | docs/implementing.md:416 | a | Applied | "the Gate and CI also run that command." → "the Gate runs that command as well (and CI too, where CI exists)." | |
 | BACKLOG.md:6 (deleted) | a | Applied | "Move CI from `ubuntu-24.04` to `ubuntu-26.04` deliberately…" → bullet deleted | |
 | docs/cockpit-parity.md → docs/archive/cockpit-parity.md | b | Applied | `git mv`, no content change; the file has no Markdown links to other files | |
-| docs/commands.md:3175 | b | Applied (the Lead allowed it, question terms-misc-a1-q1) | "the checklist of every difference is [cockpit-parity.md](cockpit-parity.md)." → "…[cockpit-parity.md](archive/cockpit-parity.md)." | |
-| docs/commands.md:4447 | b | Applied (the Lead allowed it, question terms-misc-a1-q1) | "the checklist behind them is [cockpit-parity.md](cockpit-parity.md)." → "…[cockpit-parity.md](archive/cockpit-parity.md)." | |
+| docs/commands.md:3175 | b | Applied (the Lead allowed it, question terms-misc-a1-q1) | `"the checklist of every difference is [cockpit-parity.md](cockpit-parity.md)." → "…[cockpit-parity.md](archive/cockpit-parity.md)."` | |
+| docs/commands.md:4447 | b | Applied (the Lead allowed it, question terms-misc-a1-q1) | `"the checklist behind them is [cockpit-parity.md](cockpit-parity.md)." → "…[cockpit-parity.md](archive/cockpit-parity.md)."` | |
 | docs/contract.md:4217 | b | Applied (the Lead allowed it, question terms-misc-a1-q1) | "checklist `cockpit-parity.md` \|" → "checklist `docs/archive/cockpit-parity.md` \|" | |
 | BACKLOG.md:15 | b | Applied | "**Remote workflows: other machines' trees…**" → "**Remote trees: other machines' trees…**" | The title's word is the cpd 1 sense of Workflow (Plan); the new Workflow means one pull request's object, so it is a term use. Body unchanged |
 | docs/implementing.md:127 | c | Not applied | The Spec says "name cpd 1 test areas with the word workflow": the word does not occur in the file | The claim is false: `rg -i workflow docs/implementing.md` finds nothing. The line names the test area `pr` (a code string) |

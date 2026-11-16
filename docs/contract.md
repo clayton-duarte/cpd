@@ -4024,7 +4024,7 @@ The reply of `decide` and `note` carries `hook`: `{"mode": "semantic" | "fts-onl
 **Direction is fixed by the tool, not by an argument.**
 
 - `delegate` goes **down** one tier only: a Manager to the Leads of its Context's Plans, a Lead to the Workers of its Plan. Its `to` is a non-empty array of distinct Session ids; a recipient outside those is `not_permitted` (exit 3). A Worker has no `delegate` (`not_permitted`). A Manager does not delegate straight to a Worker: the chain is `Manager -> Lead -> Worker`.
-- `escalate` goes **up** one tier and has **no `to` argument**: the recipient is the sender's parent (a Worker's is its Lead, a Lead's is its Manager, a Manager's is the User). A Lead uses this route for product decisions; execution questions use `ask_user_question` directly under [Escalation routing](#escalation-routing). A Manager's escalation reaches the User as an Inbox item (§2.2), and the ladder ends there (below).
+- `escalate` goes **up** one tier and has **no `to` argument**: the recipient is the sender's parent (a Worker's is its Lead, a Lead's is its Manager, a Manager's is the User). A Lead uses this route for product decisions; execution questions use `ask_user_question` directly under [Escalation routing](#escalation-routing). A Manager's product escalation reaches the User through the normal question card, as [Escalation routing](#escalation-routing) requires.
 
 **Urgency.** `fyi` is stored and delivered at the recipient's next turn, without starting a turn. `wake` starts a turn (`triggerTurn`, §5.3). Both reach the adapter as a `message` Event (a new Event kind, §5.2, with its migration), which the adapter delivers as §5.3 delivers a `cpd` message. The sender's label is shown as given, so a notice from `cpd` is never shown as a User message.
 
@@ -4034,7 +4034,17 @@ The reply of `decide` and `note` carries `hook`: `{"mode": "semantic" | "fts-onl
 
 **Answering.** A `delegate` with `reply_to` set to an `escalate` row addressed to the sender closes that row (`closed_at`) and is itself a message to the escalator. Each step of the answer is a row, so the escalation's history is in the table.
 
-**The ladder** (pro-d534). An `escalate` open for 10 minutes climbs one tier. The engine step `message-ladder` (a new step, §3.7) runs every tick: it finds the rows with `closed_at` null and `climb_at` at or before now, re-addresses each to the parent of its current holder, sets `level` one higher and `climb_at` 10 minutes ahead, and appends one `message` Event. At the User level `climb_at` is null: the row stays open until it is answered, and its Inbox item stays open with it.
+**Automatic escalation** (pro-d534; User clarification, 2026-11-15).
+An escalation unanswered for 10 minutes signals blocked work or an
+unresponsive participant and advances automatically. The engine's
+`message-ladder` step runs every tick and forwards each overdue open question
+to the next recipient allowed by [Escalation routing](#escalation-routing):
+product decisions go through the Manager; execution decisions go from the
+Lead to the User directly. Preserve the original question, its route and
+answer history, advance `level`, set `climb_at` 10 minutes ahead, and append
+one `message` Event. At the User, `climb_at` is null and the normal question
+card remains open until answered. A timeout never authorizes an agent to
+invent the User's answer.
 
 #### Prompt cache stability (pro-n418)
 
@@ -4058,7 +4068,7 @@ Each is one behaviour, with the contract as its assertion, against a mock core s
 - an unreachable embedder leaves the hook in `fts-only`, and the write goes on;
 - `delegate` to a non-child is `not_permitted`, and `escalate` takes no recipient argument;
 - an `escalate` that matches a record is `context_match`, and resending with `rationale` dispatches;
-- the ladder climbs an open escalation after 10 minutes, one tier per climb, and stops at the User;
+- an unanswered escalation advances automatically after 10 minutes along its product/execution route and stops at the User's normal question card;
 - the system prompt block is byte-identical across a turn boundary.
 
 Verification: Job `pi-extension-tools-ci-fix` verified that `node --test pi/test/tools.test.ts` passes cleanly against the mock core socket implementation.
