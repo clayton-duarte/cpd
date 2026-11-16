@@ -1800,6 +1800,8 @@ export function groupRows(items: readonly TranscriptItem[]): Row[];
 
 A run of two or more consecutive tool items is one `tools` row keyed `group:<first tool id>`; a lone tool item is an `item` row keyed by its id; every other item is an `item` row keyed by `item.id`.
 
+**Assistant display contract (b29 issue #1342).** A completed assistant message with no non-empty text block, no non-empty thinking block, and no non-empty `errorMessage` has no assistant display row: render neither an empty assistant bubble nor assistant-only metadata (including its timestamp, model, or other message label). Its absence is a presentation rule, not a transcript/history mutation; preserve the source entries and their ordering, and do not remove, reorder, or merge neighboring user, assistant, tool, fold, compaction, or orphan-result items. An assistant message with meaningful text, reasoning (thinking), or a non-empty error remains visible, as do its associated ToolItems; image attachments on user messages are unaffected. While an assistant response is still streaming, retain the Working indication even if it has not produced visible text or reasoning yet. When a stream completes empty, remove its Working indication without leaving an empty assistant row or metadata. This display rule does not redefine transcript normalization: messages for which §3.3 specifies no `AssistantItem` continue to produce no assistant item, and tool items from the same message remain in their original chronology.
+
 **`web/src/ui/chat/virtual.ts`** (pure) exports:
 
 ```ts

@@ -216,3 +216,49 @@ it("shows compaction feedback only during the actual lifecycle", () => {
     expect(ended.container.querySelector('[data-kind="compaction"]')).not.toBeNull();
   } finally { ended.unmount(); }
 });
+
+it("hides completed empty assistant bubbles while preserving meaningful and streaming content", () => {
+  const entry = (id: number, kind: string, message: object) => ({ id, conversationId: "root", kind, model: [message] });
+  const completed = (id: number, content: object[]) => entry(id, "pi.assistant", {
+    role: "assistant", content, stopReason: "stop", timestamp: 1794793894000,
+  });
+  const entries = [
+    entry(1, "pi.user", { role: "user", content: [{ type: "text", text: "before" }, { type: "image", data: "QUJD", mimeType: "image/png" }], timestamp: 1 }),
+    completed(2, [{ type: "text", text: "" }]),
+    completed(3, [{ type: "text", text: "" }, { type: "text", text: "real answer" }, { type: "text", text: "" }]),
+    completed(4, [{ type: "thinking", thinking: "reasoning survives" }]),
+    completed(5, [{ type: "toolCall", id: "call1", name: "read", arguments: { path: "file.ts" } }]),
+    entry(6, "pi.user", { role: "user", content: "after", timestamp: 2 }),
+  ];
+  const original = structuredClone(entries);
+  const dialect = createDialect(1);
+  const items = dialect.applyBase({ view: { conversation: "root", entries, docs: {
+    "pi.agent": {}, "pi.live": { run: { taskId: 1, inputs: [], turns: 0 }, generation: { attempt: 1, message: { role: "assistant", content: [{ type: "text", text: "" }], stopReason: "pending" } } },
+    "pi.inbox": { items: [] }, "pi.provider": {}, "pi.usage": { models: {}, tools: {} },
+  } } }).transcript.items;
+  const beforeRender = structuredClone(items);
+  const m = mount(<Transcript {...base} items={items} thinking="expanded" tools="expanded" />);
+  try {
+    expect.soft(entries).toEqual(original);
+    expect.soft(items).toEqual(beforeRender);
+    expect.soft(items.find((item) => item.id === "a:2")).toMatchObject({ streaming: false, blocks: [{ type: "text", text: "" }] });
+    const empty = m.container.querySelector('[data-row="a:2"]');
+    expect.soft(empty?.querySelector('[data-slot="bubble"]') ?? null).toBeNull();
+    expect.soft(empty?.querySelector('[data-slot="message-footer"]') ?? null).toBeNull();
+    const mixed = m.container.querySelector('[data-row="a:3"]');
+    expect.soft(mixed?.querySelectorAll('[data-part="card"]').length).toBe(1);
+    expect.soft(mixed?.textContent).toContain("real answer");
+    expect.soft(m.container.querySelector('[data-kind="thinking"]')).not.toBeNull();
+    expect.soft(m.container.textContent).toContain("read");
+    expect.soft(m.container.querySelector('img[data-part="thumb"]')?.getAttribute("src")).toBe("data:image/png;base64,QUJD");
+    const working = m.container.querySelector('[data-part="working"]');
+    expect.soft(working?.textContent).toContain("Working…");
+    const before = m.container.querySelector('[data-row="u:1"]');
+    const after = m.container.querySelector('[data-row="u:6"]');
+    expect.soft(before && mixed && (before.compareDocumentPosition(mixed) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
+    expect.soft(mixed && after && (mixed.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
+    expect.soft(after && working && (after.compareDocumentPosition(working) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
+  } finally {
+    m.unmount();
+  }
+});
