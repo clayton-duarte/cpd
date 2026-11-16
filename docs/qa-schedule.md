@@ -18,7 +18,7 @@ telemetry, exhausted budget, unavailable credentials or tool permissions pause
 work. Stopping or disabling the schedule revokes scheduled continuation; the
 agent must honor this, and standing config must be removed when authority ends.
 
-Merge the canonical source and the CPD consumer before installing this schedule
+The canonical source merged in skills #10. Merge the CPD consumer before installing this schedule
 from a clean current-main checkout. Never activate an unreviewed policy branch
 or grant blanket `--auto` permissions to bypass a blocker.
 

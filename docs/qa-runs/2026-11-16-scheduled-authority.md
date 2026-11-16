@@ -21,8 +21,9 @@ checks. Optional run IDs/start/caps remain immutable audit scopes.
 - CPD worktree: `/home/clayton/projects/cpd-scheduled-qa`, same branch name.
 - CPD base: `154a9feac3b2fc299fa35a469217500bb359c0f4` (merged #1363).
 - CPD's manifest records the exact source package revision and file hashes.
-- CPD remains draft until source review/merge, exact-tree verification and
-  repinning to the canonical merge revision. User reviews and merges both.
+- Source #10 merged at `5980c1053fe50b17e07a65279f712efb956793d0`.
+  All 15 package files match that merge; CPD now pins the canonical merge.
+  The source dependency is satisfied. User review/merge of CPD remains required.
 
 ## Scheduler implementation
 
@@ -60,6 +61,17 @@ must still respect exclusive ownership.
 - No JS formatter/linter configured; syntax/whitespace are not semantic lint.
 - No full product build or completed remote CI is claimed.
 
+The initial CPD CI run failed exactly three `install_script` portability tests:
+their expected count was still 22 after the three wake files were explicitly
+added to the covered list (25). The follow-up updates that count in the tests;
+the checks rejecting unclassified scripts and non-portable covered scripts are
+preserved. No production guard is weakened or exempted.
+After the fix, `scripts/cargo.sh test --locked -p cpd --test tooling
+install_script::` passed all 10 tests, including the three formerly failing
+ones. The actual tooling `retired_terms::guard` also passed via Cargo.
+`cargo fmt --all -- --check`, 49 Node tests, snapshot verification against the
+source merge, portability and whitespace checks passed again.
+
 Live post-change status at `2026-11-16T16:13:48.232088+00:00`: 83% remaining,
 official reset `2026-11-23T00:17:22+00:00`, account available, spend control not
 reached. The guard computed reserve `90.51021428571428%`, zero spendable,
@@ -70,7 +82,7 @@ an ongoing permission sample.
 
 ## Next action after User review
 
-1. Merge source, verify merged package, update CPD pin, mark consumer ready.
+1. Source dependency is met; review/merge the ready CPD consumer after its checks.
 2. After CPD merge, update the clean primary checkout without discarding work.
 3. Review the private target config and cron PATH (Node/Codex/Git/GitHub CLI).
    Run non-delivering `--check`; busy during this conversation is an expected skip.
