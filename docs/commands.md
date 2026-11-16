@@ -337,7 +337,7 @@ A Context and its records (§2.2, §4.6). The records live only in the database 
 
 ### 3.1 `context new`
 
-**Paired creation target (air-d175).** Future Context creation pairs the Context with its Manager; future Plan creation pairs the Plan with its Lead (§4.1). Existing done Plans without a Lead are historical records: preserve them unchanged, with no repair or migration. This section specifies the target, not a claim that it is implemented: the `pair-main-audit.md` audit found Context creation and Manager registration separate, and found recovery and concurrency guarantees unverified.
+**Paired creation.** `context new` creates the Context and its Manager in one transaction; `plan new` creates the Plan and its Lead in one transaction (§4.1). Provisioning follows the commit and retries reuse the persisted pair. Existing historical rows, including done Plans without a Lead, are preserved unchanged; there is no repair or migration.
 
 ```
 cpd context new <id> --title <text> --owner <login> [--jira <key>] [--confirm-fallback] [--by-user]
@@ -356,12 +356,13 @@ cpd context new <id> --title <text> --owner <login> [--jira <key>] [--confirm-fa
 |---|---|---|
 | no Context row with this id, unless it has the same title, Jira key and owner | `context_exists` | 3 |
 | no Plan row with this id, deleted ones included, unless a Context row with this id exists (then the rows above decide, so a rerun is `already`) | `id_taken` | 3 |
+| on a retry, the existing Context is not archived; an archived Context is refused before provisioning or pair changes, with `details.next` = `cpd context unarchive <id>` | `archived` | 3 |
 | the owner has a policy file, `$CPD_HOME/policy/<owner>/owner.toml` (contract §8.3; an empty file is the default policy), else with `--confirm-fallback` create it as a relative symlink to `../clayton-duarte/owner.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file, read as every resolve reads it, is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 Effects:
 - **Rows**, one transaction: the `contexts` row (`created_on` = `machine`, `owner`) and its Manager's `sessions` row (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>`; `cwd` = the User's home directory; `tier` and `runner` from the Manager defaults; `by_user` = 1 with `--by-user`, else 0). **Events** `context-created` `{title, jira, created_on}` and `session-registered` `{role, name, forked_from, tier}`. A transaction failure leaves neither row nor Event, never a half-pair.
-- **After the transaction:** the Manager's first-message file and pane/host provisioning follow §3.11. These filesystem and host/tmux effects are outside the store transaction; a failure is reported and does not roll back the persisted pair. Retry `context new` with the same arguments to resume incomplete provisioning, reusing the pair rather than duplicating either row or history.
+- **After the transaction:** the Manager's first-message file and pane/host provisioning follow §3.11. These filesystem and host/tmux effects are outside the store transaction; a failure is reported and does not roll back the persisted pair. Retry `context new` with the same arguments to resume incomplete provisioning, reusing the pair rather than duplicating either row or history. If that Context has been archived, the retry refuses `archived` with `details.next` = `cpd context unarchive <id>` and changes no Context, Session or Event rows; unarchive it, then retry with the same arguments to resume provisioning.
 - No git action.
 
 ```json
@@ -1189,7 +1190,7 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 
 ### 4.1 `plan new`
 
-**Paired creation target.** The contract below applies to future creation (air-d175). The `pair-main-audit.md` audit found ordinary Plan/Lead row pairing already present, but Lead-bearing `--shaping`, its Manager authorization and complete post-transaction retry behavior unverified or not implemented; this target is not a claim they have shipped.
+**Paired creation.** `plan new` creates the Plan and its Lead in one transaction. Provisioning follows the commit; retry reuses the persisted pair.
 
 ```
 cpd plan new <id> --context <c> --title <text> [--jira <key>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>] [--shaping]
@@ -1443,13 +1444,13 @@ cpd plan review [--plan <id>] --title <text>
 
 `--title` is **required** (hs-d291): it names what the drafts under review do, so the User sees it as the heading of the review, in the summary in the Lead's chat and in the full render. It has the rule of a Workflow's title: 1–72 characters, one line, no control characters; a bad or missing one is `usage` (exit 2). It is stored as `plan_reviews.title` (contract §2.2).
 
-Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `plan` the review covers the whole plan, as before; in every phase after `plan` it covers **exactly the draft Jobs** the Lead added: its fingerprint is over those drafts only (§2.3; the `open` Job is never a draft, so the one cpd adds at a Workflow's start never voids a pending review, hs-d573) and the rendered plan marks them under review and shows the Locked Jobs as context (§4.5). A Lead that planned several batches adds the later ones as drafts (`job add --draft`, §5.1) and asks for one review per batch. The Lead runs it directly; the pi adapter shows the summary in the Lead's chat, with the approval dialog, when the `plan-review` Event arrives (§15.5), so the review opens from any caller, in whatever phase the Plan is. The User approves or asks for a change.
+Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `plan` the review covers the whole plan, as before; in every phase after `plan` it covers **exactly the draft Jobs** the Lead added: its fingerprint is over those drafts only (§2.3; the `open` Job is never a draft, so the one cpd adds at a Workflow's start never voids a pending review, hs-d573) and the rendered plan marks them under review and shows the Locked Jobs as context (§4.5). A Lead that planned several batches adds the later ones as drafts (`job add --draft`, §5.1) and asks for one review per batch. The Lead runs it directly; the pi adapter shows the summary in the Lead's chat, with the approval dialog, when the `plan-review` Event arrives (§15.5). A Lead-bearing Plan in `shaping` cannot be reviewed: promotion to `plan` is required first. In an unlocked `plan`, approving the current review does not queue drafts; it leaves them `draft` for `plan lock` to queue at the first lock. A stale approval never queues drafts. The User approves or asks for a change.
 
 Explore Jobs (`scout`, `research`) are in no review (Plan `explore-roles`, R3): they are never `draft`, are in no block of the review's copy (the Jobs block counts the Jobs under review and the locked Jobs of the Workflows; the Explore section of §4.5 is not in the copy) and are in no fingerprint (§2.3), so adding one never voids a pending review.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
+| the phase is `plan`, or any phase after it (not `grounding` or `shaping`) | `illegal_phase` | 3 |
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed) | `no_draft_jobs` | 3 |
 | every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
 | the Plan has an outline (§4.13; hs-d502, D3); `details.next` = `cpd plan outline --file <outline.json>` | `outline_missing` | 3 |
