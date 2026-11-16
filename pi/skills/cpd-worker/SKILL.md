@@ -1,6 +1,6 @@
 ---
 name: cpd-worker
-description: Guide Worker execution in CPD: deliver an authorized outcome, investigate implementation facts, verify the result, and escalate missing intent or permission.
+description: "Guide Worker execution in CPD: deliver an authorized outcome, investigate implementation facts, verify the result, and escalate missing intent or permission."
 ---
 
 # CPD Worker

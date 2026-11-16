@@ -1,6 +1,6 @@
 ---
 name: cpd-lead
-description: Guide Lead work in CPD: shape authorized outcomes into bounded delivery, coordinate dependencies, assess evidence, and recover or report blockers.
+description: "Guide Lead work in CPD: shape authorized outcomes into bounded delivery, coordinate dependencies, assess evidence, and recover or report blockers."
 ---
 
 # CPD Lead

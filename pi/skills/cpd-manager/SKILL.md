@@ -1,6 +1,6 @@
 ---
 name: cpd-manager
-description: Guide Manager work in CPD: clarify product intent, preserve decisions, delegate cohesive outcomes, resolve product gaps, and keep the User informed.
+description: "Guide Manager work in CPD: clarify product intent, preserve decisions, delegate cohesive outcomes, resolve product gaps, and keep the User informed."
 ---
 
 # CPD Manager
