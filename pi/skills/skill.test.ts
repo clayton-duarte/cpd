@@ -956,3 +956,5 @@ test("cpd-manager and cpd-lead state the three external-approval rules (pro-d451
     assert.ok(!text.includes("cpd pr approve"), `${skill}: never names cpd pr approve`);
   }
 });
+
+// Role contracts are checked against the current skill guidance.
