@@ -14,18 +14,20 @@ struct FakeServices {
     merges: usize,
 }
 
-// Stub for the implementation Job: a tick observes a PR at an injected time and
-// delivers through mocked services. It deliberately does nothing until implemented.
-#[derive(Default)]
-struct GreenAlert;
+use super::green_unmerged::GreenAlert;
 
 impl GreenAlert {
-    fn tick(&mut self, _now_seconds: u64, _pr: PullRequest, _services: &mut FakeServices) {}
+    fn tick(&mut self, now_seconds: u64, pr: PullRequest, services: &mut FakeServices) {
+        if self.observe(now_seconds, pr.owned && pr.open && pr.green) {
+            services.manager_alerts += 1;
+            services.user_alerts += 1;
+        }
+    }
 }
 
 #[test]
 fn green_unmerged_alert_after_thirty_minutes() {
-    let mut alert = GreenAlert;
+    let mut alert = GreenAlert::default();
     let mut services = FakeServices::default();
     let green = PullRequest {
         owned: true,

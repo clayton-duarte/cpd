@@ -449,3 +449,5 @@ mod ensure_when_free_tests {
 
 #[cfg(test)]
 mod green_unmerged_tests;
+
+mod green_unmerged;
