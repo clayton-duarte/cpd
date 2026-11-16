@@ -20,7 +20,8 @@ impl Layout {
     /// An env whose `policy/` is empty (the harness's `acme/owner.toml` is removed).
     fn bare() -> Layout {
         let fx = Fx::with_ports();
-        fx.env.write_config("version = 1\nmachine = \"pro\"\n");
+        fx.env.write_tmux_config("");
+        fx.cockpit();
         fs::remove_dir_all(fx.env.cpd_home().join("policy")).unwrap();
         fs::create_dir_all(fx.env.cpd_home().join("policy")).unwrap();
         Layout { fx }
@@ -227,7 +228,8 @@ fn l5_the_host_key_is_config_invalid() {
 #[test]
 fn l5_config_prints_no_host() {
     let fx = Fx::new();
-    fx.env.write_config("version = 1\nmachine = \"pro\"\n");
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     let out = fx.cpd(&["config"]).ok();
     assert!(out["config"].get("host").is_none(), "{out}");
     assert!(out["sources"].get("host").is_none(), "{out}");

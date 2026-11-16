@@ -122,6 +122,7 @@ fn c1_cpd_config_prints_no_tiers_object_and_no_tiers_source() {
 /// r1's S ref is cached with efforts `[0,1]`, r2's with `[0,1,2,3]`.
 fn two_repos() -> Fx {
     let fx = Fx::with_ports();
+    fx.cockpit();
     config_without_tiers(&fx.env, "");
     pi_install(&fx.env);
     policy_file(&fx.env, "acme/r1.toml", &table("r1"));
@@ -287,6 +288,7 @@ fn c3_a_worker_of_a_repo_and_owner_with_no_model_runs_on_the_machines() {
 /// Contexts `owned` (owner `acme`) and `bare` (none), each with a Lead on `O2` and a Manager on `O2`.
 fn sessions() -> Fx {
     let fx = Fx::with_ports();
+    fx.cockpit();
     config_without_tiers(&fx.env, "");
     fx.fake_node(Reply::ok(&format!("{LEVELS}\n")));
     pi_install(&fx.env);
@@ -346,6 +348,7 @@ fn c4_a_manager_of_a_context_with_no_owner_has_the_machine_layers_o_ref() {
 /// Leads of the Contexts `owned` and `bare`, each with a session file of a short conversation, and a pi that titles.
 fn titles() -> (Fx, std::sync::Arc<TitlePi>) {
     let fx = Fx::with_ports();
+    fx.cockpit();
     config_without_tiers(&fx.env, "");
     pi_install(&fx.env);
     fx.fake_node(Reply::ok(&format!("{LEVELS}\n")));
@@ -408,6 +411,7 @@ fn c5_the_title_writer_of_a_context_with_no_owner_runs_on_the_machine_layers_g_r
 /// A Context `ctx` (owner `acme`, or none) with one record, the policy files of `titles`, pi's catalog from the fake node.
 fn distiller(owner: Option<&str>) -> (Fx, std::sync::Arc<DistillPi>) {
     let fx = Fx::with_ports();
+    fx.cockpit();
     config_without_tiers(
         &fx.env,
         "lead_pi_packages = []\ncontext_curation_min_records = 1\n",

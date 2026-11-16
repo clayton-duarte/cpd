@@ -37,6 +37,7 @@ fn events(fx: &Fx, kind: &str) -> Vec<Value> {
 /// Plan `pay` in phase `plan` with one draft Job `a` and an outline, ready to be reviewed.
 fn planned(fx: &Fx) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
