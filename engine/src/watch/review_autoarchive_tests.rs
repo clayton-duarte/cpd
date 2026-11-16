@@ -79,3 +79,13 @@ fn review_autoarchive_regression_inbox_and_chat_defer_until_safe() {
         );
     }
 }
+
+#[test]
+fn review_feedback_regression_bad_phase_does_not_starve_other_plan() {
+    let mut fx = fixture("closed");
+    fx.fixture("INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at) VALUES ('bad-lead','lead','codereview','a-bad','Lead','/','O3','idle','t','t'); INSERT INTO plans (id,context,title,phase,lead_session,created_at,pr_subject) VALUES ('a-bad','codereview','Bad','plan','bad-lead','t','pr:acme/pay#812');");
+    review_tick(&mut fx);
+    assert!(archived(&mut fx).is_some());
+    let phase: String = fx.query("SELECT phase FROM plans WHERE id='a-bad'");
+    assert_eq!(phase, "plan");
+}

@@ -459,3 +459,18 @@ fn a_held_peer_pr_with_a_failed_rollup_is_planned_for_a_heavy_read() {
     rig.pass(10).unwrap();
     assert!(heavy_in(&rig.graphql()[1], 1), "{}", rig.graphql()[1]);
 }
+
+#[test]
+fn review_feedback_regression_live_review_subject_is_polled_without_slack() {
+    let mut rig = PollRig::new();
+    let p = gh_pr(1);
+    rig.seed(&p, false);
+    rig.seed_detail(&p);
+    rig.state().world.insert(("acme/pay".into(), 1), p);
+    rig.store.write("fixture", |tx| {
+        tx.execute_batch("INSERT OR IGNORE INTO contexts (id,title,created_at,created_on) VALUES ('codereview','Review','t','m'); INSERT INTO plans (id,context,title,phase,created_at,pr_subject,locked_at,done_at) VALUES ('review','codereview','Review','done','t','pr:acme/pay#1',NULL,'t');")?;
+        Ok::<(), crate::error::CpdError>(())
+    }).unwrap();
+    rig.pass(0).unwrap();
+    assert!(mentions(&rig.graphql()[0], 1));
+}

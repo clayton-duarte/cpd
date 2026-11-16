@@ -62,3 +62,35 @@ fn review_autoarchive_regression_approval_is_not_closed() {
         .unwrap();
     assert!(archived.is_none(), "approval alone must not archive");
 }
+
+#[test]
+fn review_feedback_regression_done_approval_opens_no_write() {
+    let (_dir, mut store) = fixture("done");
+    let pr = GhPr {
+        title: "PR".into(),
+        draft: false,
+        state: GhState::Open,
+        author: "other".into(),
+        decision: None,
+        reviews: vec![Review {
+            author: "me".into(),
+            state: "APPROVED".into(),
+            commit_oid: None,
+        }],
+        head_oid: None,
+        checks_state: None,
+    };
+    let lookup = Lookup {
+        me: "me".into(),
+        workflows: BTreeMap::from([(("acme/pay".into(), 812), Some(pr))]),
+    };
+    let count = |store: &mut Store| -> i64 {
+        store
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
+            .unwrap()
+    };
+    let before = count(&mut store);
+    super::review_plan::finish_approved(&mut store, &lookup).unwrap();
+    assert_eq!(count(&mut store), before);
+    assert_eq!(open_plan_refs(&mut store).unwrap().len(), 1);
+}
