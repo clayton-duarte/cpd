@@ -20,6 +20,45 @@ use crate::ports::Ports;
 
 const WORKER: &str = "9c1a2b3c-1111-4222-8333-444455556666";
 
+#[test]
+fn retry_reacquires_a_worker_slot_before_inserting_an_attempt() {
+    let mut rig = Rig::new();
+    rig.env.config.concurrency = 1;
+    rig.add_job("retrying", "scout", "H2");
+    let first = rig.start("retrying");
+    rig.sql(&format!(
+        "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'no_submit', ended_at = 't' WHERE id = '{first}';
+         UPDATE jobs SET status = 'queued' WHERE plan = 'pay' AND key = 'retrying';"
+    ));
+    rig.add_job("occupant", "scout", "H2");
+    let occupant = rig.start("occupant");
+    let catalog = catalog();
+    let key = crate::ids::JobKey::parse("retrying").unwrap();
+    let result = super::start_with(
+        &rig.fakes.ports,
+        &mut rig.env.store,
+        &super::StartCtx {
+            home: &rig.env.home,
+            config: &rig.env.config,
+            catalog: &catalog,
+            command: "test",
+        },
+        &plan(),
+        &key,
+    );
+    assert_eq!(result.unwrap_err().code(), crate::error::ErrorCode::NoSlot);
+    assert_eq!(
+        rig.one::<u32>("SELECT count(*) FROM attempts WHERE job = 'retrying'"),
+        1
+    );
+
+    rig.sql(&format!(
+        "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'no_submit', ended_at = 't' WHERE id = '{occupant}';"
+    ));
+    let retry = rig.start("retrying");
+    assert_eq!(retry.to_string(), "retrying-a2");
+}
+
 fn explore_dir(home: &CpdHome) -> PathBuf {
     home.run_dir().join("pay").join("explore")
 }
