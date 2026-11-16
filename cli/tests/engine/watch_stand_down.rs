@@ -13,6 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use common::fx::Fx;
 use common::newer_migration::apply_newer;
@@ -120,13 +122,27 @@ fn standing_down_lines(fx: &Fx) -> Vec<String> {
 fn run_with_migration_between_ticks(fx: &Fx, land: fn(&Path)) -> (Output, usize) {
     let home: PathBuf = fx.env.cpd_home();
     let clock = (*fx.fakes.clock).clone();
+    let (poll_ended_tx, poll_ended_rx) = mpsc::channel();
     let out = fx
-        .watch(BOUND, move |nap| {
-            if nap == MIGRATES_AT {
-                land(&home);
-                announce_a_change(&home, &clock);
-            }
-        })
+        .watch_gated(
+            move |nap| {
+                // Finish the unrelated initial poll before advancing virtual time. Otherwise
+                // shutdown's poll drain adds naps to the migration/stand-down measurement.
+                if nap == 1 {
+                    poll_ended_rx
+                        .recv_timeout(Duration::from_secs(10))
+                        .expect("the initial mocked GitHub poll ended");
+                }
+                if nap == MIGRATES_AT {
+                    land(&home);
+                    announce_a_change(&home, &clock);
+                }
+                nap >= BOUND
+            },
+            move || {
+                let _ = poll_ended_tx.send(());
+            },
+        )
         .unwrap();
     (out, fx.fakes.clock.naps().len())
 }

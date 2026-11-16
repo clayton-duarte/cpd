@@ -198,7 +198,7 @@ Reactions in use today, all `reaction` ops:
 2. insert the `post` mutation with its `vars_json`, and the Workflow's `pr_posts` overlay.
 3. return `{ok, plan, workflow, queued: true, mutation_id, message}`. The `pr_posts` row does not exist until the send answers.
 
-When `swr` completes the send, `execute` writes the `pr_posts` row (`channel`, `ts`, `link`, `posted_at`, `last_posted_at`, `reaction` = the policy's `merged_reaction` when not empty, `auto_merge` `pending`), and the `in_review` Jira row when that insert is new, in the **same** transaction as the row (commands §9.8b Effects). Then it enqueues the `auto_merge` mutation (§6.3); the repo gate of §6.2 is in its executor.
+When `swr` completes the send, `execute` writes the `pr_posts` row (`channel`, `ts`, `link`, `posted_at`, `last_posted_at`, `reaction` = the policy's `merged_reaction` when not empty, `auto_merge` `pending`), and the `in_review` Jira row when that insert is new, in the **same** transaction as the row (commands §9.8b Effects). Only after explicit User authorization for that pull request may it enqueue the `auto_merge` mutation (§6.3); the repo gate of §6.2 is in its executor.
 
 `pr repost` (commands §9.8b2) checks 1 and 2 as today and enqueues `repost`. Its `last_posted_at` is set on completion, as today.
 
@@ -224,7 +224,7 @@ D1 to D3 are defects found by reading the code, **unverified by a run**. The tes
 
 ### 6.2 The rule (the Lead's answer, swr-slack-docs-a1-q1)
 
-A post confirmed from the channel by `team-review` (an own message of an open Workflow whose repo policy has `pr.post.enabled` true) **queues an `auto_merge` outbox mutation** (`op_kind` `auto_merge`, `target_key` `github:pr:<repo>#<n>`), as it gets `auto_merge` `pending` today. The decision is **policy only**: it is not gated on `swr_repos.auto_merge_allowed` at confirm time. The gate is in the executor: the `auto_merge` op reads `swr_repos` (24 h, no `gh` call) and finishes as `not_allowed` without calling GitHub when `auto_merge_allowed` is 0, as today's `not_allowed` answer (stored `none`).
+A post confirmed from the channel by `team-review` (an own message of an open Workflow whose repo policy has `pr.post.enabled` true) **queues an `auto_merge` outbox mutation only with an explicit User merge instruction for that pull request** (`op_kind` `auto_merge`, `target_key` `github:pr:<repo>#<n>`), as it gets `auto_merge` `pending` today. [Final merge authority](../contract.md#final-merge-authority) is required before enqueue; policy and repo support do not grant it. Repo support is not checked through `swr_repos.auto_merge_allowed` at confirm time. The gate is in the executor: the `auto_merge` op reads `swr_repos` (24 h, no `gh` call) and finishes as `not_allowed` without calling GitHub when `auto_merge_allowed` is 0, as today's `not_allowed` answer (stored `none`).
 
 Nothing is queued when:
 - the message is not an own message of an open Workflow with a confirmed PR match (no row to confirm);
@@ -235,7 +235,7 @@ Nothing is queued when:
 
 ### 6.3 The `auto_merge` mutation
 
-`pr post` (after its send) and `team-review` both enqueue `auto_merge` through the same function. The executor is the github Source's (swr.md §14), so the `auto_merge` op and its `not_allowed` gate belong to the github Workflow; this Workflow only enqueues.
+`pr post` (after its send) and `team-review` enqueue `auto_merge` through the same function only when [Final merge authority](../contract.md#final-merge-authority) is satisfied. The executor must also verify that authority before a merge request or fallback. The executor is the github Source's (swr.md §14), so the `auto_merge` op and its `not_allowed` gate belong to the github Workflow; this Workflow only enqueues.
 
 **Ordering.** The Slack cutover must not enqueue `auto_merge` before the github Workflow's `auto_merge` executor is live: a mutation with no executor stays `pending` forever. Until then, `team-review` and `pr post` keep writing `pr_posts.auto_merge` `pending`, which `auto-merge` runs as today (`engine/src/watch/auto_merge.rs`), and they do not do both. The github cutover retires that column and `auto-merge` together (swr.md §15).
 

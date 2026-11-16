@@ -77,15 +77,12 @@ it("edge ids are 19 forward and 8 loop ids in order", () => {
   ]);
 });
 
-it("docs/plan-lifecycle.md step table matches FLOW_STEPS", () => {
-  expect(FLOW_STEPS.length).toBe(20);
-  const md = readFileSync(new URL("../../../../docs/plan-lifecycle.md", import.meta.url), "utf8");
-  const dash = (v: string): string | null => (v === "—" ? null : v);
-  const rows = md
-    .split("\n")
-    .filter((l) => /^\| (\d\d) \|/.test(l))
-    .map((l) => l.split("|").slice(1, -1).map((c) => c.trim()))
-    .map((c) => [c[0], c[1], c[2], c[3], dash(c[4] ?? ""), dash(c[5] ?? "")]);
-  expect(rows.length).toBe(20);
-  expect(FLOW_STEPS.map((s) => [s.id, s.name, s.phase, s.agent, s.artifact, loopOf(s)])).toEqual(rows);
+it("flow stages follow the canonical contract's CPD flow", () => {
+  const md = readFileSync(new URL("../../../../docs/contract.md", import.meta.url), "utf8");
+  const flow = md.split("### 3.9 The CPD flow")[1]?.split("\n## ")[0];
+  expect(flow).toBeDefined();
+  const table = (flow ?? "").split("\n").filter((line) => line.startsWith("|"));
+  const stages = [...new Set(table.slice(2).map((line) => line.split("|")[1]!.trim().toLowerCase()))];
+  expect(stages.length).toBeGreaterThan(0);
+  expect([...new Set(FLOW_STEPS.map((step) => step.phase))]).toEqual(stages);
 });

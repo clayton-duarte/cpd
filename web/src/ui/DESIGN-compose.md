@@ -1,4 +1,4 @@
-# Dango v3 + shadcn/ui: design contract (composer, tier selector, footer, AskCard, PlanReviewCard)
+# Dango v3 + shadcn/ui: design contract (composer, model selector, footer, AskCard, PlanReviewCard)
 
 Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`, amended by the approved preview (pro-d54 to pro-d58, pro-d60, pro-d61, pro-d402). Companion of `web/src/ui/DESIGN.md` (**read it first**: hook conventions 1.1, styling rules 1.2, tokens 2b, shadcn parts 2f, utilities and the prompt border 2h). Everything defined there is reused by reference and not restated. Tests are written from this file alone by one Worker, the implementation by another.
 
@@ -201,65 +201,29 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 
 ---
 
-## 2. TierSelector
+## 2. Model and effort selector
 
-File `web/src/ui/composer/TierSelector.tsx`. Three shadcn dropdown menus with radio items, in the composer footer (1.2 `settings`). This replaces the Phase 2 native selects (pro-d55: the model selector is a vanilla shadcn part).
+The composer footer uses two shadcn dropdown menus with radio items: Model and
+Effort. Apply [Model selection controls](../../CONTRACT.md#17-model-selection-controls)
+before displaying or saving a choice. There is no letter-tier menu.
 
-### 2.1 Props (unchanged)
+- Show the observed Session model and effort when known; show unknown explicitly.
+  Keep configured defaults distinguishable from runtime values.
+- The first model-menu open requests the available models once per mount.
+- Offer supported efforts for the selected model. A model with no effort
+  setting says so; CPD's top effort is 4, very high.
+- A menu choice closes its menu. Update the displayed value from the confirmed
+  result rather than showing optimistic success.
+- If configuration is unavailable during a running turn, disable the control
+  and show the reason. A change does not silently alter a running Attempt.
+- Configuration errors use the cockpit toast. An unavailable model or effort
+  may remain visible as the current observation, but cannot be selected as a
+  valid new configuration.
 
-```ts
-export function TierSelector(props: {
-  capabilities: Capabilities | null;
-  footer: FooterStats | null;
-  models: readonly ModelChoice[] | null;
-  busy: boolean;
-  onConfigure(change: ConfigureChange): void;   // { kind: "tier", tier } | { kind: "model", model } | { kind: "thinking", level }
-  onRequestModels(): void;
-}): React.JSX.Element;
-```
+Both triggers use the footer's small monospace button style, a chevron and an
+accessible label. Dropdown content aligns with its trigger. Model names are
+visible labels; model identifiers remain the choice values.
 
-### 2.2 DOM outline
-
-```
-div[data-part="tier-selector"]   flex flex-wrap items-center gap-1
-├─ DropdownMenu
-│   ├─ DropdownMenuTrigger asChild → InputGroupButton[size="sm"][aria-label="Tier"][class="font-mono text-xs"]
-│   │     disabled when the Tier capability is unsupported or there are no tiers; title = the reason
-│   │     text: the current tier, or "Tier"; ChevronDownIcon
-│   └─ DropdownMenuContent[align="start"] › DropdownMenuRadioGroup[value = current tier]
-│         DropdownMenuGroup › DropdownMenuLabel "Tier" · DropdownMenuRadioItem per tier[value][class="font-mono text-xs"]
-├─ DropdownMenu   (opens → onRequestModels() once per mount)
-│   ├─ InputGroupButton[size="sm"][aria-label="Model"][class="font-mono text-xs"]
-│   │     disabled when the model capability is unsupported; text: the current model's name, else "Model"
-│   └─ DropdownMenuContent › DropdownMenuRadioGroup[value = current model]
-│         DropdownMenuLabel "Model" · DropdownMenuRadioItem per model (text: the model's name)
-└─ DropdownMenu
-    ├─ InputGroupButton[size="sm"][aria-label="Thinking level"][class="font-mono text-xs"]
-    │     disabled when the thinking capability is unsupported or there are no levels; text: the current level, else "Effort"
-    └─ DropdownMenuContent › DropdownMenuRadioGroup[value = current level]
-          DropdownMenuLabel "Effort" · DropdownMenuRadioItem per level
-```
-
-### 2.3 Behaviour
-
-- Choosing a radio item calls `onConfigure` with `{ kind: "tier", tier }`, `{ kind: "model", model }` or `{ kind: "thinking", level }` (KEPT). The menu closes on choice (dropdown default).
-- The current value is shown on the trigger from `footer` (`known` values only). After `onConfigure` the store updates `footer` and the trigger follows: no optimistic text.
-- **The Model trigger shows the Session's model (pro-d465, Bug report protocol).** The trigger's text is `footer.model` when known. For a durable Session that footer model is the host's model, or else the Session's recorded model (CONTRACT 6.4 Footer). The literal `Model` is shown only when `footer.model` is unknown, which for a durable Session is only when the recorded model is also unknown.
-- The current value is always an option: if it is not in the list it is added to it (`withCurrent`).
-- `Model` lists the `models` (name as text, id as value); with no models, only the current model. The first open calls `onRequestModels()` once.
-- When `busy` and the model or thinking capability is not allowed while busy, the trigger is disabled with the reason `A run is pending: the model changes when the session is idle` as its `title`.
-- No Phase 2 "Tier" pill with a fieldset or Escape handler: the Radix menus own focus and Escape.
-
-### 2.4 Not wired
-
-- `recommended` and `tokens`: no control.
-- The Lead · durable runner label.
-
-### 2.5 Kept hooks and tests
-
-`div[data-part="tier-selector"]`; `aria-label` `Tier`, `Model`, `Thinking level` on the triggers; `disabled` and `title` reasons. `TierSelector.test` (updated to the menus): the trigger text, the radio items, `onConfigure` payloads, the disabled reasons.
-
----
 
 ## 3. Footer (context HoverCard only)
 

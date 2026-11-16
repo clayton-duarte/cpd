@@ -23,7 +23,7 @@ The contract the parts follow is `docs/contract.md` §5.6 and `web/CONTRACT.md` 
 ## How the guard runs
 
 1. The test calls `allCpdCommands()` and maps each command to its argv with `toArgv`. Every variant of the union appears, and so does every optional-flag combination the call sites produce, so a variant with no entry has no test.
-2. Two anchors must hold before the parse: the list contains `plan list`, and it contains `config tiers set` with all five role flags (`--decide`, `--auxiliar`, `--worker`, `--lead`, `--manager`). The second is the regression for the settings bug `air-n37`, where the decide tier was dropped (contract §9).
+2. Before parsing, require a known command such as `plan list` and a currently supported command with multiple named options. The structural check must cover nested command flags without depending on retired tier-configuration commands.
 3. A missing `cpd` binary fails the test with a message to build it. It never skips.
 4. The test starts one `cpd argv-check` process with the argv list on stdin, with a 30-second timeout, and reads its stdout and exit code.
 5. The test passes only when the exit code is `0` and stdout, trimmed, is exactly `{"ok":true}`.
