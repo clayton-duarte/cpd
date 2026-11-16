@@ -1,9 +1,7 @@
 //! Contexts (contract §2.2, §4.6; commands.md §3): the command tree, in this process (`Fx`). The records live only in
 //! the database: no directory, no git, no lock file.
 //!
-//! One test stays on `TestEnv` and the built binary, because it needs a fake `pi` on `PATH`
-//! (`a_superseded_note_is_absent_from_the_batch_a_distill_run_reads`, a distill test: another Job's). The archive tests
-//! run on the fake tmux route of `Fx::with_ports`.
+//! The archive and distillation tests run on the fake ports of `Fx::with_ports`.
 
 use crate::common;
 
@@ -11,9 +9,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use common::fx::Fx;
+use common::pi::FakePi;
 use common::{Run, TestEnv};
 use cpd_core::config::Config;
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
@@ -28,22 +28,6 @@ impl Cpd for Fx {
     fn cpd(&self, args: &[&str]) -> Run {
         Fx::cpd(self, args)
     }
-}
-
-impl Cpd for TestEnv {
-    fn cpd(&self, args: &[&str]) -> Run {
-        TestEnv::cpd(self, args)
-    }
-}
-
-/// The config file of machine `hs` in `env`'s `$CPD_HOME`.
-fn write_hs(env: &TestEnv) {
-    fs::create_dir_all(env.cpd_home()).unwrap();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\n",
-    )
-    .unwrap();
 }
 
 /// Machine `hs`, in this process.
@@ -61,13 +45,6 @@ fn hs() -> Fx {
 /// Machine `hs`, in this process on fake ports.
 fn hs_ports() -> Fx {
     hs()
-}
-
-/// Machine `hs`, for the binary.
-fn hs_binary() -> TestEnv {
-    let env = TestEnv::new();
-    write_hs(&env);
-    env
 }
 
 /// `$CPD_HOME/contexts`: where the git stores of earlier versions lived.
@@ -776,22 +753,28 @@ fn a_note_superseding_an_unknown_record_is_record_not_found() {
     assert_eq!(events(&fx, "context-record").len(), 3);
 }
 
-/// `S2` is the distiller's Tier: a fake `pi` that curates every record of `batch.md`.
-fn distilling(env: &TestEnv) {
-    env.write_models();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n",
-    )
-    .unwrap();
-    env.fake_pi(&crate::common::pi_says(crate::common::CURATES_ALL));
-}
-
 #[test]
 fn a_superseded_note_is_absent_from_the_batch_a_distill_run_reads() {
-    let env = hs_binary();
+    let env = hs();
+    env.env.write_models();
+    env.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n[tmux]\nsocket = \"{}\"\n",
+        env.env.tmux_socket()
+    ));
+    env.fake_node(Reply::ok(r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"],"G":["off"]}"#));
+    let install = env
+        .env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
+    fs::create_dir_all(env.env.root().join("install")).unwrap();
+    fs::write(env.env.root().join("install/current-version"), "1.0.0\n").unwrap();
+    for package in ["pi-coding-agent", "pi-ai"] {
+        let dist = install.join(package).join("dist");
+        fs::create_dir_all(&dist).unwrap();
+        fs::write(dist.join("index.js"), "").unwrap();
+    }
+    let pi = FakePi::install(&env);
     new_context(&env);
-    distilling(&env);
     env.cpd(&["context", "decide", "Keep this decision.", "--context", CTX])
         .ok();
     env.cpd(&["context", "note", "Stale fact one.", "--context", CTX])
@@ -822,12 +805,7 @@ fn a_superseded_note_is_absent_from_the_batch_a_distill_run_reads() {
     let out = env.cpd(&["context", "distill", "--context", CTX]).ok();
     assert_eq!(out["distilled"], json!(true), "{out}");
     // In force: hs-d1, hs-n3, hs-d2.
-    let (home, _, _) = library(&env);
-    let batch = fs::read_to_string(
-        home.context_digest_dir(&CTX.parse().unwrap())
-            .join("batch.md"),
-    )
-    .unwrap();
+    let batch = pi.seen("batch.md");
     for gone in ["[hs-n1]", "[hs-n2]", "Stale fact"] {
         assert!(!batch.contains(gone), "{gone} is out of force: {batch}");
     }
