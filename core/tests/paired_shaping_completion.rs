@@ -393,3 +393,149 @@ fn lead_promotes_a_shaping_plan_with_a_registered_workflow() {
 }
 
 // Regression coverage for shaping review follows.
+
+fn shaping_with_workflow(f: &Fixture) -> Arc<GitRoute> {
+    f.plan(&[
+        "new",
+        "fresh",
+        "--context",
+        "ctx",
+        "--title",
+        "Fresh",
+        "--shaping",
+    ])
+    .unwrap();
+    let lead: String = f
+        .store()
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT lead_session FROM plans WHERE id='fresh'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
+    unsafe { std::env::set_var("CPD_SESSION", lead) };
+    let mut universe = Universe::new(f.ports.clock.clone());
+    universe.set_global("user.name", "cpd test");
+    universe.set_global("user.email", "test@cpd.invalid");
+    let universe = Arc::new(Mutex::new(universe));
+    let route = Arc::new(GitRoute::new(universe.clone()));
+    let _ = (*f.ports.runner).clone().with_git(&route);
+    let repo = Repo::init(&universe, &f._dir.path().join("repo"));
+    repo.write("base", "base\n");
+    repo.commit("base");
+    let remote = repo.bare_origin(&f._dir.path().join("remote.git"));
+    repo.keyed("repo");
+    repo.config_add(
+        &format!("url.{}.insteadOf", remote.dir().display()),
+        "https://github.com/acme/repo.git",
+    );
+    repo.push();
+    (*f.ports.runner).clone().on(
+        "cpd",
+        |_| true,
+        cpd_core::host::runner::Reply::ok(r#"{"ok":true}"#),
+    );
+    f.workflow(&[
+        "add",
+        "api",
+        "--plan",
+        "fresh",
+        "--repo",
+        repo.dir().to_str().unwrap(),
+        "--title",
+        "API",
+        "--shape",
+        "config",
+    ])
+    .unwrap();
+    let spec = f._dir.path().join("spec.json");
+    std::fs::write(&spec, r#"{"goal":"Change config","context":"Context","touches":["config.toml"],"acceptance":["Changed"],"out_of_scope":[]}"#).unwrap();
+    f.job(&[
+        "edit",
+        "api-config",
+        "--plan",
+        "fresh",
+        "--tier",
+        "S1",
+        "--spec",
+        spec.to_str().unwrap(),
+    ])
+    .unwrap();
+    f.sql(r#"UPDATE plans SET outline = '{"assumptions":[],"decided":[],"decisions":[],"done_when":{"api":["works"]},"goal":"g","out_of_scope":[],"risks":[]}' WHERE id='fresh'"#);
+    route
+}
+
+fn refuse_shaping_review(f: &Fixture) {
+    let events = f.count("SELECT count(*) FROM events WHERE plan='fresh'");
+    let err = f
+        .plan(&["review", "--plan", "fresh", "--title", "Review"])
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::IllegalPhase);
+    assert_eq!(
+        f.count("SELECT count(*) FROM plan_reviews WHERE plan='fresh'"),
+        0
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM events WHERE plan='fresh'"),
+        events
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM jobs WHERE plan='fresh' AND status='draft'"),
+        1
+    );
+}
+
+#[test]
+fn plan_review_refuses_a_shaping_plan_until_promotion() {
+    let f = Fixture::new();
+    let _route = shaping_with_workflow(&f);
+    refuse_shaping_review(&f);
+    f.plan(&["phase", "plan", "--plan", "fresh"]).unwrap();
+    f.plan(&["review", "--plan", "fresh", "--title", "Review"])
+        .unwrap();
+    assert_eq!(
+        f.count("SELECT count(*) FROM plan_reviews WHERE plan='fresh' AND status='pending'"),
+        1
+    );
+}
+
+#[test]
+fn approved_review_of_promoted_plan_waits_for_lock_to_queue_drafts() {
+    let f = Fixture::new();
+    let route = shaping_with_workflow(&f);
+    refuse_shaping_review(&f);
+    f.plan(&["phase", "plan", "--plan", "fresh"]).unwrap();
+    f.plan(&["review", "--plan", "fresh", "--title", "Review"])
+        .unwrap();
+    f.plan(&["decide", "r1", "--approve", "--plan", "fresh"])
+        .unwrap();
+    assert_eq!(
+        f.count("SELECT count(*) FROM plan_reviews WHERE plan='fresh' AND status='approved'"),
+        1
+    );
+    assert_eq!(
+        f.count(
+            "SELECT count(*) FROM plans WHERE id='fresh' AND phase='plan' AND locked_at IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM jobs WHERE plan='fresh' AND status='draft'"),
+        1
+    );
+    assert_eq!(
+        f.count("SELECT count(*) FROM jobs WHERE plan='fresh' AND status='queued'"),
+        0
+    );
+    f.plan(&["lock", "--plan", "fresh"]).unwrap();
+    assert_eq!(f.count("SELECT count(*) FROM plans WHERE id='fresh' AND phase='dispatch' AND locked_at IS NOT NULL"), 1);
+    assert_eq!(
+        f.count(
+            "SELECT count(*) FROM jobs WHERE plan='fresh' AND key='api-config' AND status='queued'"
+        ),
+        1
+    );
+    route.assert_supported();
+}

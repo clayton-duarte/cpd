@@ -443,3 +443,34 @@ fn paired_future_shaping_creation() {
 }
 
 // Regression coverage for archived retry follows.
+
+#[test]
+fn retrying_context_new_refuses_archived_context_without_pair_changes_and_succeeds_after_unarchive()
+{
+    let f = Fixture::new("durable");
+    assert_success(f.context(CONTEXT_ARGS));
+    let manager = f.manager();
+    (*f.fakes.runner)
+        .clone()
+        .on("tmux", |_| true, Reply::ok(""));
+    assert_success(f.context(&["archive", "ctx"]));
+    let contexts = f.rows("SELECT * FROM contexts ORDER BY id");
+    let sessions = f.rows("SELECT * FROM sessions ORDER BY id");
+    let events = f.rows("SELECT * FROM events ORDER BY id");
+    let err = f.context(CONTEXT_ARGS).unwrap_err();
+    assert_eq!(err.code(), cpd_core::error::ErrorCode::Archived);
+    assert_eq!(
+        err.details().get("next"),
+        Some(&serde_json::json!("cpd context unarchive ctx"))
+    );
+    assert_eq!(f.rows("SELECT * FROM contexts ORDER BY id"), contexts);
+    assert_eq!(f.rows("SELECT * FROM sessions ORDER BY id"), sessions);
+    assert_eq!(f.rows("SELECT * FROM events ORDER BY id"), events);
+    assert_success(f.context(&["unarchive", "ctx"]));
+    assert_success(f.context(CONTEXT_ARGS));
+    assert_eq!(f.manager(), manager);
+    assert_eq!(
+        f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"),
+        1
+    );
+}
