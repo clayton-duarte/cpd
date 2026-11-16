@@ -1,14 +1,14 @@
-# web/ Phase 1 contract (amended for Phase 2 by section 10)
+# WebUI contract
 
-The complete contract of the clean-slate `web/` package, Plan `webui-phase1-work` (Phase 1, "make it work", of cpd-webui). Workers write tests from this file alone. Where two statements conflict, the later section of this file does not win silently: ask the Lead (`cpd ask`). Section 10 (Phase 2, pro-d20) is the exception: where a statement of sections 1 to 9 says "superseded by 10.x", section 10 wins and the older statement is void.
+This document owns WebUI-specific data, transport, state, and interaction contracts. The [core contract](../docs/contract.md) owns shared domain and runtime behavior; [WebUI access](../docs/architecture/webui-access.md) owns binding and authentication. A WebUI decision may define how the client presents or uses shared behavior, but does not redefine the shared contract. Where this document explicitly marks an earlier statement superseded, the named later decision or section replaces it. Otherwise, do not infer precedence from section order: report genuinely conflicting requirements to the Lead.
 
-Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore artefacts of this Plan (`$CPD_HOME/run/webui-phase1-work/explore/`), cited as `scout-<x> §n`. Repo paths are relative to the repo root. `node_modules/@earendil-works/pi-durable/dist/...` and `.../pi-ai/dist/types.d.ts` are the installed typings (pi-durable 1.5.0, read by reading, not run). Every unconfirmed fact is tagged `(unverified, O<n>)` and listed once in section 9 "Open items". A value this file does not cite is a decision of this contract, called a **Phase 1 choice**.
+This file retains detailed contracts and decision history from successive WebUI plans. Phase 1/Phase 2 labels and references to plan artefacts describe their historical provenance, not the current product scope. Keep historical quotations and superseded clauses identifiable as such; use the current contract text and its explicit amendments for active behavior. Repo paths are relative to the repo root. Installed-package typings and plan artefacts cited below are evidence for the scoped facts they support, not product authority.
 
 ## 1. Scope
 
 ### 1.1 What this is
 
-`web/` is a clean-slate browser UI for cpd: a 3-pane cockpit (Context tree, Plan view, Attention Inbox) around a web-native chat that attaches to a cpd Session (pi-runner or durable-host) and renders and drives it. Phase 1 is a dev bench served by `vite serve` (`pnpm --filter cpd-web-client run dev`). The legacy `web/` code is deleted (pro-d13).
+`web/` is CPD's browser client: its Context tree, Plan view, Attention Inbox, and session chat are WebUI presentation and interaction surfaces. CPD's approved architecture makes the WebUI the primary client; deployment, runtime, and transport are governed by the [core contract](../docs/contract.md) and [WebUI access](../docs/architecture/webui-access.md), not by the historical Phase 1 dev-bench description. The recorded Phase 1 decision pro-d13 (legacy UI deleted) remains decision history, not a current scope statement.
 
 ### 1.2 Recorded decisions carried out
 
