@@ -18,7 +18,10 @@ const MODEL: &str = "vertex/gemini-embedding-2";
 /// hs-d1 and hs-d2 and the note hs-n2; the note hs-n1 is superseded by hs-d2, so it is out of force.
 fn fx() -> Fx {
     let fx = Fx::with_ports();
-    fx.env.write_config(&format!("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n", fx.env.tmux_socket()));
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
     fx.install_pi();
     fx.cockpit();
     fx.cpd(&[

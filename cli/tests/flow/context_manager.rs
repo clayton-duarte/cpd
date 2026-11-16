@@ -24,10 +24,9 @@ fn events(fx: &Fx, kind: &str) -> Vec<Value> {
 /// The Context `ctx` with a note, the config, and no cockpit yet.
 fn setup(fx: &Fx) {
     fx.env.write_tmux_config("");
-    fx.cpd(&[
-        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
-    ])
-    .ok();
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Payments', 't', 'm1');",
+    );
     fx.cpd(&["context", "note", "Mind the ledger.", "--context", "ctx"])
         .ok();
 }
