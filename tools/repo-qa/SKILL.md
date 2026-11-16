@@ -15,6 +15,10 @@ skill does not start a run, grant access, authorize a quota reset, or enable a
 scheduler. Do not assume that instructions in another repository authorize work
 here. Never copy CPD host names, absolute paths, credentials or install commands.
 
+For explicitly authorized recurring schedules, read the README's standing
+authorization policy: a weekly reset refreshes budget, not permission. Default
+one-window authority still applies to consumers that have not opted in.
+
 For a started/resumed run:
 
 1. Recover the User's scope, run descriptor and canonical handoff from the repo

@@ -233,8 +233,9 @@ pub fn start_with_allocation(
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
         }
-        // An urgent Job may start one Attempt beyond `concurrency` (§3.7 E3). A Job already a tenant of `workers` takes no slot.
-        if first {
+        // Every new Attempt, including a retry, reacquires its Worker slot. Only named Spec resources
+        // remain owned by the Job between Attempts. Keep the capacity check in the insert transaction.
+        {
             let workers = resource::workers(tx, ctx.config.concurrency)?;
             let urgent: bool = tx.query_row("SELECT urgent FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
             // The `workers` pool, the one rule E3 schedules by (§3.7 E3): a free slot, or for an urgent Job the one beyond.

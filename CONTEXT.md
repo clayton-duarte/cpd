@@ -2,7 +2,7 @@
 
 ## How to read this glossary
 
-CPD (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there, except **Workflow**, which returns with a new meaning (pro-d136).
+Vocabulary for [CPD](README.md). The [contract](docs/contract.md) specifies behavior; the [command reference](docs/commands.md) specifies operations.
 
 The three layers: one agent, one deliverable and one scope each (pro-d536, pro-d537, pro-d538). This table is the definition:
 
@@ -17,70 +17,70 @@ The Jira words are shorthand for scale and ownership; the table is the definitio
 1. A Context outlives an Epic and may span many Epics.
 2. A Workflow (one repo's share of a Plan, one pull request) has no Jira equivalent.
 3. The PRD holds product decisions only; Jira tickets often carry implementation, which in cpd the Lead settles (pro-d537).
-4. A Job is small and fully specified (one Spec, one commit), nearer a checklist item than a Jira Task.
+4. A Job is small and fully specified (one Spec, one accepted outcome), nearer a checklist item than a Jira Task.
 
 The one rule: **PR means only the pull request** on GitHub. Plan > Workflows > Jobs. History keeps the old words: ADRs, the archive, research, old Context records and applied migrations are never rewritten.
 
-An entry is a bold term, a parenthesis with its kind and the Context record that decided it, a colon, the definition, and an `_Avoid_:` line when words are to be avoided. The kinds are entity, phase, stage, step, state, role, mechanism, policy, other and retired. A definition says what a thing is, never how a command works: the contract and [commands.md](docs/commands.md) own that, and an entry points to them. An Avoid word that is also a command is meant as a noun. A word with several senses has one entry per sense, each with a qualified name.
+Definitions describe the concepts; command mechanics belong in the references above. `_Avoid_` names discouraged synonyms. Different senses have qualified names.
 
 ## Work units
 
 **Context** (entity, pro-d136):
-The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a Session. Each machine may keep one Manager per Context. Distinct from the Context stage.
+The knowledge shared by related Plans, optionally mapped to a Jira Epic. Each machine may keep one Manager per Context; the Context is distinct from a Session and from the Context stage.
 _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 
 **Neighbour curation** (mechanism, Experimental Feature `write_curation`):
-Checking a new Context record against its nearest in-force records at write time. It proposes pending retirements only; the User approves them. Contract §4.6.
+Checking a new Context record against nearby in-force records at write time. Retirement follows [contract §4.6](docs/contract.md#46-the-context-store).
 
 **Vector cache** (entity):
-`$CPD_HOME/vectors.db`: the derived file of record embeddings and already-checked markers for Neighbour curation. Each embedding row carries `content_hash`, the SHA-256 (hex) of the text it embedded, so `context embed` can skip a row whose text is unchanged. Written by `context curate` and `context embed`, and also read by `context search`. Not the source of truth and never synced; deleting it loses nothing. Contract §4.6.
+Rebuildable embeddings and curation markers derived from Context records. It supports retrieval and is not a source of truth.
 
-**Permanent Context** (entity, pro-d338):
-One of exactly three Contexts that every machine keeps: `cpd`, `host` (local maintenance of the machine) and `codereview` (the review intake of `inbox claim`). Never archived, renamed or deleted (`context_permanent`); its Plans behave as in any Context. The engine ensures all three every tick, and `context manager`, `inbox claim` and the host click ensure them too: a missing row is created and a live Manager is started, while a live Manager is left alone.
+**Permanent Context** (entity):
+A built-in Context reserved for CPD, local host maintenance or review intake, retained for the machine's lifetime.
 _Avoid_: default Context, system Context
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede others: `--supersedes` may repeat, and prose that says a record is superseded without linking it is refused, contract §4.6), a note, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
+One typed entry of a Context’s durable knowledge: a decision, note, Plan or Brief. A decision may supersede earlier records; an Axiom belongs in agent instructions.
 _Avoid_: wiki page, memory
 
 **Context store**:
-A Context's records, held only in the machine's database (tables `contexts` and `context_records`). Contexts are machine-local (hs-d23, hs-a1); an earlier git store was imported and archived by migration 0007. Rendered as markdown for Leads on demand.
+The persistent, machine-local collection of Context records, retrieved on demand.
 _Avoid_: wiki, notes folder
 
 **Distilled Context** (hs-d549, hs-d551; replacing hs-d194; the pilot of Epic B, auxiliary agents):
-The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records). The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (in-process full-text search over all records, no engine to install), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
+Classification and compression of Context records to support retrieval, with retirement governed by [contract §4.6](docs/contract.md#46-the-context-store). Source records remain authoritative.
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Plan** (entity, pro-d136; changed from R34):
-One deliverable over one or more Workflows, optionally mapped to a Jira ticket, belonging to exactly one Context. A Plan may be **Lead-less** in the phase `shaping`: its Manager creates it and explores through its explore Jobs before any Lead exists, with a null `lead_session` (contract §3.1). Otherwise its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a Workflow (see Retired). Distinct from the Plan stage and from phase `plan`.
+One deliverable belonging to exactly one Context, optionally mapped to a Jira ticket. It may begin as a Lead-less shaping Plan before any Workflow exists; see [Plan phases](docs/contract.md#31-plan-phases).
 _Avoid_: project; task, run (as a noun)
 
 **Workflow** (entity, pro-d136, pro-d138):
-The part of a Plan in one repository: its repo, base branch, Lead Branch and Lead worktree, its Jobs, and the Workflows it needs. It ends in exactly one pull request, which cpd opens from its Lead Branch; it maps to one pull request but is not it. One repository may hold several Workflows of one Plan, and the Jira key of the work stays on the Workflow. cpd 1 used the word for a Plan (D3, retired); a GitHub Actions workflow is always written in full.
+One repository's contribution to a Plan, organized toward one pull request. A Plan may have several Workflows in the same repository; each Workflow owns its Jira key. A GitHub Actions workflow is always qualified as such.
 _Avoid_: PR, sub-plan, track, slice, repo plan
 
 **Job** (changed):
-A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context. It belongs to exactly one Workflow of its Plan, and has a Job kind. A GitHub Actions job is written in full.
+A self-contained unit of work defined by a Spec. Delivery Jobs belong to a Workflow; Explore Jobs belong directly to the Plan. A GitHub Actions job is always qualified as such.
 _Avoid_: card, step; task (except in the Jira analogy of the table)
 
 **Job kind** (new, hs-d340, hs-d341):
-What a Job is for, and so which checks its submit runs: `work` (the default), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer), `impl` (makes the tests of the test Jobs it needs pass), `verify` (adds checks that change no product behaviour; the Lead adds it by hand), `open` and `update`, which only cpd adds, and the explore kinds `scout` and `research`, which the Lead adds to the Plan (see **Explore Job**). The kinds a Workflow may hold follow its Shape. Defined once in contract §2.2 "Job kinds".
+The classification that determines a Job’s purpose, deliverable and checks. The supported kinds and constraints live in [contract §2.2](docs/contract.md#22-objects).
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
-The last Job of every started Workflow, added by cpd (engine `open-jobs`), never by the Lead: a Job of kind `open` that is Ready when every other Job of its Workflow is merged or cancelled. Its Worker merges the base into the Lead Branch only if the two conflict; cpd then runs the Gate and opens the Workflow's pull request, ready, never a draft. `pr open` repairs a failed one or a down engine.
+The automatically created integration Job that prepares a Workflow’s pull request after its delivery Jobs finish.
 _Avoid_: opener, release Job
 
 **Update Job** (new, hs-d340):
-A Job of kind `update`, added by cpd for a Workflow whose pull request is already open and conflicts with its base (never for a base that merely moved, and never for feedback). Like the Open Job it merges the base, then cpd runs the Gate and pushes. `pr rebase` and `pr push` repair a failed one.
+The automatically created integration Job that resolves a Workflow pull request’s conflict with its base.
 _Avoid_: sync Job, rebase Job
 
 **Scout** (new, pro-d210):
-The Job kind `scout`: a Job of the explore kinds that answers one question from this machine only (where a checkout is, what a log or an Attempt transcript says, a code survey). Its deliverable is a Markdown artefact and a bounded summary, with no commit. Tier `H1`-`H3`. See contract §2.2 "Explore Jobs".
+The Job kind `scout`: a Job of the explore kinds that answers one question from this machine only (where a checkout is, what a log or an Attempt transcript says, a code survey). Its deliverable is a Markdown artefact and a bounded summary, with no commit. See contract §2.2 "Explore Jobs".
 _Avoid_: explorer, survey Job
 
 **Researcher** (new, pro-d215):
-The Job kind `research`: an Explore Job that may also reach outside this machine (upstream docs, a registry, a web page, an attached MCP server) to answer one question. Its deliverable is the same as a Scout's. Tier `S1`-`S3`. An ordinary research Job of a docs Workflow, whose findings are committed as `docs/research/*.md`, is a `work` Job, not a Researcher.
+The Job kind `research`: an Explore Job that may also reach outside this machine (upstream docs, a registry, a web page, an attached MCP server) to answer one question. Its deliverable is the same as a Scout's. An ordinary research Job of a docs Workflow, whose findings are committed as `docs/research/*.md`, is a `work` Job, not a Researcher.
 _Avoid_: web Job, lookup Job
 
 **Explore Job** (new, pro-d210, pro-d215):
@@ -104,7 +104,7 @@ A relation saying a Workflow starts only after another Workflow of the same Plan
 _Avoid_: blocker, prerequisite
 
 **Shape** (new, hs-d341, hs-d497):
-How a Workflow lays out its Jobs, stored when the Workflow is added and never changed: `tdd` (docs, test, impl: the default), `docs` or `config` (no test Job), or `free` (every kind the Lead may add). It decides which Job kinds the Workflow may hold (contract §2.2 "Job kinds").
+The pattern that determines which Job kinds a Workflow may contain and must include. Shapes and their constraints are defined in [contract §2.2](docs/contract.md#22-objects).
 _Avoid_: template, type
 
 **Stacked Workflow** (new, hs-d522, hs-d523):
@@ -116,7 +116,7 @@ The branch of one Workflow that accumulates its Merged Jobs and becomes its pull
 _Avoid_: feature branch, integration branch
 
 **Lead worktree** (new):
-The git worktree of a Workflow's Lead Branch, created when the Workflow starts. The Gate and the Open Job's merge run against it; Workers have their own worktrees.
+The git worktree of a Workflow's Lead Branch. Workspace rules are defined in [contract §7](docs/contract.md#7-git-and-the-gate).
 _Avoid_: workflow worktree, main worktree
 
 **Attempt**:
@@ -142,7 +142,7 @@ A Job the User has not approved yet. The engine never runs it, and it is editabl
 _Avoid_: proposed, pending Job
 
 **Locked** (state):
-The state of every Job that is not a draft: its title, Tier, Workflow, kind and Dependencies can no longer change, and its Spec can change only while the Job is queued and has no Attempt (`job edit --spec`, no Plan review; the old text stays in the history); it can otherwise only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved. Distinct from the Plan lock (`plan lock`, the act that moves phase `plan` to `dispatch`) and from a file lock or kernel `flock` (Runtime).
+The state in which a Job’s approved identity and dependencies are fixed. Spec corrections before the first Attempt, retries and explicit amendment operations follow [contract §3.2](docs/contract.md#32-job-statuses).
 _Avoid_: frozen, final
 
 **Ready** (state):
@@ -160,7 +160,7 @@ A Ready Job that `scheduling` could not start for want of a pool. Nothing is res
 Where a Workflow is, stored as `waiting`, `dispatch`, `open`, `merged` or `cancelled` (contract §3.8). Qualified in prose: "a waiting Workflow" is one whose needs or base are not yet met; `dispatch` means started, its Jobs running, no pull request yet; `open` means its pull request is open; `merged` means its pull request is squash-merged; `cancelled` means given up. The words `dispatch` and `waiting` here are not the Dispatch stage and not a Session's waiting state.
 
 **Escalation** (changed):
-A question raised by an agent to its parent in the delegation tree (Worker → Lead → User) when continuing would require guessing.
+A question requiring information or authority the agent lacks. Its recipient follows the [escalation routing](docs/contract.md#escalation-routing).
 _Avoid_: blocker; ask (as a noun)
 
 **Addendum** (entity):
@@ -170,7 +170,7 @@ _Avoid_: edit (an edit changes the Spec: `job edit --spec`)
 ## The CPD flow
 
 **Phase, stage and step** (entity, pro-d145, pro-d146):
-Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`workflow add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step `workflow-start`" (contract §3.7).
+A **phase** is a Plan's stored position: `shaping`, `grounding`, `plan`, `dispatch`, `deploy` or `done`; [contract §3.1](docs/contract.md#31-plan-phases) defines the transitions. A **stage** groups activities into Context, Plan or Dispatch. A **step** names an activity within a stage; an engine step belongs to the engine loop instead.
 _Avoid_: stage for a phase, step for a Job
 
 **PRD** (entity, pro-d536, pro-d537, pro-d538):
@@ -184,7 +184,7 @@ The first stage: Grounding and Grilling, in phase `grounding`; it ends with `pla
 The second stage: Clarifying, Scoping, Splitting and Orchestrating, in phase `plan`; it ends with `plan lock`. Clarifying receives requirements and assumptions settled from the brief and confirms only implementation and operational details with the User.
 
 **Dispatch stage** (stage, pro-d145, pro-d146):
-The third stage: Documenting, Red testing, Implementing, Verifying and Deploying, in phases `dispatch` and `deploy`. The Plan is `done` when every Workflow's pull request is merged. Its name is not the old phase "Dispatch" (retired) nor the Workflow status `dispatch`. A Workflow whose policy sets `workflow.local_docs = false` (policy-configured repositories that keep decisions in the Context instead of local markdown) has no Documenting step and no docs Job: its tdd template starts with Red testing (b72, commands.md §9.4, contract §8.3).
+The stage in which authorized Jobs execute and their results reach delivery. Completion depends on the Plan's purpose and follows [contract §3.1](docs/contract.md#31-plan-phases).
 
 **Grounding** (step, pro-d146):
 Reading the Context's records and the User's material (`context show`, `context note`).
@@ -217,7 +217,7 @@ Workers run the Jobs of kind `impl` and `work`, and Merge them into the Lead Bra
 Workers run the Jobs of kind `verify`: checks that change no product behaviour.
 
 **Deploying** (step, pro-d145, pro-d146):
-The process of a Workflow's pull request, the last step once all its Jobs ran: the Open Job, the Gate (which runs inside it), opening the pull request, CI, pull request review and its polling (`pr poll`, `pr-feedback`), feedback fixes (Addressing), posting and merge.
+Handling a Workflow’s pull request through checks, review, feedback and merge. The Plan phase named `deploy` does not establish that a production deployment occurred; external prerequisites and deployment approvals are separate.
 
 **Addressing** (step):
 A feedback fix is one `work` Job per cohesive fix, appended to the Workflow whose pull request is open (only `work` Jobs are allowed there); the Plan returns to phase `dispatch` and the Job's own merge pushes the Lead Branch to the pull request: no Update Job, no Gate at `gate.pr`. A conflict with the base queues an Update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
@@ -278,7 +278,7 @@ The human who owns the ticket and talks only to the Lead (or the Manager).
 _Avoid_: operator; owner (that is a GitHub login)
 
 **Manager** (role, B3):
-The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It holds the Context's records and Requirements, splits them into Plans, starts each Plan's Lead with a Brief, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User or a Lead talks to it, and reads the Context on demand; it never answers for the User. Its default Tier is `manager_tier`. A Permanent Context (`cpd`, `host`, `codereview`) always has one, ensured by the engine; its `cwd` is the User's home directory.
+The agent responsible for a Context’s product decisions, durable knowledge and division of work into Plans. It delegates execution to Leads and escalates unresolved product decisions to the User.
 _Avoid_: master, supervisor, orchestrator
 
 **Lead** (role):
@@ -286,7 +286,7 @@ The agent that translates User intent into Specs and orchestrates the Plan; it n
 _Avoid_: coordinator, orchestrator
 
 **Worker** (role):
-An agent that executes one Attempt of one Job in its own worktree.
+An agent that executes one Attempt of one Job. Its workspace follows the Job kind and runtime profile; a Job may have several Worker executions.
 _Avoid_: subagent, executor, thread (as a word for a Worker)
 
 **Agent key** (term, pro-d345, pro-d346):
@@ -301,9 +301,11 @@ _Avoid_: engine, backend
 A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager or the User asks of one Plan's Lead. Not a Spec, which describes a Job.
 _Avoid_: ticket, prompt
 
-**Tier** (other, pro-d146; Tier model v2, pro-d328 to pro-d332; air-d16, air-d17, air-d21):
-A code naming the model and effort an agent runs at: a letter (`G`, `H`, `S` or `O`, ranked G < H < S < O), then an effort digit `0`–`4` that the model offers, or `X` for any model; the effort order is 0 < X < 1 < 2 < 3 < 4, so X sends no effort and sits between 0 and 1 (air-d16, air-d17, air-d21); e.g. `O3` for a Lead, `S1` for a coding Worker, `GX` for any model, `HX` on a model with efforts 1,3. Effort 5 is never valid. Each role (auxiliar, worker, lead, manager) has a default Tier and a range of Tiers (contract §9). The model table is the policy's `[model]` domain. It means this only: the Inbox colours are called urgency.
-_Avoid_: level, profile; tier (for a colour)
+**Model selection**:
+The model and effort chosen for an agent role or a particular assignment. The
+[selection contract](docs/contract.md#9-model-selection) defines validation and
+provenance; selection does not grant role authority.
+_Avoid_: Tier, rung, model letter
 
 **Context update** (mechanism):
 The message the pi adapter adds at the start of a Manager's turn only (never a Lead's), listing the Context records other Sessions wrote since its last one and the Plan Events since then (created, phase, pull request opened or merged, Job failed, done) (commands.md §15.7).
@@ -413,15 +415,15 @@ _Avoid_: uptime, ping, status page
 ## Checks and gates
 
 **Gate** (mechanism, changed, pro-d146; changed, air-d86):
-A check that stops undesired behaviour from going further; cpd gates undesired behaviour (the canonical definition in [README.md](README.md)). The word's cpd instances are named hooks: the repo's `pre-merge` hook, run by cpd on a Workflow's Lead Branch at the submit of its open or update Job, before cpd pushes, and by the repair commands `pr open`, `pr push` and `pr rebase`; only when the policy key `gate.pr` is `local` (cpd's default is `none`: core/src/policy/default.toml). It is never run per Job. Where `gate.pr` is `none`, CI is the check where it exists. Keys and hooks: contract §7.3, §8.3.
+A check that prevents an undesired action from proceeding. The repository Gate is the policy-dependent pre-merge check; its scope and evidence follow [contract §7.3](docs/contract.md#73-hooks-from-the-repo-policy-file).
 _Avoid_: CI; checks (GitHub's word); quick check (that is the `pre-commit` hook)
 
 **Quick check** (mechanism, pro-d146; changed, air-d86):
-The repo's `pre-commit` hook, run by cpd on a Worker's Attempt at its merge — a Gate in the sense of the canonical definition in [README.md](README.md), not only a hook of this repo — only when the policy key `gate.merge` is `local` (default `none`). With no such hook there is no Quick check and nothing runs instead.
+The policy-dependent pre-commit check at an Attempt’s merge, distinct from the repository Gate. See [contract §7.3](docs/contract.md#73-hooks-from-the-repo-policy-file).
 _Avoid_: pre-flight, lint step; Gate (that is the `pre-merge` hook)
 
 **Mechanical checks** (mechanism, changed hs-d340, hs-d341):
-The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an open or update Job the Lead Branch's fit with its base (refused only on a conflict) and the Gate. The Worker fixes what they report; the Lead runs none. Not a step of the CPD flow: part of Deploying.
+Checks selected by a Job’s kind to establish whether its submitted result meets the execution contract. See [contract §7.7](docs/contract.md#77-job-kinds-the-checks-at-submit-the-open-job-and-the-update-job-hs-d340-hs-d341).
 
 **CI** (other):
 The repo's GitHub checks on a pull request, where CI exists (this repo runs none). cpd's `pr.feedback.checks` key decides whether failing checks raise `pr-feedback`. Not the Gate and not Mechanical checks.

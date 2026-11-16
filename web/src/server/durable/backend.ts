@@ -164,10 +164,11 @@ export function createDurableBackend(deps: {
         return f;
       };
       const emitStatus = (force: boolean): void => {
-        const key = JSON.stringify({ busy, queued });
+        const compacting = dialect.transcript.facts.compacting;
+        const key = JSON.stringify({ busy, queued, compacting });
         if (force || key !== lastStatus) {
           lastStatus = key;
-          send({ type: "session.status", sessionId, busy, queued: [...queued] });
+          send({ type: "session.status", sessionId, busy, compacting, queued: [...queued] });
         }
       };
       // Entries older than the cache come from the host's history command, newest first: `historyNext` continues the chain.

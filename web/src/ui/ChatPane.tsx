@@ -84,6 +84,7 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         items={view.transcript.items}
         hasEarlier={view.transcript.hasEarlier}
         busy={isBusy}
+        compacting={view.compacting}
         queued={view.queued}
         pending={view.pending}
         onLoadEarlier={() => connection.loadEarlier()}

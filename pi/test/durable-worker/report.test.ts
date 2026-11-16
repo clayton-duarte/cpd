@@ -82,3 +82,33 @@ test("writeReport creates the missing directory, replaces an earlier report and 
   assert.deepEqual(JSON.parse(await readFile(file, "utf8")) as EndReport, second);
   assert.deepEqual(await readdir(dir), ["a1.report.json"]);
 });
+
+test("concurrent report publications do not collide", async () => {
+  const file = "/fake/attempt.report.json";
+  const reports = [endReport([assistant({ input: 1 })]), endReport([assistant({ input: 2 })])];
+  const files = new Map<string, string>();
+  const published: EndReport[] = [];
+  let writes = 0;
+  let release!: () => void;
+  const bothWritten = new Promise<void>((resolve) => { release = resolve; });
+  const fs = {
+    mkdir: async () => {},
+    writeFile: async (path: string, data: string) => {
+      files.set(path, data);
+      if (++writes === 2) release();
+      await bothWritten;
+    },
+    rename: async (from: string, to: string) => {
+      const data = files.get(from);
+      if (data === undefined) throw Object.assign(new Error(`ENOENT: ${from}`), { code: "ENOENT" });
+      files.delete(from);
+      files.set(to, data);
+      published.push(JSON.parse(data) as EndReport);
+    },
+  };
+  const results = await Promise.allSettled(reports.map((report) => writeReport(file, report, fs)));
+  assert.deepEqual(results.map((result) => result.status), ["fulfilled", "fulfilled"], "both publications must succeed without ENOENT");
+  assert.deepEqual(published, reports);
+  assert.deepEqual(JSON.parse(files.get(file)!) as EndReport, reports[1]);
+  assert.deepEqual([...files.keys()], [file]);
+});

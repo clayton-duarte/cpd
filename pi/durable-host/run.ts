@@ -86,6 +86,7 @@ const agentOf = (a: { model?: { provider: string; modelId: string }; thinkingLev
 });
 
 export type Deps = {
+  compactionSettings?(): CompactionSettings;
   /** The one-owner check: rejects with `HostRunning` when a host already owns the socket. */
   guard(path: string): Promise<void>;
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
@@ -271,7 +272,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     const settings = {
       get compaction() {
         return compactionPolicy({
-          settings: () => ({}),
+          settings: () => deps.compactionSettings?.() ?? {},
           agent: () => liveModel,
           windowOf: (provider, modelId) => windows.get(`${provider}/${modelId}`),
         });
@@ -330,6 +331,16 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       readText: readPlanFile,
       write: (entry) => conversation.write({ type: "write", entry }),
       entries: () => conversation.entries(),
+      notifyDecision: async (content, data) => {
+        await submit({
+          content,
+          requestId: `plan-decision:${plan}:${String(data.review)}`,
+          whenBusy: "followUp",
+          entry: { kind: "cpd-plan-decision", data },
+          verified: true,
+          reply: true,
+        });
+      },
       dialogs,
       held,
     });

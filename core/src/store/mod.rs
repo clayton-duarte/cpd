@@ -808,6 +808,8 @@ impl Store {
         let mut holder = Holder::default();
         let asked = clock.now();
         let result = (|| {
+            #[cfg(feature = "fakes")]
+            let observation = crate::ports::WriteObservation::new();
             let tx = loop {
                 let begun = Transaction::new(&mut self.conn, TransactionBehavior::Immediate)
                     .map_err(|e| enrich(CpdError::from(e), &path, busy_ms));
@@ -821,6 +823,8 @@ impl Store {
                     break tx;
                 }
             };
+            #[cfg(feature = "fakes")]
+            observation.acquired();
             let begun = clock.now();
             holder.record(&path, command);
             // Another process may have migrated since this process opened.

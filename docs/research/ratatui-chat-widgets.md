@@ -206,7 +206,7 @@ MVP   total high = 2550 + 3162 = 5712
 - **"`pi/lib/balloon.ts`"** holds one `export` line (`balloon.ts:2`, **read**); the code is `compact-tools-balloon.ts`.
 - **"`pace.rs` (animation clock)"**: `pace.rs` is the newest-wins read queue (`pace.rs:1`, `:19`, **read**). The animation clock is `palette.rs:480-486` and `pump.rs:221-231` (**read**).
 - **`docs/research/anim-perf-views.md:7`** measures a `worker` view that no longer exists (R2).
-- **`docs/research/box-widget.md`, `docs/research/fold-language-in-pi.md`, `docs/ui-preview.md`, `docs/interface.md`, `docs/research/pi-durable.md` and `inbox-pane.md`, `agent-comms.md`** were not read in full by this Job; only the files cited above were. Nothing in them is relied on.
+- **`docs/research/box-widget.md`, `docs/research/fold-language-in-pi.md`, `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`, `docs/interface.md`, `docs/research/pi-durable.md` and `inbox-pane.md`, `agent-comms.md`** were not read in full by this Job; only the files cited above were. Nothing in them is relied on.
 
 ## 8. Not done
 

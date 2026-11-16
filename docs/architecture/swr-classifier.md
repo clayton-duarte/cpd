@@ -1,6 +1,6 @@
 # SWR for the classifier: the Lead completion badge and endpoint health
 
-Status: **normative for the Jobs `swr-classifier-tests` and `swr-classifier-impl`** (Plan `external-sync-arch`, Workflow `swr-classifier`). Where merged code later differs from this page, the code wins. The shared design is [swr.md](swr.md); the schema is [contract §4.4](../contract.md); the classifier port is [contract §3.7a](../contract.md); the commands are [commands §32](../commands.md).
+Status: **normative for the Jobs `swr-classifier-tests` and `swr-classifier-impl`** (Plan `external-sync-arch`, Workflow `swr-classifier`). The shared design is [swr.md](swr.md); the schema is [contract §4.4](../contract.md); the classifier port is [contract §3.7a](../contract.md); the commands are [commands §32](../commands.md).
 
 Decisions: pro-d438 (the badge is always visible and keeps its last value), pro-d445 (the hover card of the other scores), pro-d448 (all sources, one DAG), pro-d449 (cpd is the backend; clients call cpd). Accepted assumptions of [swr.md §17](swr.md) apply; the ones this page relies on are A1, A3, A4 and A6.
 

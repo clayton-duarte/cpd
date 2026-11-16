@@ -1,6 +1,6 @@
 # The dev-mode live-visual loop: how the web UI was previewed, approved and shipped
 
-Sources: the Context records hs-d814, hs-d817, hs-d819, hs-d824, hs-d826, hs-d827, hs-d829, hs-d830, hs-n666, hs-n698, hs-n699, hs-p168, hs-b145; the merged PRs #732, #733, #739, #741, #743, #745, #747, #748, #749; `web/README.md`; `docs/ui-preview.md`; `docs/research/web-client-api.md`.
+Sources: the Context records hs-d814, hs-d817, hs-d819, hs-d824, hs-d826, hs-d827, hs-d829, hs-d830, hs-n666, hs-n698, hs-n699, hs-p168, hs-b145; the merged PRs #732, #733, #739, #741, #743, #745, #747, #748, #749; `web/README.md`; `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`; `docs/research/web-client-api.md`.
 
 Status: this is a research document, not a contract. It records the dev-mode live-visual loop **as it actually ran** during Plan `web-chat-live` (hs-d819) and its successor `web-chat-bugs` (hs-p168), faithful to the evidence: every claim about the loop cites a Context record id or a PR number, every quote is verbatim or a faithful gist, and the ad hoc, hand-run parts are named as such. It is input for a later integration Plan; nothing here is implemented.
 
@@ -28,7 +28,7 @@ The loop is for **visual and layout iteration — presentation only** (hs-d817).
 
 One explicit exception is on record: hs-d819 is the separate, deliberate dispatch exception for Plan `web-chat-live`, the one Plan that wired a **functional** dev-mode chat (real transcript read, real send) through the Vite CLI adapter. It was a scoped exception, not a change of the rule above: hs-d780's production contract is unchanged (hs-d819, `web/README.md` "The dev live adapter (dev mode only)").
 
-The loop has a sibling pattern for the TUI: the earlier preview loop of `docs/ui-preview.md` (decisions hs-d504, hs-d323, hs-d341) — a throwaway prototype PR and `scripts/preview-tui.sh on/off`, with the cockpit's view panes swapped to the preview build. It is named here once as the precedent; the subject of this document is the web/Vite loop.
+The loop has a sibling pattern for the TUI: the earlier preview loop of `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` (decisions hs-d504, hs-d323, hs-d341) — a throwaway prototype PR and `scripts/preview-tui.sh on/off`, with the cockpit's view panes swapped to the preview build. It is named here once as the precedent; the subject of this document is the web/Vite loop.
 
 ## 3. The rules as invariants
 
@@ -121,4 +121,4 @@ flowchart LR
 4. Is the approval record a Context decision or a new artifact?
 5. Is discard-not-diff enforceable (a check), or only a rule?
 
-Sources: hs-d814, hs-d817, hs-d819, hs-d824, hs-d826, hs-d827, hs-d829, hs-d830, hs-n666, hs-n698, hs-n699, hs-p168, hs-b145; PRs #732, #733, #739, #741, #743, #745, #747, #748, #749; `web/README.md` ("The dev live adapter (dev mode only)", "Run the dev server", "The chat surface"); `docs/ui-preview.md`; `docs/research/web-client-api.md`.
+Sources: hs-d814, hs-d817, hs-d819, hs-d824, hs-d826, hs-d827, hs-d829, hs-d830, hs-n666, hs-n698, hs-n699, hs-p168, hs-b145; PRs #732, #733, #739, #741, #743, #745, #747, #748, #749; `web/README.md` ("The dev live adapter (dev mode only)", "Run the dev server", "The chat surface"); `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision`; `docs/research/web-client-api.md`.

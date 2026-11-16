@@ -15,13 +15,17 @@ const STATUSES: readonly string[] = ["pending", "approved", "rejected", "superse
 
 /**
  * The reviews this session opened for `plan`, folded from its entries (oldest first, the later entry of a review wins).
- * Entries of another Plan are skipped: a fork's file starts with its source's entries. `invalid` counts our own entries that do not parse.
+ * Accepts legacy Pi custom entries and durable entry records. Entries of another Plan are skipped:
+ * a fork's file starts with its source's entries. `invalid` counts our own entries that do not parse.
  */
 export function reviewsFromEntries(entries: readonly unknown[], plan: string): { reviews: Map<string, ReviewEntry>; invalid: number } {
   const reviews = new Map<string, ReviewEntry>();
   let invalid = 0;
   for (const e of entries) {
-    if (!isObject(e) || e.type !== "custom" || e.customType !== ENTRY_TYPE) continue;
+    if (!isObject(e)) continue;
+    const legacy = e.type === "custom" && e.customType === ENTRY_TYPE;
+    const durable = e.kind === ENTRY_TYPE;
+    if (!legacy && !durable) continue;
     const d = e.data;
     if (!isObject(d) || typeof d.plan !== "string" || typeof d.review !== "string" || typeof d.status !== "string" || !STATUSES.includes(d.status)) {
       invalid += 1;
