@@ -941,16 +941,54 @@ fn job_merge_into_base_lead_branch_queues_stacked_update_job() {
     let dir = rig.home.root().join("policy/acme");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("owner.toml"), OWNER_POLICY).unwrap();
-    let config = crate::config::Config::parse("version = 1\nmachine = \"test\"\n", std::path::Path::new("config.toml")).unwrap().0;
-    let model = |m: &str| crate::config::TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
-    let catalog = crate::config::Catalog { j: crate::config::TierModel { model: String::new(), efforts: vec![] }, pi_version: "1.0.0".to_owned(), o: model("o/m"), s: model("s/m"), h: model("h/m"), g: crate::config::TierModel { model: "g/m".to_owned(), efforts: vec![] } };
-    let ctx = crate::merge::Ctx { home: &rig.home, config: &config, catalog: &catalog, source: "test", metrics: &|_| None, classifier: crate::merge::no_verdict_classifier() };
+    let config = crate::config::Config::parse(
+        "version = 1\nmachine = \"test\"\n",
+        std::path::Path::new("config.toml"),
+    )
+    .unwrap()
+    .0;
+    let model = |m: &str| crate::config::TierModel {
+        model: m.to_owned(),
+        efforts: vec![1, 2, 3],
+    };
+    let catalog = crate::config::Catalog {
+        j: crate::config::TierModel {
+            model: String::new(),
+            efforts: vec![],
+        },
+        pi_version: "1.0.0".to_owned(),
+        o: model("o/m"),
+        s: model("s/m"),
+        h: model("h/m"),
+        g: crate::config::TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
+    };
+    let ctx = crate::merge::Ctx {
+        home: &rig.home,
+        config: &config,
+        catalog: &catalog,
+        source: "test",
+        metrics: &|_| None,
+        classifier: crate::merge::no_verdict_classifier(),
+    };
     let mut store = Store::open(&rig.home, 5000).unwrap();
     let pay = PlanId::parse("pay").unwrap();
     let id = crate::ids::AttemptId::parse("api-a1").unwrap();
-    let out = Ports::scope(&rig.fakes.ports, || crate::merge::merge(&mut store, &ctx, &pay, &id)).unwrap();
-    assert!(matches!(out.end, crate::merge::End::Merged { .. }), "base Job must merge: {:?}", out.end);
-    assert!(update_jobs(&mut store).is_empty(), "base movement without a conflict must not queue an update");
+    let out = Ports::scope(&rig.fakes.ports, || {
+        crate::merge::merge(&mut store, &ctx, &pay, &id)
+    })
+    .unwrap();
+    assert!(
+        matches!(out.end, crate::merge::End::Merged { .. }),
+        "base Job must merge: {:?}",
+        out.end
+    );
+    assert!(
+        update_jobs(&mut store).is_empty(),
+        "base movement without a conflict must not queue an update"
+    );
     assert_ne!(last_reason(&mut store).as_deref(), Some("base-moved"));
 }
 
