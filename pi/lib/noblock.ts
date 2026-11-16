@@ -1,6 +1,13 @@
 /** commands.md §15.11: what a Manager's or a Lead's `bash` call may not wait for. Pure: the adapter (`adapter.ts`) applies it to their `tool_call`. */
 
+import { createRequire } from "node:module";
+import { Language, Parser, type Node } from "web-tree-sitter";
 import { PREFIXES, simpleCommands } from "./shell.ts";
+
+const require = createRequire(import.meta.url);
+await Parser.init();
+const parser = new Parser();
+parser.setLanguage(await Language.load(require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")));
 
 /** The longest a Manager's or a Lead's bash call may wait, in seconds. */
 export const BOUND_SECONDS = 30;
@@ -65,20 +72,62 @@ function waits(name: string, args: string[]): string | undefined {
   }
 }
 
-/**
- * The pattern of §15.11 a bash call matches, as the reason shows it, or undefined when it may run: `command` is the bash tool's
- * `command`, `timeout` its own `timeout` input, in seconds.
- */
+/** Only exempt long timeouts when the syntax tree proves every one detached and no explicit wait occurs. */
+function detachedTimeouts(command: string): boolean {
+  const tree = parser.parse(command);
+  if (!tree) return false;
+  try {
+    if (tree.rootNode.hasError) return false;
+    let found = 0;
+    let unsafe = false;
+    const commands = simpleCommands(command);
+    // A wrapper such as `builtin wait` can wait too; conservatively refuse any wait word.
+    if (commands.some((words) => words.some((word) => word.split("/").pop() === "wait"))) return false;
+    const expected = commands.filter((words) => {
+      const c = strip(words);
+      return c?.name === "timeout" && waits(c.name, c.args) !== undefined;
+    }).length;
+    const visit = (node: Node, detached: boolean, substitution: boolean) => {
+      substitution ||= node.type === "command_substitution";
+      if (node.type === "command") {
+        const words = simpleCommands(node.text)[0];
+        const c = words && strip(words);
+        if (c?.name === "wait") unsafe = true;
+        if (c?.name === "timeout" && waits(c.name, c.args)) {
+          found++;
+          if (!detached || substitution) unsafe = true;
+        }
+      }
+      const children = node.children;
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i]!;
+        if (!child.isNamed) continue;
+        const next = children.slice(i + 1).find((n) => n && !n.isExtra);
+        visit(child, detached || next?.type === "&", substitution);
+      }
+    };
+    visit(tree.rootNode, false, false);
+    return found > 0 && found === expected && !unsafe;
+  } finally {
+    tree.delete();
+  }
+}
+
+/** The matching §15.11 wait, or undefined when the call may run. */
 export function blockingReason(command: string, timeout?: number): string | undefined {
   if (typeof timeout === "number" && timeout > BOUND_SECONDS) return `bash timeout ${timeout}`;
   let inLoop = false;
+  let detached: boolean | undefined;
   for (const words of simpleCommands(command)) {
     const c = strip(words);
     if (!c) continue;
     if (c.loop) inLoop = true;
     if (inLoop && c.name === "sleep") return "while … sleep";
     const hit = waits(c.name, c.args);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) {
+      if (c.name === "timeout" && (detached ??= detachedTimeouts(command))) continue;
+      return hit;
+    }
   }
   return undefined;
 }
