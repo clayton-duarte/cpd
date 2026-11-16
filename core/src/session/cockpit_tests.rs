@@ -32,7 +32,8 @@ struct ContextCli {
 }
 
 struct World {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
+    home: CpdHome,
     store: Store,
     ports: Ports,
     runner: FakeRunner,
@@ -69,15 +70,9 @@ fn world() -> World {
         host_socket: Arc::new(FakeHostSocket::new()),
         host_conn: Arc::new(crate::session::tail::FakeHostConn::new()),
     };
-    unsafe {
-        std::env::set_var("TMUX_TMPDIR", dir.path());
-        std::env::set_var("CPD_HOME", home.root());
-        std::env::remove_var("CPD_SESSION");
-        std::env::remove_var("CPD_ATTEMPT");
-        std::env::remove_var("PI_SESSION_ID");
-    }
     World {
-        _dir: dir,
+        dir,
+        home,
         store,
         ports,
         runner,
@@ -88,7 +83,9 @@ fn try_cpd(world: &World, words: &[&str]) -> Result<Value, CpdError> {
     let command = Cli::try_parse_from(["cpd"].into_iter().chain(words.iter().copied()))
         .unwrap()
         .command;
-    match Ports::scope(&world.ports, || run(command))? {
+    match crate::env::with_fixture_environment(&world.home, world.dir.path(), || {
+        Ports::scope(&world.ports, || run(command))
+    })? {
         Output::Success(fields) => Ok(Value::Object(fields)),
         _ => panic!("a success"),
     }
@@ -98,14 +95,16 @@ fn try_context(world: &World, words: &[&str]) -> Result<Value, CpdError> {
     let command = ContextCli::try_parse_from(["context"].into_iter().chain(words.iter().copied()))
         .unwrap()
         .command;
-    match Ports::scope(&world.ports, || crate::context::run(command))? {
+    match crate::env::with_fixture_environment(&world.home, world.dir.path(), || {
+        Ports::scope(&world.ports, || crate::context::run(command))
+    })? {
         Output::Success(fields) => Ok(Value::Object(fields)),
         _ => panic!("a success"),
     }
 }
 
 fn tmux_has_cockpit(w: &World) -> bool {
-    Tmux::new("t")
+    Tmux::with_tmpdir("t", w.dir.path())
         .with_runner(Arc::new(w.runner.clone()))
         .has_session("cpd")
         .unwrap()
@@ -157,7 +156,7 @@ fn park_and_open_paths_ensure_cockpit_session() {
     // With a chat slot, opening and parking preserve the normal swap contract.
     {
         let w = world();
-        let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
+        let tmux = Tmux::with_tmpdir("t", w.dir.path()).with_runner(Arc::new(w.runner.clone()));
         let (_, pane) = tmux
             .create_session("cpd", "main", &super::moves::placeholder_spawn())
             .unwrap()
@@ -196,7 +195,7 @@ fn missing_tmux_session_reads_as_stopped() {
         .read(|conn| super::row::load(conn, &crate::ids::SessionId::parse("working1").unwrap()))
         .unwrap();
 
-    let tmux = Tmux::new("t").with_runner(Arc::new(w.runner.clone()));
+    let tmux = Tmux::with_tmpdir("t", w.dir.path()).with_runner(Arc::new(w.runner.clone()));
     let _panes = tmux.list_panes().unwrap();
     let cockpit_missing = !tmux.has_session("cpd").unwrap();
     assert!(cockpit_missing, "cockpit session is missing in tmux");
@@ -271,4 +270,37 @@ fn session_show_does_not_report_vanished_session_as_working() {
         session["state"], "stopped",
         "vanished tmux session reads as stopped in session show: {out}"
     );
+}
+
+#[test]
+fn fixture_commands_use_their_own_home_and_tmux_dir() {
+    let mut first = world();
+    first
+        .store
+        .write("fixture", |tx| {
+            tx.execute(
+                "UPDATE sessions SET name = 'First' WHERE id = 'stopped1'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let second = world();
+    assert_eq!(
+        try_cpd(&first, &["show", "stopped1"]).unwrap()["session"]["name"],
+        "First"
+    );
+    assert_eq!(
+        try_cpd(&second, &["show", "stopped1"]).unwrap()["session"]["name"],
+        "Stopped"
+    );
+    for w in [&first, &second] {
+        assert!(!tmux_has_cockpit(w));
+        let calls = w.runner.calls();
+        assert!(!calls.is_empty());
+        for call in calls.iter().filter(|call| call.program == "tmux") {
+            assert!(call.envs.iter().any(|(key, value)| key == "TMUX_TMPDIR"
+                && value.as_deref() == Some(w.dir.path().to_str().unwrap())));
+        }
+    }
 }
