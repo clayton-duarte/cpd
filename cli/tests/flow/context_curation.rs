@@ -19,7 +19,10 @@ fn fx() -> Fx {
     fs::create_dir_all(fx.env.cpd_home()).unwrap();
     fs::write(
         fx.env.cpd_home().join("config.toml"),
-        format!("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n", fx.env.tmux_socket()),
+        format!(
+            "version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n",
+            fx.env.tmux_socket()
+        ),
     )
     .unwrap();
     fx.cockpit();
@@ -439,5 +442,9 @@ fn curation_refuses_a_limit_of_zero() {
 #[test]
 fn context_creation_provisions_manager_through_mock_tmux() {
     let fx = fx();
-    assert!(fx.calls("tmux").iter().any(|call| call.args.iter().any(|arg| arg == "has-session")));
+    assert!(
+        fx.calls("tmux")
+            .iter()
+            .any(|call| call.args.iter().any(|arg| arg == "has-session"))
+    );
 }
