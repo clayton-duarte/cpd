@@ -67,7 +67,11 @@ function waits(name: string, args: string[]): string | undefined {
 
 /**
  * The pattern of §15.11 a bash call matches, as the reason shows it, or undefined when it may run: `command` is the bash tool's
- * `command`, `timeout` its own `timeout` input, in seconds.
+ * `command`, `timeout` its own `timeout` input, in seconds. This is a syntactic guard on the tool call, not a child-runtime
+ * monitor: `simpleCommands` splits at `&` without retaining foreground/background status, so a long literal `timeout` is
+ * refused even when its child command is backgrounded. A bounded background child is not a foreground wait; do not infer its
+ * runtime from the Bash tool's wait bound. Other §15.11 patterns (including `sleep`, follow commands, and loop sleeps) remain
+ * independently refused wherever they appear in the parsed simple commands.
  */
 export function blockingReason(command: string, timeout?: number): string | undefined {
   if (typeof timeout === "number" && timeout > BOUND_SECONDS) return `bash timeout ${timeout}`;
