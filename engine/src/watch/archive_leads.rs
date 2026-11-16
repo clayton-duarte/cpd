@@ -83,48 +83,57 @@ fn review_ready(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
     })?;
     let mut ready = Vec::new();
     for (id, subject) in candidates {
-        let Some((repo, number)) = subject.strip_prefix("pr:").and_then(|s| s.rsplit_once('#'))
-        else {
-            continue;
+        let plan = match PlanId::parse(&id) {
+            Ok(plan) => plan,
+            Err(e) => {
+                engine.fail(Step::E14, About::Machine, &e);
+                continue;
+            }
         };
-        let Ok(number) = number.parse::<i64>() else {
-            continue;
-        };
-        let Some(pr) = cpd_core::swr::github::effective_pr(&mut engine.store, repo, number)? else {
-            continue;
-        };
-        if !matches!(pr.state.as_str(), "closed" | "merged") {
-            continue;
-        }
-        let plan = PlanId::parse(&id)?;
-        let objects = engine.store.read(|conn| Objects::of_plan(conn, &plan))?;
-        if !engine
-            .store
-            .read(|conn| {
-                cpd_core::session::archive_blockers(conn, &objects.sessions, &objects.plans)
-            })?
-            .is_empty()
-        {
-            continue;
-        }
-        match archive::refuse_chat_slot(
-            &mut engine.store,
-            &engine.tmux,
-            &engine.config.tmux.cockpit_session,
-            &objects.sessions,
-        ) {
-            Ok(()) => {}
-            Err(e) if e.code() == ErrorCode::InChatSlot => continue,
-            Err(e) => return Err(e),
-        }
-        match engine.store.write("review PR closed", |tx| {
-            cpd_core::pr::review::finish_plan(tx, &plan)
-        }) {
-            Ok(()) => ready.push(plan),
+        match review_candidate(engine, &plan, &subject) {
+            Ok(true) => ready.push(plan),
+            Ok(false) => {}
             Err(e) => engine.fail(Step::E14, About::Plan(plan), &e),
         }
     }
     Ok(ready)
+}
+
+fn review_candidate(engine: &mut Engine, plan: &PlanId, subject: &str) -> Result<bool, CpdError> {
+    let Some((repo, number)) = subject.strip_prefix("pr:").and_then(|s| s.rsplit_once('#')) else {
+        return Ok(false);
+    };
+    let Ok(number) = number.parse::<i64>() else {
+        return Ok(false);
+    };
+    let Some(pr) = cpd_core::swr::github::effective_pr(&mut engine.store, repo, number)? else {
+        return Ok(false);
+    };
+    if !matches!(pr.state.as_str(), "closed" | "merged") {
+        return Ok(false);
+    }
+    let objects = engine.store.read(|conn| Objects::of_plan(conn, plan))?;
+    if !engine
+        .store
+        .read(|conn| cpd_core::session::archive_blockers(conn, &objects.sessions, &objects.plans))?
+        .is_empty()
+    {
+        return Ok(false);
+    }
+    match archive::refuse_chat_slot(
+        &mut engine.store,
+        &engine.tmux,
+        &engine.config.tmux.cockpit_session,
+        &objects.sessions,
+    ) {
+        Ok(()) => {}
+        Err(e) if e.code() == ErrorCode::InChatSlot => return Ok(false),
+        Err(e) => return Err(e),
+    }
+    engine.store.write("review PR closed", |tx| {
+        cpd_core::pr::review::finish_plan(tx, plan)
+    })?;
+    Ok(true)
 }
 
 /// Stops the hosts of the Plan's durable Lead Sessions (contract §6.19; E14 archives their Plan).

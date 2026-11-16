@@ -174,19 +174,22 @@ pub(crate) fn finish_approved(
         })
         .map(|(id, _, _)| id)
         .collect();
-    let mut first_error = None;
+    let mut failures = Vec::new();
     for id in plans {
         if let Err(error) = store.write("review approved", |tx| {
             crate::pr::review::finish_plan(tx, &id)
         }) {
-            if first_error.is_none() {
-                first_error = Some(error);
-            }
+            failures.push(serde_json::json!({"plan": id.as_str(), "error": error}));
         }
     }
-    match first_error {
-        Some(error) => Err(error),
-        None => Ok(()),
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::error::CpdError::new(
+            crate::error::ErrorCode::Internal,
+            "Review approval completion failed for one or more Plans.",
+        )
+        .with("failures", failures))
     }
 }
 

@@ -95,5 +95,8 @@ fn audit_fix_invalid_candidate_does_not_discard_other_ready_plans() {
     let mut fx = fixture("closed");
     fx.fixture("INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at) VALUES ('bad-lead','lead','codereview','z_bad','Lead','/','O3','idle','t','t'); INSERT INTO plans (id,context,title,phase,lead_session,created_at,locked_at,done_at,pr_subject) VALUES ('z_bad','codereview','Bad','done','bad-lead','t','t','t','pr:acme/pay#812');");
     review_tick(&mut fx);
-    assert!(archived(&mut fx).is_some(), "a bad later candidate must not discard the ready plan");
+    assert!(
+        archived(&mut fx).is_some(),
+        "a bad later candidate must not discard the ready plan"
+    );
 }
