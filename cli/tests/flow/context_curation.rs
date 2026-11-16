@@ -15,13 +15,14 @@ const CTX: &str = "building-cpd";
 
 /// A machine `hs` with Context `building-cpd` holding notes hs-n1 to hs-n4 and the decision hs-d1.
 fn fx() -> Fx {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     fs::create_dir_all(fx.env.cpd_home()).unwrap();
     fs::write(
         fx.env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\n",
+        format!("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n", fx.env.tmux_socket()),
     )
     .unwrap();
+    fx.cockpit();
     fx.cpd(&[
         "context",
         "new",
@@ -433,4 +434,10 @@ fn curation_refuses_a_limit_of_zero() {
         "args_invalid",
         2,
     );
+}
+
+#[test]
+fn context_creation_provisions_manager_through_mock_tmux() {
+    let fx = fx();
+    assert!(fx.calls("tmux").iter().any(|call| call.args.iter().any(|arg| arg == "has-session")));
 }
