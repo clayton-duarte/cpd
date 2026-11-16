@@ -18,9 +18,9 @@ use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
+use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::{self, Job};
-use crate::plan::WorkflowRow;
 
 const COMMAND: &str = "job edit";
 
