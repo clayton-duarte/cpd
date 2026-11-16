@@ -394,7 +394,7 @@ test("no failing-Workflow reminder while the Lead is blocked on a dialog", async
 
 test("failed Job reminder describes conditional workflow supersession", () => {
   const text = failedJobReminderText(["genuine-failure"]);
-  assert.match(text, /genuine-failure/);
+  assert.match(text, /failed Job\(s\) genuine-failure still unaddressed/i);
   assert.match(text, /cpd job retry/);
   assert.match(text, /cpd job cancel/);
   assert.match(text, /cpd workflow cancel <workflow> --superseded-by <replacement>/);
