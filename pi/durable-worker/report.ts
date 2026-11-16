@@ -42,12 +42,18 @@ export function endReport(entries: readonly Entry[]): EndReport {
   };
 }
 
+type ReportFilesystem = {
+  mkdir: (path: string, options: { recursive: true }) => Promise<unknown>;
+  writeFile: (path: string, data: string) => Promise<void>;
+  rename: (from: string, to: string) => Promise<void>;
+};
+
 /** Writes the end report atomically (contract §6.12): creates the directory, writes a temp file, renames it over `file`. */
-export async function writeReport(file: string, report: EndReport): Promise<void> {
-  await mkdir(dirname(file), { recursive: true });
+export async function writeReport(file: string, report: EndReport, fs: ReportFilesystem = { mkdir, writeFile, rename }): Promise<void> {
+  await fs.mkdir(dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
-  await writeFile(temp, JSON.stringify(report));
-  await rename(temp, file);
+  await fs.writeFile(temp, JSON.stringify(report));
+  await fs.rename(temp, file);
 }
 
 type Block = { type?: string; text?: string; name?: string; arguments?: unknown };
