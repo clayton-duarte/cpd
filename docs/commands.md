@@ -2009,9 +2009,7 @@ Idempotent: yes; a `cancelled` Job, or one with a request already recorded, retu
 cpd job retry <key> [--plan <id>]
 ```
 
-The Lead requests another Attempt of a failed Job. A Manager may do so for a
-Lead-less shaping Plan in its own Context; a Plan with a Lead or another
-Context is refused (`plan_has_lead` or `plan_other_context`).
+The Lead requests another Attempt of a failed Job. A Manager is refused `plan_has_lead` on a paired shaping Plan (pro-d561).
 
 Before retrying, apply the [model selection and retry-effort
 contract](contract.md#retry-effort). A request may explicitly supply a valid

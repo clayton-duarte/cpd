@@ -294,7 +294,7 @@ One deliverable over one or more Workflows (R34), optionally a Jira task. This i
 | `context` | text | its Context (required: every Plan belongs to one) |
 | `title`, `jira` | text, text? | `title` is the visible label and editable (`plan rename`); the id is immutable |
 | `phase` | text | `shaping`, `grounding`, `plan`, `dispatch`, `deploy`, `done` (§3.1) |
-| `lead_session` | text? | the Plan's Lead Session; null exactly while the Plan is Lead-less: phase `shaping` (air-d19, air-d22), or `done` after a Lead-less `shaping` Plan settled. Its `cwd` is the User's home directory (pro-d343), not a repo (A12) |
+| `lead_session` | text? | the Plan’s Lead Session; newly created shaping Plans are paired with a Lead (pro-d561). Legacy rows may be null. Its `cwd` is the User’s home directory (pro-d343), not a repo (A12) |
 | workflows | [Workflow] | one or more, below; none until the Lead adds one (`workflow add`, §3.8) |
 | `created_at`, `locked_at`, `done_at` | time, time?, time? | |
 | `archived_at` | time? | null, or when the Plan was archived (migration 3, §4.5); see "Archived" below |
@@ -1105,7 +1105,7 @@ Before migration 0008 the phase `deploy` was called `pr` (hs-d76); old Events an
 
 **Grounding.** The phase in which the Lead grounds itself on the Context: it reads its brief and retrieves relevant Context records under §4.6 "Consumers", the material the User gives, and resolves open questions under [Escalation routing](#escalation-routing). The phase is always entered; a Lead whose brief and records already say enough adds to the Context with `context decide`, `note` or `ask` if it learns something, or moves on to `plan` at once. That is how "skipped or appended to" (ADR-0011) is represented: one phase name, `grounding`, and no special case. `plan phase plan` writes the phase and `plan-phase` and nothing else.
 
-**Lead creation.** `plan new` starts a fresh Lead unless `--shaping` creates a Lead-less Plan. The first message follows §4.6 "Consumers".
+**Lead creation.** `plan new` starts a fresh Lead, including with `--shaping` (pro-d561). The first message follows §4.6 "Consumers".
 
 **The Context's Manager** (hs-d83..d86, hs-d92, hs-d133; Plan manager B3). The higher-level Lead of a Context: it works at the Epic level, holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads and knows where each is. Its memory is the records (records first; the chat is disposable). It resolves product questions from the User and Leads; at each turn start it retrieves the relevant Context under §4.6 "Consumers". Questions follow [Escalation routing](#escalation-routing).
 - **One live Manager per Context**: a Session with `role = manager`, `plan` null, model and effort resolved from the Manager selection (§9), name `<context>`, `cwd` = the User's home directory (pro-d343), never the caller's directory. A unique index allows one non-archived Manager per Context (§4.4).
