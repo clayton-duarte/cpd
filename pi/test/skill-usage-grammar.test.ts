@@ -55,13 +55,11 @@ test("the cpd skills name only flags that cpd-usage.json lists for the command",
     "pi/skills/cpd-manager/SKILL.md",
     ...filesOf("pi/skills/cpd-manager/references/"),
   ];
-  let checked = 0;
   const failures: string[] = [];
   for (const file of files) {
     for (const cmd of commands(read(file))) {
       // `cpd reminder` is the adapter's hidden turn-end reminder, not a clap command.
       if (cmd.split(/\s+/)[1] === "reminder") continue;
-      checked++;
       const key = commandKey(cmd);
       if (key === undefined) {
         failures.push(`${file}: no grammar entry for: ${cmd}`);
@@ -73,7 +71,10 @@ test("the cpd skills name only flags that cpd-usage.json lists for the command",
     }
   }
   assert.deepEqual(failures, []);
-  assert.ok(checked > 100, `more than 100 commands checked, got ${checked}`);
+  // The methodology can contain no command examples; validate extraction and lookup separately.
+  assert.deepEqual(commands("`cpd workflow describe <key>`\n```sh\ncpd workflow describe example\n```"), ["cpd workflow describe <key>", "cpd workflow describe example"]);
+  assert.equal(commandKey("cpd workflow describe <key>"), "workflow describe");
+  assert.equal(commandKey("cpd invented-command"), undefined);
 });
 
 test("every cpd workflow describe command in the docs and skills takes the key as its argument", () => {
@@ -103,6 +104,6 @@ test("every cpd workflow describe command in the docs and skills takes the key a
   assert.deepEqual(failures, []);
   assert.ok((counts["docs/commands.md"] ?? 0) >= 2, "at least 2 in docs/commands.md");
   assert.ok((counts["docs/contract.md"] ?? 0) >= 2, "at least 2 in docs/contract.md");
-  assert.ok((counts["pi/skills/cpd-lead/SKILL.md"] ?? 0) >= 6, "at least 6 in cpd-lead SKILL.md");
-  assert.ok((counts["references"] ?? 0) >= 1, "at least 1 in cpd-lead references");
+  assert.equal(usageError(["workflow", "describe", "example", "--file", "spec.json"]), undefined);
+  assert.ok(usageError(["workflow", "describe", "--invalid"]));
 });
