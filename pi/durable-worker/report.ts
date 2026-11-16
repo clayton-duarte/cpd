@@ -1,4 +1,5 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { CpdError } from "../lib/cpd.ts";
 
@@ -42,12 +43,28 @@ export function endReport(entries: readonly Entry[]): EndReport {
   };
 }
 
+type ReportFilesystem = {
+  mkdir: (path: string, options: { recursive: true }) => Promise<unknown>;
+  writeFile: (path: string, data: string) => Promise<void>;
+  rename: (from: string, to: string) => Promise<void>;
+  rm?: (path: string, options: { force: true }) => Promise<void>;
+};
+
 /** Writes the end report atomically (contract §6.12): creates the directory, writes a temp file, renames it over `file`. */
-export async function writeReport(file: string, report: EndReport): Promise<void> {
-  await mkdir(dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.tmp`;
-  await writeFile(temp, JSON.stringify(report));
-  await rename(temp, file);
+export async function writeReport(file: string, report: EndReport, fs: ReportFilesystem = { mkdir, writeFile, rename }): Promise<void> {
+  await fs.mkdir(dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temp, JSON.stringify(report));
+    await fs.rename(temp, file);
+  } catch (error) {
+    try {
+      await (fs.rm ?? rm)(temp, { force: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "report publication and temporary file cleanup failed");
+    }
+    throw error;
+  }
 }
 
 type Block = { type?: string; text?: string; name?: string; arguments?: unknown };
