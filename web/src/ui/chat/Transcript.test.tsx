@@ -189,7 +189,7 @@ it("shows compaction feedback only during the actual lifecycle", () => {
   const dialect = createDialect(1);
   dialect.applyBase({ view: { conversation: "root", entries: [], docs: { "pi.agent": {}, "pi.live": {}, "pi.inbox": { items: [] }, "pi.provider": {}, "pi.usage": { models: {}, tools: {} } } } });
   let state = reduce(initialState, { type: "selectSession", sessionId: "a" });
-  const send = (sessionId: string, compacting: unknown) => {
+  const send = (sessionId: string, compacting: boolean | undefined) => {
     const message = { type: "session.status" as const, sessionId, busy: false, queued: [], compacting };
     state = reduce(state, { type: "server", message });
   };
