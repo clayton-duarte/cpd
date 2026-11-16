@@ -274,7 +274,10 @@ fn lead_promotes_a_shaping_plan_with_a_registered_workflow() {
         "SELECT lead_session FROM plans WHERE id='fresh'", [], |r| r.get(0)
     )?)).unwrap();
     unsafe { std::env::set_var("CPD_SESSION", &lead) };
-    let universe = Arc::new(Mutex::new(Universe::new(f.ports.clock.clone())));
+    let mut universe = Universe::new(f.ports.clock.clone());
+    universe.set_global("user.name", "cpd test");
+    universe.set_global("user.email", "test@cpd.invalid");
+    let universe = Arc::new(Mutex::new(universe));
     let route = Arc::new(GitRoute::new(universe.clone()));
     let _ = (*f.ports.runner).clone().with_git(&route);
     let repo = Repo::init(&universe, &f._dir.path().join("repo"));
