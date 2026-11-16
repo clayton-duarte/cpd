@@ -12,6 +12,7 @@ use super::driver::fixture;
 /// The Context `ctx` with its config.
 fn setup(fx: &Fx) {
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
     ])
@@ -48,7 +49,6 @@ fn name_of(fx: &Fx, role: &str) -> String {
 fn agent_key_names_manager_is_named_by_its_context() {
     let fx = Fx::with_ports();
     setup(&fx);
-    fx.cockpit();
     let out = fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
     assert_eq!(out["manager"]["name"], json!("ctx"));
     assert_eq!(name_of(&fx, "manager"), "ctx");
@@ -87,7 +87,6 @@ fn agent_key_names_plan_new_has_no_name_flag() {
 fn agent_key_names_session_registered_event_carries_the_key() {
     let fx = Fx::with_ports();
     setup(&fx);
-    fx.cockpit();
     fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
     new_plan(&fx);
     let names: Vec<(Value, Value)> = registered(&fx)

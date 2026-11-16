@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 /// A machine `hs` Context `rd` with records d1 (decision), d2 (decision), n3 (note) and no reads.
 fn fx() -> Fx {
     let fx = Fx::with_ports();
-    fx.env.write_tmux_config("");
-    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
+    fx.env.write_config(&format!("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n", fx.env.tmux_socket()));
+    fx.env.write_config(&format!("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n", fx.env.tmux_socket()));
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "rd", "--title", "Reads", "--owner", "acme",
     ])

@@ -8,6 +8,7 @@ use common::fx::Fx;
 fn context_delete_removes_the_reads_of_the_context() {
     let fx = Fx::with_ports();
     fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd(&[
         "context", "new", "rd", "--title", "Reads", "--owner", "acme",
     ])
