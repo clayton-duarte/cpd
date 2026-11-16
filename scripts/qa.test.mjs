@@ -13,9 +13,14 @@ test("the CPD entry point preserves historical attribution and the legacy batch 
   assert.deepEqual(REPOS, ["clayton-duarte/cpd", "clayton-duarte/dotfiles", "clayton-duarte/skills"]);
   const usageDir = mkdtempSync(join(tmpdir(), "cpd-qa-usage-test-"));
   const usageFile = join(usageDir, "usage.json");
+  // A synthetic upcoming Sunday window keeps this compatibility test independent
+  // of the real weekday; detailed pacing boundaries live in the upstream suite.
+  const reset = new Date(Date.now() + 3600_000);
+  const weekday = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", weekday: "short" });
+  while (weekday.format(reset) !== "Sun") reset.setTime(reset.getTime() + 3600_000);
   writeFileSync(usageFile, JSON.stringify({ version: 1, source: "codex-app-server", sampled_at: new Date().toISOString(),
-    limit_id: "codex", window_minutes: 10080, remaining_percent: 50,
-    resets_at: new Date(Date.now() + 86400_000).toISOString(), ordinary_usage_allowed: true, spend_control_reached: false }));
+    limit_id: "codex", window_minutes: 10080, remaining_percent: 100,
+    resets_at: reset.toISOString(), ordinary_usage_allowed: true, spend_control_reached: false }));
   const previous = { usage: process.env.QA_USAGE_FILE, legacy: process.env.CPD_QA_BATCH, generic: process.env.QA_BATCH };
   const batch = `${day(new Date())}-compat`;
   const descriptor = {version:1,id:"compat",started_at:new Date().toISOString(),limits:null,authorization:"Synthetic test approval"};

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createGuard, validateConfig, validateRun } from "./qa.mjs";
+import { createGuard, validateConfig, validateRun, weeklyAllowanceFloor } from "./qa.mjs";
 
 const fixture = { version: 1, scope: "sample-qa", timezone: "America/Toronto", limits: { issues: 20, prs: 10 },
   repositories: [{ name: "sample/primary", base: "main" }, { name: "sample/related", base: "develop" }] };
@@ -469,5 +469,113 @@ test("fresh guard processes bind an immutable weekly run to its starting allowan
     assert.equal(result.status, allowed ? 0 : 1, result.stderr || result.stdout);
     if (allowed) assert.deepEqual(value, { allowed: true, run_required: false });
     else { assert.match(value.error, /authorized weekly window/i); assert.equal(value.calls, 0); }
+  }
+});
+
+
+const pacedPolicy = { daily_pacing: { timezone: "America/Toronto", sunday_release_hour: 20 }, max_age_seconds: 60 };
+const pacedSample = (at, remaining = 100, reset = "2026-11-23T00:15:00Z") => ({
+  version: 1, source: "codex-app-server", sampled_at: at, limit_id: "codex", window_minutes: 10080,
+  remaining_percent: remaining, resets_at: reset, ordinary_usage_allowed: true, spend_control_reached: false,
+});
+
+test("daily pacing allocates the seven calendar days without rounding the floor", () => {
+  for (let day = 16; day <= 22; day++) {
+    const at = new Date(`2026-11-${day}T17:00:00Z`);
+    assert.equal(weeklyAllowanceFloor(pacedPolicy, at, "2026-11-23T00:15:00Z"), (22 - day) * 100 / 7);
+  }
+  // Local midnight, not the UTC date or a fixed UTC offset, releases Tuesday's budget.
+  for (const [at, d, reset] of [
+    ["2026-11-17T04:59:59Z", 6, "2026-11-23T00:15:00Z"],
+    ["2026-11-17T05:00:00Z", 5, "2026-11-23T00:15:00Z"],
+    ["2026-06-09T03:59:59Z", 6, "2026-06-14T23:15:00Z"],
+    ["2026-06-09T04:00:00Z", 5, "2026-06-14T23:15:00Z"],
+  ]) assert.equal(weeklyAllowanceFloor(pacedPolicy, new Date(at), reset), d * 100 / 7);
+});
+
+test("Sunday releases Monday's allocation at 8pm only after the actual reset", () => {
+  for (const [at, reset, expected] of [
+    ["2026-11-15T23:00:00Z", "2026-11-16T00:15:00Z", 0],
+    ["2026-11-16T00:30:00Z", "2026-11-23T00:15:00Z", 100],
+    ["2026-11-16T00:59:59Z", "2026-11-23T00:15:00Z", 100],
+    ["2026-11-16T01:00:00Z", "2026-11-23T00:15:00Z", 600 / 7],
+    // A delayed official reset is not replaced with a fictional 100% balance at 8pm.
+    ["2026-11-16T01:00:00Z", "2026-11-16T02:00:00Z", 0],
+    ["2026-06-08T00:00:00Z", "2026-06-14T23:15:00Z", 600 / 7],
+    // DST changes do not move the Sunday release hour.
+    ["2026-03-09T00:00:00Z", "2026-03-15T23:15:00Z", 600 / 7],
+    ["2026-11-02T01:00:00Z", "2026-11-09T00:15:00Z", 600 / 7],
+  ]) assert.equal(weeklyAllowanceFloor(pacedPolicy, new Date(at), reset), expected, at);
+});
+
+test("daily pacing stops at its floor, carries savings forward and retains account refusals", () => {
+  const at = "2026-11-16T17:00:00Z";
+  const descriptor = { ...weeklyRun, started_at: at };
+  for (const remaining of [0, 85, 600 / 7, 86, 100]) {
+    const guard = createGuard({ ...fixture, limits: null, weekly_allowance: pacedPolicy }, {
+      clock: () => new Date(at), readUsage: () => pacedSample(at, remaining),
+    });
+    let posts = 0;
+    const result = guard.run(["issue", REPOS[0], "finding", "body"], (args) => {
+      if (args.includes("POST")) { posts++; return { number: 1 }; }
+      return [];
+    }, () => "Evidence", null, descriptor);
+    assert.equal(result.exit, remaining > 600 / 7 ? 0 : 3);
+    assert.equal(posts, remaining > 600 / 7 ? 1 : 0);
+    if (result.exit === 3) assert.equal(result.result.weekly_allowance.spendable_percent, 0);
+  }
+  const tuesday = "2026-11-17T17:00:00Z";
+  for (const change of [{}, { ordinary_usage_allowed: false }, { spend_control_reached: true }]) {
+    const guard = createGuard({ ...fixture, limits: null, weekly_allowance: pacedPolicy }, {
+      clock: () => new Date(tuesday), readUsage: () => ({ ...pacedSample(tuesday), ...change }),
+    });
+    const state = guard.status(() => [], undefined, null, descriptor);
+    assert.equal(state.can_create_issue, Object.keys(change).length === 0);
+    assert.equal(state.weekly_allowance.spendable_percent, 100 - 500 / 7);
+  }
+});
+
+test("daily pacing rejects conflicting policy and unexpected weekly reset days", () => {
+  for (const policy of [
+    { ...pacedPolicy, min_remaining_percent: 50 },
+    { ...pacedPolicy, daily_pacing: null },
+    { ...pacedPolicy, daily_pacing: { timezone: "bad/zone", sunday_release_hour: 20 } },
+    { ...pacedPolicy, daily_pacing: { timezone: "America/Toronto", sunday_release_hour: 24 } },
+  ]) assert.throws(() => createGuard({ ...fixture, weekly_allowance: policy }));
+  const at = "2026-11-16T17:00:00Z";
+  const guard = createGuard({ ...fixture, weekly_allowance: pacedPolicy }, {
+    clock: () => new Date(at), readUsage: () => pacedSample(at, 100, "2026-11-20T00:00:00Z"),
+  });
+  assert.throws(() => guard.status(() => assert.fail("Invalid reset must fail before GitHub")), /Sunday reset/);
+});
+
+test("daily pacing rechecks the live balance immediately before a write", () => {
+  const at = "2026-11-16T17:00:00Z";
+  let reads = 0, posts = 0;
+  const guard = createGuard({ ...fixture, limits: null, weekly_allowance: pacedPolicy }, {
+    clock: () => new Date(at), readUsage: () => pacedSample(at, ++reads === 3 ? 85 : 100),
+  });
+  const result = guard.run(["pr", REPOS[0], "qa/fix", "title", "body"], (args) => {
+    if (args.includes("POST")) posts++;
+    return [];
+  }, () => "Evidence", null, { ...weeklyRun, started_at: at });
+  assert.equal(result.exit, 3);
+  assert.equal(reads, 3);
+  assert.equal(posts, 0);
+});
+
+test("daily pacing recalculates the reserve after pagination crosses a release boundary", () => {
+  for (const [before, after, remaining, floor] of [
+    ["2026-11-17T04:59:59Z", "2026-11-17T05:00:00Z", 80, 500 / 7],
+    ["2026-11-16T00:59:59Z", "2026-11-16T01:00:00Z", 100, 600 / 7],
+  ]) {
+    let current = before;
+    const guard = createGuard({ ...fixture, limits: null, weekly_allowance: pacedPolicy }, {
+      clock: () => new Date(current), readUsage: () => pacedSample(current, remaining),
+    });
+    const state = guard.status(() => { current = after; return []; }, undefined, null,
+      { ...weeklyRun, started_at: before });
+    assert.equal(state.weekly_allowance.min_remaining_percent, floor);
+    assert.equal(state.can_create_issue, true);
   }
 });

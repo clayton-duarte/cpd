@@ -18,7 +18,10 @@
     }
   ],
   "weekly_allowance": {
-    "min_remaining_percent": 50,
+    "daily_pacing": {
+      "timezone": "America/Toronto",
+      "sunday_release_hour": 20
+    },
     "max_age_seconds": 60
   }
 }

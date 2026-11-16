@@ -104,7 +104,7 @@ for line in sys.stdin:
         send({"id":2,"result":{"verificationUrl":"https://example.invalid/activate","userCode":"fake-code"}})
         send({"method":"account/login/completed","params":{"success":True}})
     elif method == "account/rateLimits/read":
-        send({"id":3,"result":{"ordinaryUsageAllowed":True,"rateLimitsByLimitId":{"codex":{"limitId":"codex","spendControlReached":False,"secondary":{"usedPercent":32,"windowDurationMins":10080,"resetsAt":int(time.time()+86400)}}}}})
+        send({"id":3,"result":{"ordinaryUsageAllowed":True,"rateLimitsByLimitId":{"codex":{"limitId":"codex","spendControlReached":False,"secondary":{"usedPercent":int(os.environ.get("QA_TEST_USED_PERCENT", "32")),"windowDurationMins":10080,"resetsAt":int(time.time()+86400)}}}}})
 ''')
             fake.chmod(0o700)
             auth = root / "private-cli-state"
@@ -124,6 +124,14 @@ for line in sys.stdin:
             self.assertEqual(auth.stat().st_mode & 0o777, 0o700)
             self.assertEqual((auth / "auth.json").stat().st_mode & 0o777, 0o600)
             self.assertEqual(os.environ.get("CODEX_HOME"), original_selector)
+            # A telemetry-only reader must stay usable below the former fixed floor.
+            paced_command = command.copy()
+            paced_command[paced_command.index("--min-remaining") + 1] = "0"
+            paced = subprocess.run(paced_command, env={**environment, "QA_TEST_USED_PERCENT": "100"},
+                                   capture_output=True, text=True, timeout=10)
+            self.assertEqual(paced.returncode, 0, paced.stderr)
+            self.assertEqual(json.loads(output.read_text())["remaining_percent"], 0)
+            self.assertNotIn("verification_url", paced.stdout)
 
     def test_persistent_mode_without_saved_login_fails_without_prompting(self):
         with tempfile.TemporaryDirectory() as directory:

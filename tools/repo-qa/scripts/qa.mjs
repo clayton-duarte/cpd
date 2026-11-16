@@ -18,12 +18,40 @@ const id = (v) => typeof v === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(v);
 const remaining = (caps, counts) => caps === null ? null : Object.fromEntries(Object.entries(caps).map(([k, n]) => [k, Math.max(0, n - counts[k])]));
 
 export function validateWeeklyPolicy(value) {
-  fields(value, ["min_remaining_percent", "max_age_seconds"], "weekly allowance policy");
-  if (!Number.isFinite(value.min_remaining_percent) || value.min_remaining_percent <= 0 || value.min_remaining_percent > 100
-      || !Number.isSafeInteger(value.max_age_seconds) || value.max_age_seconds < 1 || value.max_age_seconds > 60) {
-    throw new Error("Weekly policy needs a threshold in (0,100] and freshness of 1..60 seconds");
+  fields(value, ["min_remaining_percent", "daily_pacing", "max_age_seconds"], "weekly allowance policy");
+  const paced = value.daily_pacing !== undefined;
+  if (paced) {
+    fields(value.daily_pacing, ["timezone", "sunday_release_hour"], "daily pacing");
+    if (value.min_remaining_percent !== undefined || !nonempty(value.daily_pacing.timezone)
+        || !Number.isInteger(value.daily_pacing.sunday_release_hour)
+        || value.daily_pacing.sunday_release_hour < 0 || value.daily_pacing.sunday_release_hour > 23) {
+      throw new Error("Daily pacing needs a timezone and Sunday release hour 0..23, without a fixed threshold");
+    }
+    new Intl.DateTimeFormat("en-CA", { timeZone: value.daily_pacing.timezone });
   }
-  return Object.freeze({ ...value });
+  if ((!paced && (!Number.isFinite(value.min_remaining_percent) || value.min_remaining_percent <= 0 || value.min_remaining_percent > 100))
+      || !Number.isSafeInteger(value.max_age_seconds) || value.max_age_seconds < 1 || value.max_age_seconds > 60) {
+    throw new Error("Weekly policy needs a fixed threshold or daily pacing, and freshness of 1..60 seconds");
+  }
+  return Object.freeze({ ...value, ...(paced ? { daily_pacing: Object.freeze({ ...value.daily_pacing }) } : {}) });
+}
+
+/** Calendar allocations, not seven 24-hour intervals: DST must not shift midnight. */
+export function weeklyAllowanceFloor(policy, now, resetsAt) {
+  if (policy.daily_pacing === undefined) return policy.min_remaining_percent;
+  const { timezone, sunday_release_hour } = policy.daily_pacing;
+  const format = new Intl.DateTimeFormat("en-CA", { timeZone: timezone,
+    weekday: "short", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" });
+  const parts = (date) => Object.fromEntries(format.formatToParts(new Date(date)).map((p) => [p.type, p.value]));
+  const today = parts(now);
+  const reset = parts(resetsAt);
+  if (reset.weekday !== "Sun") throw new Error("Daily pacing expects an official Sunday reset in its configured timezone");
+  const d = { Mon: 6, Tue: 5, Wed: 4, Thu: 3, Fri: 2, Sat: 1, Sun: 0 }[today.weekday];
+  if (d !== 0) return d * 100 / 7;
+  // The next reset still belongs to today: these are the old week's remaining credits.
+  if (["year", "month", "day"].every((key) => today[key] === reset[key])) return 0;
+  // Telemetry confirms the new window, but the owner delays release until Sunday evening.
+  return Number(today.hour) < sunday_release_hour ? 100 : 6 * 100 / 7;
 }
 
 export function readWeeklyUsage(policy, now = new Date(), read = () => {
@@ -42,7 +70,9 @@ export function readWeeklyUsage(policy, now = new Date(), read = () => {
       || typeof value.ordinary_usage_allowed !== "boolean" || typeof value.spend_control_reached !== "boolean") {
     throw new Error("Weekly allowance is missing, invalid, stale or reset; refresh the authenticated reader");
   }
-  return { ...value, allowed: value.remaining_percent >= policy.min_remaining_percent
+  const floor = weeklyAllowanceFloor(policy, now, value.resets_at);
+  const withinBudget = policy.daily_pacing === undefined ? value.remaining_percent >= floor : value.remaining_percent > floor;
+  return { ...value, min_remaining_percent: floor, spendable_percent: Math.max(0, value.remaining_percent - floor), allowed: withinBudget
     && value.ordinary_usage_allowed && !value.spend_control_reached };
 }
 

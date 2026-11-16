@@ -214,3 +214,17 @@ gaps into the Protocol/profile/tooling by normal reviewed changes. Keep the
 reusable method separate from project facts, historical results and private
 operational details. A fresh agent must be able to reproduce the workflow from
 the package, profile, config and GitHub handoff without previous chat memory.
+
+
+### Optional weekly calendar pacing
+
+A User may replace a fixed weekly floor with the README's `daily_pacing` policy.
+The remaining reserve is `d * 100 / 7`, Monday `d=6` through Sunday `0`; stop at
+or below that reserve. Savings carry forward. An official Sunday reset starts
+a new window, whose balance is held until the configured Sunday release hour,
+then Monday's allocation is available through Monday. Use the configured IANA
+timezone and live account balance; never manufacture a reset or assume a 100%
+sample. The optional telemetry reader uses `--min-remaining 0`, while the guard
+computes and enforces the moving floor. Freshness, account availability, spend
+controls, immutable run authority and review/merge rules remain unchanged. A
+changed reset weekday needs policy reconciliation. No scheduling is installed.
