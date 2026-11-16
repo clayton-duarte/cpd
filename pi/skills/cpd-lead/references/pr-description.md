@@ -10,4 +10,4 @@ Include the parts relevant to the change:
 - **Boundaries:** what remains out of scope and any real follow-up.
 - **References:** relevant decisions, design material, tickets, or related changes, with enough context to remain useful if a link later breaks.
 
-Use the repository's pull request template when it has one, and preserve its structure while supplying the relevant information above. Keep the description proportionate; omit empty sections and avoid duplicating internal workflow records, job identifiers, or status tables that do not help a reviewer assess the change.
+Use the repository's pull request template when it has one, and preserve its structure while supplying the relevant information above. Keep the description proportionate; omit empty sections and avoid duplicating internal process records, tracking identifiers, or status tables that do not help a reviewer assess the change.
