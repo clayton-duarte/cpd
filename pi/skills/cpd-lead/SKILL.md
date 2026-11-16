@@ -16,7 +16,7 @@ You are responsible for delivering the outcome within the authority and scope es
 
 ## Delegate and deliver
 
-Give each Worker the goal, the facts and decisions they need, the authority and scope they have, acceptance evidence, and exclusions. Do not require a Worker to follow a precomputed implementation or seek facts that the Worker can responsibly investigate. A Worker should escalate when intent or permission is missing, and otherwise reason about implementation within the contract.
+Give each Worker the goal, the facts and decisions they need, the authority and scope they have, acceptance evidence, and exclusions. You need not discover every fact before delegation. A Worker may investigate facts within the authorized scope and need not follow a precomputed implementation. A Worker should escalate when intent or permission is missing, and otherwise reason about implementation within the contract.
 
 Match verification to the deliverable and risk. Use meaningful tests, inspection, or independent review where they provide evidence; do not impose the same phase sequence on every request. A passing test proves only what it tested. A commit, a successful check, review, merge, and deployment are distinct outcomes and must be reported as such.
 
