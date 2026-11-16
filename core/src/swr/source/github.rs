@@ -74,6 +74,7 @@ struct SearchPages {
     reviews_after: Option<String>,
 }
 static SEARCH_PAGES: Mutex<Option<HashMap<String, SearchPages>>> = Mutex::new(None);
+static REVIEW_CURSOR: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 
 /// The real `github` source (swr-github.md §4).
 #[derive(Default)]
@@ -273,6 +274,9 @@ impl GithubSource {
                 review_keys.push((repo, number));
             }
         }
+        review_keys.sort();
+        review_keys.dedup();
+        let review_candidates = review_keys.clone();
         for key in first_seen.into_iter().chain(review_keys) {
             if !absent.iter().any(|(_, _, _, k)| *k == key)
                 && !heavy.contains(&key)
@@ -299,11 +303,32 @@ impl GithubSource {
         }
         absent.sort();
         let room = ABSENT_CAP.saturating_sub(heavy.len());
-        let absent: Vec<(String, i64)> = absent
-            .into_iter()
-            .take(room)
-            .map(|(_, _, _, k)| k)
-            .collect();
+        let mut selected = Vec::new();
+        if room > 0 && !review_candidates.is_empty() {
+            let mut cursors = REVIEW_CURSOR.lock().expect("review cursor");
+            let cursor = cursors
+                .get_or_insert_with(HashMap::new)
+                .entry(cx.store.path().display().to_string())
+                .or_default();
+            for offset in 0..review_candidates.len() {
+                let index = (*cursor + offset) % review_candidates.len();
+                let key = &review_candidates[index];
+                if absent.iter().any(|(_, _, _, candidate)| candidate == key) {
+                    selected.push(key.clone());
+                    *cursor = index + 1;
+                    break;
+                }
+            }
+        }
+        for (_, _, _, key) in absent {
+            if selected.len() == room {
+                break;
+            }
+            if !selected.contains(&key) {
+                selected.push(key);
+            }
+        }
+        let absent = selected;
         let repos: BTreeSet<&str> = stored
             .iter()
             .map(|s| s.repo.as_str())

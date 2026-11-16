@@ -174,14 +174,20 @@ pub(crate) fn finish_approved(
         })
         .map(|(id, _, _)| id)
         .collect();
-    if !plans.is_empty() {
-        store.write("review approved", |tx| {
-            plans
-                .iter()
-                .try_for_each(|id| crate::pr::review::finish_plan(tx, id))
-        })?;
+    let mut first_error = None;
+    for id in plans {
+        if let Err(error) = store.write("review approved", |tx| {
+            crate::pr::review::finish_plan(tx, &id)
+        }) {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
     }
-    Ok(())
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 /// Finishes every open (phase `grounding`, unarchived) `codereview` Plan whose `pr_subject` names a pull request that

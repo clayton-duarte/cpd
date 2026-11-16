@@ -488,6 +488,11 @@ fn audit_fix_review_subjects_do_not_starve() {
             Ok::<(), crate::error::CpdError>(())
         }).unwrap();
     }
-    for tick in 0..4 { rig.pass(tick * 10).unwrap(); }
-    assert!((1..=11).all(|n| rig.graphql().iter().any(|q| mentions(q, n))), "every review subject must eventually be polled");
+    for tick in 0..4 {
+        rig.pass(tick * 10).unwrap();
+    }
+    assert!(
+        (1..=11).all(|n| rig.graphql().iter().any(|q| mentions(q, n))),
+        "every review subject must eventually be polled"
+    );
 }
