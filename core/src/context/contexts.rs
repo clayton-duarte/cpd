@@ -299,6 +299,14 @@ impl<'a> Contexts<'a> {
         let result = self.store.write("context new", |tx| {
             // Another process may have created it since the read.
             if let Some(row) = existing(tx)? {
+                if row.archived_at.is_some() {
+                    return Err(CpdError::new(
+                        ErrorCode::Archived,
+                        format!("Context {id} is archived: unarchive it before starting its Manager."),
+                    )
+                    .with("context", id.as_str())
+                    .with("next", format!("cpd context unarchive {id}")));
+                }
                 let registered = if super::manager::live(tx, id)?.is_none() {
                     let prepared = prepared.as_ref().ok_or_else(|| CpdError::bad_row(format!("Manager of Context {id} disappeared during creation")))?;
                     super::manager::insert(tx, id, prepared, by_user, self.config.manager_runner)?;
