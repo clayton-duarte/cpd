@@ -285,7 +285,21 @@ fn the_schema_is_contract_4_4_as_written() {
                 .unwrap_or_else(|e| panic!("block {}: {e}", i + 1));
         }
     }
-    let expected = schema_sql(&contract);
+    // The paired shaping migrations postdate §4.4's plans DDL. Apply their
+    // explicit schema changes to the contract's expected definition.
+    let expected = schema_sql(&contract).into_iter().map(|(name, sql)| {
+        if name == "plans_phase" {
+            let sql = sql.replace(" BEGIN SELECT RAISE", " AND NOT (OLD.phase = 'shaping' AND NEW.phase = 'plan' AND OLD.shaping_origin = 1 AND OLD.lead_session IS NOT NULL AND OLD.locked_at IS NULL) AND NOT (OLD.phase = 'plan' AND NEW.phase = 'done' AND OLD.shaping_origin = 1 AND OLD.lead_session IS NOT NULL AND OLD.locked_at IS NULL) BEGIN SELECT RAISE");
+            return (name, sql);
+        }
+        if name != "plans" {
+            return (name, sql);
+        }
+        let sql = sql.replace("reviewed_title TEXT, CHECK", "reviewed_title TEXT, shaping_origin INTEGER NOT NULL DEFAULT 0 CHECK (shaping_origin IN (0, 1)), CHECK")
+            .replace("(phase = 'done' AND (lead_session IS NULL) = (locked_at IS NULL))", "(phase = 'done' AND ((lead_session IS NULL) = (locked_at IS NULL) OR (shaping_origin = 1 AND lead_session IS NOT NULL AND locked_at IS NULL)))")
+            .replace(", CHECK (phase <> 'shaping' OR lead_session IS NULL)", "");
+        (name, sql)
+    }).collect::<Vec<_>>();
     assert!(expected.len() > 40, "{expected:?}");
     let env = Home::new();
     drop(open(&env));
@@ -331,6 +345,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     expected.insert("swr_deploy_lists".to_owned());
     expected.insert("workflow_prereqs".to_owned());
     expected.insert("pr_rereview_asks".to_owned());
+    expected.insert("plans_shaping_origin_immutable".to_owned());
     let found = names(
         &raw(&env),
         "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
