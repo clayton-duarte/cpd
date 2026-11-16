@@ -1415,13 +1415,6 @@ asleep Sessions, nor a Lead whose Plan is done. Durable Lead and Manager
 Sessions remain excluded under the durable-session rule above (§6.19).
 
 A stopped marker alone does not prove a pane or pi wrapper is dead. Resume must
-refuse a still-live tagged pane rather than kill or replace it. An explicit
-User resume remains distinct from this liveness restart; Context/Manager
-ensuring and incoming agent messages do not authorize a separate user-driven
-resume. Creating a genuinely new Session and supervising an already-awake
-durable host remain separate operations.
-
-A stopped marker alone does not prove a pane or pi wrapper is dead. Resume must
 refuse a still-live tagged pane rather than kill or replace it. The selected
 Session’s busy indicator and Resume behavior follow [the Session contract](webui-busy-state-display.md).
 Durable-host supervision follows its separate sleep/wake rules (§6.19, §6.24).
