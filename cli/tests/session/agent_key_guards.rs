@@ -173,8 +173,10 @@ fn agent_key_guards_a_rerun_of_an_existing_pair_is_still_already() {
             count(fx, "SELECT count(*) FROM events"),
         )
     };
-    fx.cpd(&["context", "new", "pay", "--title", "Twin", "--owner", "acme"])
-        .ok();
+    fx.cpd(&[
+        "context", "new", "pay", "--title", "Twin", "--owner", "acme",
+    ])
+    .ok();
     let before = rows(&fx);
     let plan = fx
         .cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"])
