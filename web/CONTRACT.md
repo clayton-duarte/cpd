@@ -2160,7 +2160,7 @@ for the selected model; represent models without effort settings explicitly.
 Show configured and observed selections separately, including unknown runtime
 selection. Role authority does not depend on the selected model.
 
-Saving validates the selections before writing. A refusal appears through the
+Saving validates the complete owner selection under [the resolver contract](../docs/contract.md#owner-role-selection-resolver-contract) and writes it atomically; role-by-role fallback and implicit changes to other roles are not permitted. A refusal appears through the
 cockpit error toast (§16.1), and must not appear as a successful save. The UI
 contains no model-letter ladder, role-strength range or tier preset editor.
 
