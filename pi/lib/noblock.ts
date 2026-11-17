@@ -72,7 +72,11 @@ function waits(name: string, args: string[]): string | undefined {
   }
 }
 
-/** Only exempt long timeouts when the syntax tree proves every one detached and no explicit wait occurs. */
+/**
+ * Only exempt long timeouts when the syntax tree proves every one detached and no explicit wait occurs.
+ * Foreground waits remain subject to the blocking guard; pipeline syntax and interactive job-control settings
+ * do not by themselves qualify a timeout for this background-only exemption.
+ */
 function detachedTimeouts(command: string): boolean {
   const tree = parser.parse(command);
   if (!tree) return false;
