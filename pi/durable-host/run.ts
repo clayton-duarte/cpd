@@ -1,3 +1,6 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { ROOT_CONVERSATION_ID, type Harness } from "@earendil-works/pi-durable";
+import { stageNativeConversation, type NativeSnapshot, type DurableStageSink, type StageResult } from "./handoff.ts";
 import { compactionPolicy, type CompactionSettings } from "./compaction.ts";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -800,4 +803,22 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
   await current?.stop().catch((e) => failed("stopping the stream", e));
   await reporter.close({ state: "stopped" });
   return code;
+}
+
+/** Internal staging only. The caller owns an isolated, paused harness configured for
+ * this cwd and supplies its verified installed dependency versions. Never activates it. */
+export async function stageHostTranscript(input: NativeSnapshot, harness: Harness, versions: DurableStageSink["versions"], configuredCwd: string): Promise<StageResult> {
+  const sink: DurableStageSink = {
+    versions,
+    rootAbsent: async () => configuredCwd === input.activeAgent.cwd && (await harness.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)) === undefined,
+    createRoot: async ({ agent, init }) => {
+      let initialized = false;
+      const level = agent.thinkingLevel;
+      if (level !== "off" && level !== "minimal" && level !== "low" && level !== "medium" && level !== "high" && level !== "xhigh") throw new Error("Unsupported thinking level");
+      const root = await harness.root(BACKGROUND_CONTEXT, { agent: { model: agent.model, thinkingLevel: level }, init: async (tx, id) => { await init(tx, String(id)); initialized = true; } });
+      if (!initialized) throw new Error("Root already exists");
+      return { conversationId: String(root.id) };
+    },
+  };
+  return stageNativeConversation(input, sink);
 }
