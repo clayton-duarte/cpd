@@ -994,3 +994,34 @@ fn repair_leaves_pending_waiver_migration_to_add_its_column() {
         .unwrap();
     assert_eq!(after, 1);
 }
+
+#[test]
+fn repair_preserves_repoint_observation_values() {
+    let env = Home::empty();
+    let h = home(&env);
+    setup_mac_pro_drifted_store(&env);
+    let conn = Connection::open(h.db()).unwrap();
+    conn.execute_batch(
+        "UPDATE jobs SET observed_head_oid = 'head', observed_base_oid = 'base' WHERE seq = 1;",
+    )
+    .unwrap();
+    drop(conn);
+    repair(
+        &h,
+        &RepairOptions {
+            dry_run: false,
+            confirmed: true,
+            reason: "preserve observations".to_owned(),
+        },
+    )
+    .unwrap();
+    let conn = Connection::open(h.db()).unwrap();
+    let values: (String, String) = conn
+        .query_row(
+            "SELECT observed_head_oid, observed_base_oid FROM jobs WHERE seq = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(values, ("head".to_owned(), "base".to_owned()));
+}
