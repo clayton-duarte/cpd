@@ -143,6 +143,10 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     for (const l of [...listeners]) l(u);
   };
   const emitError = (e: unknown): void => emit({ kind: "error", error: toWireError(e) });
+  const emitExtrasError = (operation: "status" | "costs", e: unknown): void => {
+    console.error(`Background ${operation} refresh failed`, e);
+    emitError(new WebError("internal", `Background ${operation} refresh failed`));
+  };
   // Dropping a lower-cursor update when a newer snapshot is held is harmless (b45).
   const dropLowerCursor = (_pane: string, _held: number, _next: number): void => {};
   const apply = (u: PaneUpdate): void => {
@@ -187,7 +191,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       if (stopped) return;
       snap = { ...snap, status };
       emit({ kind: "pane", pane: "status", data: status });
-    } catch (e) { emitError(e); }
+    } catch (e) { emitExtrasError("status", e); }
   };
   const refreshExtras = async (): Promise<void> => {
     if (extras === undefined) return;
@@ -197,7 +201,7 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
       if (stopped) return;
       snap = { ...snap, costs };
       emit({ kind: "pane", pane: "costs", data: costs });
-    } catch (e) { emitError(e); }
+    } catch (e) { emitExtrasError("costs", e); }
   };
   const need = (): Extras => {
     if (extras === undefined) throw new WebError("internal", "settings and logs are not available");
