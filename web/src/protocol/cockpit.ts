@@ -213,7 +213,8 @@ export interface StatusModel {
   readonly alert?: string;
 }
 /** Dollar totals keyed by Plan id and Context id. */
-export type CostModel = Readonly<Record<string, number>>;
+export type CostValues = Readonly<Record<string, number>>;
+export type CostModel = { readonly state: "available" | "last-known"; readonly costs: CostValues } | { readonly state: "unavailable" };
 export interface LogRow { readonly id: number; readonly at: string; readonly kind: string; readonly text: string; readonly tone: "error" | "lead-error" | "normal" }
 
 /** The Agent Tiers dialog read: the four role Tiers and the four experimental switches. */

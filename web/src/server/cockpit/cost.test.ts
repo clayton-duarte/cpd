@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { FakeScheduler } from "../../testing/scheduler.ts";
+import { createCockpitService, SAFETY_REFRESH_MS, type CockpitUpdate, type Extras } from "./events.ts";
+import type { CockpitStream } from "./stream.ts";
 import { formatCost, readCosts, type CostDeps, type CostFile } from "./cost.ts";
 
 const header = (ts: string, extra: Record<string, unknown> = {}) => JSON.stringify({ type: "session", version: 3, id: "a", timestamp: ts, cwd: "/w", ...extra });
@@ -151,4 +154,75 @@ describe("cost", () => {
     ];
     expect(table.map(([n]) => formatCost(n))).toEqual(table.map(([, s]) => s));
   });
+});
+
+// Drive the actual pane refresh around the injected durable boundary. No host or SQLite is opened.
+it("durable busy preserves explicit complete cost availability", async () => {
+  const w: World = {
+    contexts: [{ id: "c-availability", plans: [{ id: "p-availability" }] }],
+    sessions: [
+      { id: "availability-lead", runner: "durable", role: "lead", plan: "p-availability", context: "c-availability", file: null },
+      { id: "availability-manager", runner: "durable", role: "manager", context: "c-availability", file: null },
+    ], files: {},
+  };
+  const busy = Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 261, errstr: "database is locked" });
+  const baseBusy = Object.assign(new Error("database is busy"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
+  const schema = Object.assign(new Error("no such table: documents"), { code: "ERR_SQLITE_ERROR", errcode: 1 });
+  let failure: Error | null = null;
+  let lead = 1;
+  let manager = 2;
+  const d = deps(w);
+  d.durableCost = async (id) => {
+    if (id === "availability-manager" && failure !== null) throw failure;
+    return { cost: id === "availability-lead" ? lead : manager, stamp: `${lead}:${manager}` };
+  };
+  const scheduler = new FakeScheduler();
+  const status = { runner: null, preview: null, incident: null, workers: { queued: 0, waiting: 0, tenants: 0, limit: 12 }, version: null, hostAlert: false, mode: "production" as const, drift: null };
+  const extras: Extras = {
+    async status() { return status; },
+    costs: () => readCosts(d),
+    async logs() { return []; },
+    async settings() { throw new Error("not used"); },
+    async saveSettings() {},
+  };
+  const stream: CockpitStream = { start() {}, stop() {}, ready: () => true, onSnapshot() {}, onEvent() {}, onError() {}, async planShow() { return null; } };
+  const service = createCockpitService({
+    readModel: { async loadAll() { return { tree: { contexts: [], cursor: 0 }, plan: null, inbox: { openCount: 0, engineRunning: true, hidden: { claimed: 0, dismissed: 0, snoozed: 0 }, rows: [], cursor: 0 } }; }, async loadPanes() { return {}; } },
+    cpd: { async json() { return { ok: true }; } },
+    follow: { start() { throw new Error("unexpected follow"); } }, scheduler, extras, stream,
+  });
+  const updates: CockpitUpdate[] = [];
+  service.subscribe((u) => updates.push(u));
+  const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(); };
+  const refresh = async () => { scheduler.advance(SAFETY_REFRESH_MS); await flush(); };
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    // Initial BUSY must not manufacture a zero-valued successful snapshot.
+    failure = busy;
+    await service.start(); await flush();
+    expect.soft(service.snapshot().costs).toMatchObject({ state: "unavailable" });
+    expect.soft(updates.some((u) => u.kind === "pane" && u.pane === "status")).toBe(true);
+    failure = null;
+    await refresh();
+    const complete = { "p-availability": 1, "c-availability": 3 };
+    expect.soft(service.snapshot().costs).toMatchObject({ state: "available", costs: complete });
+    // Lead changes before the manager fails: no mixed or partial totals may escape.
+    lead = 10; failure = busy;
+    await refresh();
+    expect.soft(service.snapshot().costs).toMatchObject({ state: "last-known", costs: complete });
+    expect.soft(updates.some((u) => u.kind === "pane" && u.pane === "status")).toBe(true);
+    failure = baseBusy;
+    await refresh();
+    expect.soft(service.snapshot().costs).toMatchObject({ state: "last-known", costs: complete });
+    failure = schema;
+    await refresh();
+    expect.soft(logged.mock.calls.some((args) => args.includes(schema))).toBe(true);
+    expect.soft(updates.some((u) => u.kind === "error")).toBe(true);
+    failure = null; manager = 20;
+    await refresh();
+    expect.soft(service.snapshot().costs).toMatchObject({ state: "available", costs: { "p-availability": 10, "c-availability": 30 } });
+  } finally {
+    service.stop();
+    logged.mockRestore();
+  }
 });
