@@ -277,3 +277,5 @@ test("bounded background timeout is allowed", async (t) => {
   const results = await Promise.all([command, nested].map((cmd) => call(f, { command: cmd, timeout: 25 })));
   assert.deepEqual(results, [undefined, undefined]);
 });
+
+// Foreground pipeline and job-control regression coverage.
