@@ -293,6 +293,9 @@ fn the_schema_is_contract_4_4_as_written() {
             let sql = sql.replace(" BEGIN SELECT RAISE", " AND NOT (OLD.phase = 'shaping' AND NEW.phase = 'plan' AND OLD.shaping_origin = 1 AND OLD.lead_session IS NOT NULL AND OLD.locked_at IS NULL) AND NOT (OLD.phase = 'plan' AND NEW.phase = 'done' AND OLD.shaping_origin = 1 AND OLD.lead_session IS NOT NULL AND OLD.locked_at IS NULL) BEGIN SELECT RAISE");
             return (name, sql);
         }
+        if name == "jobs" {
+            return (name, sql.replace("test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array'))", "test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')), observed_head_oid TEXT, observed_base_oid TEXT"));
+        }
         if name != "plans" {
             return (name, sql);
         }

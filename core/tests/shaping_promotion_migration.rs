@@ -24,7 +24,6 @@ fn promotion_trigger_preserves_rows_and_other_guards() {
         .iter()
         .position(|(name, _, _)| *name == MIGRATION)
         .unwrap();
-    assert_eq!(index + 1, migrations.len());
     let conn = prefix_database(index, &home).unwrap();
     conn.execute_batch("INSERT INTO txns (id,at,command,pid,cwd) VALUES (1,'t','fixture',1,'/');
         INSERT INTO contexts (id,title,created_at,created_on) VALUES ('ctx','Context','t','m1');

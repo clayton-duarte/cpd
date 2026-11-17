@@ -133,6 +133,14 @@ fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
                         .replace(", 'touches_waived', OLD.touches_waived", "").replace(", 'touches_waived', NEW.touches_waived", "")
                         .replace(" UNION ALL SELECT 'touches_waived', OLD.touches_waived WHERE OLD.touches_waived IS NOT NEW.touches_waived", "")
                         .replace(" UNION ALL SELECT 'touches_waived', NEW.touches_waived WHERE OLD.touches_waived IS NOT NEW.touches_waived", "")
+                        .replace(", 'observed_head_oid', OLD.observed_head_oid", "")
+                        .replace(" UNION ALL SELECT 'observed_head_oid', OLD.observed_head_oid WHERE OLD.observed_head_oid IS NOT NEW.observed_head_oid", "")
+                        .replace(", 'observed_head_oid', NEW.observed_head_oid", "")
+                        .replace(" UNION ALL SELECT 'observed_head_oid', NEW.observed_head_oid WHERE OLD.observed_head_oid IS NOT NEW.observed_head_oid", "")
+                        .replace(", 'observed_base_oid', OLD.observed_base_oid", "")
+                        .replace(" UNION ALL SELECT 'observed_base_oid', OLD.observed_base_oid WHERE OLD.observed_base_oid IS NOT NEW.observed_base_oid", "")
+                        .replace(", 'observed_base_oid', NEW.observed_base_oid", "")
+                        .replace(" UNION ALL SELECT 'observed_base_oid', NEW.observed_base_oid WHERE OLD.observed_base_oid IS NOT NEW.observed_base_oid", "")
                         .replace(", 'test_removal_approved', OLD.test_removal_approved", "").replace(", 'test_removal_approved', NEW.test_removal_approved", "")
                         .replace(" UNION ALL SELECT 'test_removal_approved', OLD.test_removal_approved WHERE OLD.test_removal_approved IS NOT NEW.test_removal_approved", "")
                         .replace(" UNION ALL SELECT 'test_removal_approved', NEW.test_removal_approved WHERE OLD.test_removal_approved IS NOT NEW.test_removal_approved", ""))
@@ -251,6 +259,8 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
                 assert_eq!(row.remove("touches_waived"), Some(Value::Null));
                 // `test_removal_approved` is the column of `job-test-removal-approved`, later still: null in every row.
                 assert_eq!(row.remove("test_removal_approved"), Some(Value::Null));
+                assert_eq!(row.remove("observed_head_oid"), Some(Value::Null));
+                assert_eq!(row.remove("observed_base_oid"), Some(Value::Null));
             }
             // `runner` and `worker_pid` are the columns of `worker-runner`, which sorts after this migration: `pi` and null.
             if let Some(row) = row.as_object_mut().filter(|_| *table == "attempts") {

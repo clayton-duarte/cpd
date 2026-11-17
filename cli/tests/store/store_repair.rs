@@ -568,6 +568,8 @@ pub(crate) fn setup_mac_pro_drifted_store(env: &impl HasCpdHome) {
            waiting_on          TEXT CHECK (waiting_on IS NULL OR waiting_on IN ('lead', 'user') OR waiting_on LIKE 'explore:%'),
            touches_waived      TEXT CHECK (touches_waived IS NULL OR (json_valid(touches_waived) AND json_type(touches_waived) = 'array')),
           test_removal_approved TEXT CHECK (test_removal_approved IS NULL OR (json_valid(test_removal_approved) AND json_type(test_removal_approved) = 'array')),
+           observed_head_oid TEXT,
+           observed_base_oid TEXT,
            UNIQUE (plan, key),
            FOREIGN KEY (plan, workflow) REFERENCES \"workflows\"(plan, key),
            CHECK (status <> 'draft' OR fingerprint IS NULL),
