@@ -72,17 +72,18 @@ export async function stageNativeConversation(input: NativeSnapshot, sink: Durab
   } catch { return refuse("invalid-snapshot", "Invalid source bytes, digest or JSONL"); }
   if (!input.cpdSessionId || !input.sourcePath || input.header.type !== "session" || input.header.version !== 3 || typeof input.header.id !== "string" || !input.header.id || typeof input.header.cwd !== "string" || input.header.cwd !== input.activeAgent.cwd || !input.activeAgent.model.provider || !input.activeAgent.model.modelId || !["off", "minimal", "low", "medium", "high", "xhigh"].includes(input.activeAgent.thinkingLevel)) return refuse("invalid-snapshot", "Invalid header or active agent");
   const entries = new Map<string, NativeEntry>();
-  const allowed = new Set(["message", "custom_message", "thinking_level_change", "model_change", "usage", "label", "session_info"]);
+  const allowed = new Set(["message", "custom_message"]);
   for (const entry of input.entries) {
     if (!entry.id || entries.has(entry.id) || (entry.parentId !== null && !entries.has(entry.parentId)) || entry.raw.id !== entry.id || entry.raw.parentId !== entry.parentId || entry.raw.type !== entry.type || typeof entry.raw.timestamp !== "string" || Date.parse(entry.raw.timestamp) !== entry.timestamp) return refuse("invalid-tree", "Invalid entry identity, order or parent", entry.id);
     if (!allowed.has(entry.type)) return refuse(entry.type === "custom" ? "unsupported-extension" : "unsupported-entry", "Unsupported source entry", entry.id);
-    if (entry.type === "custom_message" && entry.raw.customType !== "cpd") return refuse("unsupported-extension", "Unsupported custom message", entry.id);
+    if (entry.type === "message" && !durableMessage(entry.raw.message)) return refuse("invalid-message", "Unsupported source message", entry.id);
+    if (entry.type === "custom_message" && (entry.raw.customType !== "cpd" || typeof entry.raw.content !== "string" || typeof entry.raw.display !== "boolean" || !entry.raw.details || typeof entry.raw.details !== "object" || Array.isArray(entry.raw.details))) return refuse("unsupported-extension", "Unsupported custom message", entry.id);
     entries.set(entry.id, entry);
   }
   if (input.tree.length !== input.entries.length || input.tree.some((e, i) => e.id !== input.entries[i]?.id || e.parentId !== input.entries[i]?.parentId) || (input.leafId !== null && !entries.has(input.leafId)) || (input.leafId === null && entries.size !== 0)) return refuse("invalid-tree", "Tree or leaf disagrees with source");
   let projection: ReturnType<typeof buildSessionProjection>;
   try { projection = buildSessionProjection(parsed.slice(1) as SessionEntry[], input.leafId); } catch { return refuse("invalid-projection", "Cannot project source"); }
-  if (projection.model !== null && !isDeepStrictEqual(projection.model, input.activeAgent.model)) return refuse("invalid-projection", "Active model differs from projection");
+  if (projection.thinkingLevel !== input.activeAgent.thinkingLevel || (projection.model !== null && !isDeepStrictEqual(projection.model, input.activeAgent.model))) return refuse("invalid-projection", "Active model differs from projection");
   const projected: { id: string; model: Message[] }[] = [];
   const pending = new Map<string, string>();
   for (const item of projection.entries) {
