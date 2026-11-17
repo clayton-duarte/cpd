@@ -532,8 +532,7 @@ it.each(["recover", "exhaust", "terminal"])("preserves initial load retry policy
 
 
 describe("background extras errors", () => {
-  for (const operation of ["status", "costs"] as const) {
-    it(`reports ${operation} extras failures with ${operation} context`, async () => {
+  async function checkFailure(operation: "status" | "costs"): Promise<void> {
       const scheduler = new FakeScheduler();
       const cause = new Error("secret-cause /private/cause");
       const failure = new Error("secret-token /private/database payload-sensitive", { cause });
@@ -573,6 +572,7 @@ describe("background extras errors", () => {
         service.stop();
         log.mockRestore();
       }
-    });
   }
+  it("reports status extras failures with status context", async () => { await checkFailure("status"); });
+  it("reports costs extras failures with costs context", async () => { await checkFailure("costs"); });
 });
