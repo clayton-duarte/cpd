@@ -429,7 +429,7 @@ describe("durable frames v2 dialect", () => {
 for (const protocol of [1, 2] as const) {
  it(`protocol ${protocol} skips silent skill baselines and retains following chat`, () => {
  const d = createDialect(protocol);
- const baseline = { id: 1, conversationId: "root", kind: "cpd-skills", model: [], data: { skill: "lead", files: [] } };
+ const baseline = { id: 1, conversationId: "root", kind: "cpd-skills", model: [], data: { skill: "lead", files: { "SKILL.md": "a".repeat(64) } } };
  const loaded = d.applyBase(protocol === 1 ? view([baseline, user(2, "hello")]) : baseV2([baseline, user(2, "hello")]));
  expect(loaded.transcript.items.map(i => i.id)).toEqual(["u:2"]);
  });
@@ -499,5 +499,37 @@ describe("protocol 1 snapshot and events compaction", () => {
     ]));
     expect(a.transcript.items.some((item) => item.kind === "tool")).toBe(false);
     expect(b.transcript.facts.compacting).toBe(false);
+  });
+});
+
+describe("durable skills metadata", () => {
+  it("renders empty-model skills metadata", () => {
+    const data = { skill: "cpd-lead", files: { "SKILL.md": "a".repeat(64), "references/guide.md": "b".repeat(64) } };
+    const baseline = { id: 2, conversationId: "root", kind: "cpd-skills", model: [], data };
+    const notice = "Skills changed: cpd-lead\nUpdated SKILL.md";
+    const changed = entry(3, "cpd-skills", { role: "user", content: [{ type: "text", text: notice }] }, data);
+    const entries = [user(1, "before"), baseline, changed, assistant(4, [{ type: "text", text: "after" }])];
+    const original = structuredClone(entries);
+    const d = createDialect(2);
+    const items = d.applyBase(view(entries)).transcript.items;
+    expect(items.map((item) => item.id)).toEqual(["u:1", "f:3", "a:4"]);
+    expect(items[0]).toMatchObject({ kind: "user", text: "before" });
+    expect(items[1]).toMatchObject({ kind: "fold", foldKind: "cpd-skills", title: "Skills changed: cpd-lead", body: notice, defaultOpen: false });
+    expect(items[2]).toMatchObject({ kind: "assistant", blocks: [{ type: "text", text: "after" }] });
+    expect(entries).toEqual(original);
+
+    // An empty model is silent metadata only when the baseline payload is valid.
+    const invalid = { ...baseline, data: { skill: "cpd-lead", files: { "SKILL.md": "not a digest" } } };
+    expect(codeOf(() => createDialect(2).applyBase(view([invalid])))).toBe("protocol_error");
+  });
+
+  it("rejects malformed actual message", () => {
+    const data = { skill: "cpd-lead", files: { "SKILL.md": "a".repeat(64) } };
+    const malformedNotice = entry(2, "cpd-skills", { role: "assistant", content: [{ type: "text", text: "wrong role" }] }, data);
+    expect(codeOf(() => createDialect(2).applyBase(view([user(1, "before"), malformedNotice, user(3, "after")])))).toBe("protocol_error");
+    for (const kind of ["pi.user", "pi.assistant", "pi.tool-result"]) {
+      const malformed = { id: 2, conversationId: "root", kind, model: [] };
+      expect(codeOf(() => createDialect(2).applyBase(view([user(1, "before"), malformed, user(3, "after")])))).toBe("protocol_error");
+    }
   });
 });
