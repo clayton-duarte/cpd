@@ -85,21 +85,22 @@ function detachedTimeouts(command: string): boolean {
     let found = 0;
     let unsafe = false;
     const commands = simpleCommands(command);
-    // A wrapper such as `builtin wait` can wait too; conservatively refuse any wait word.
-    if (commands.some((words) => words.some((word) => word.split("/").pop() === "wait"))) return false;
+    // Wrappers such as `builtin wait` or `builtin fg` can bring a job back into the foreground.
+    if (commands.some((words) => words.some((word) => ["wait", "fg"].includes(word.split("/").pop()!)))) return false;
     const expected = commands.filter((words) => {
       const c = strip(words);
       return c?.name === "timeout" && waits(c.name, c.args) !== undefined;
     }).length;
-    const visit = (node: Node, detached: boolean, substitution: boolean) => {
+    const visit = (node: Node, detached: boolean, substitution: boolean, foregroundPipeline: boolean) => {
       substitution ||= node.type === "command_substitution";
+      foregroundPipeline ||= node.type === "pipeline" && !detached;
       if (node.type === "command") {
         const words = simpleCommands(node.text)[0];
         const c = words && strip(words);
         if (c?.name === "wait") unsafe = true;
         if (c?.name === "timeout" && waits(c.name, c.args)) {
           found++;
-          if (!detached || substitution) unsafe = true;
+          if (!detached || substitution || foregroundPipeline) unsafe = true;
         }
       }
       const children = node.children;
@@ -107,10 +108,10 @@ function detachedTimeouts(command: string): boolean {
         const child = children[i]!;
         if (!child.isNamed) continue;
         const next = children.slice(i + 1).find((n) => n && !n.isExtra);
-        visit(child, detached || next?.type === "&", substitution);
+        visit(child, detached || next?.type === "&", substitution, foregroundPipeline);
       }
     };
-    visit(tree.rootNode, false, false);
+    visit(tree.rootNode, false, false, false);
     return found > 0 && found === expected && !unsafe;
   } finally {
     tree.delete();
