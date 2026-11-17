@@ -277,3 +277,23 @@ test("bounded background timeout is allowed", async (t) => {
   const results = await Promise.all([command, nested].map((cmd) => call(f, { command: cmd, timeout: 25 })));
   assert.deepEqual(results, [undefined, undefined]);
 });
+
+test("foreground pipeline and fg reject long background timeouts", async (t) => {
+  for (const role of ["manager", "lead"]) {
+    const f = await started(role);
+    t.after(() => f.close());
+    for (const command of [
+      "(timeout 1800 scripts/cargo.sh build &) | cat",
+      "set -m; timeout 1800 scripts/cargo.sh build >/tmp/build.log 2>&1 & fg %1",
+    ]) {
+      await t.test(`${role}: ${command}`, async () => {
+        const result = await call(f, { command, timeout: 25 });
+        assert.equal(result?.block, true, command);
+        assert.match(result?.reason ?? "", /refused: timeout 1800/);
+      });
+    }
+    await t.test(`${role}: genuinely detached bounded background remains allowed`, async () => {
+      assert.equal(await call(f, { command: "timeout 1800 scripts/cargo.sh build >/tmp/build.log 2>&1 &", timeout: 25 }), undefined);
+    });
+  }
+});
