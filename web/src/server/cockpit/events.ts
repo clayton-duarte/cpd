@@ -1,7 +1,7 @@
 import type { ActionOutput, CockpitAction } from "../../protocol/cockpit.ts";
 import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
 import type { CockpitPane, CockpitPaneData } from "../../protocol/wire.ts";
-import type { ContextTreeModel, CostModel, InboxModel, LogRow, PlanViewModel, SettingsChanges, SettingsModel, StatusModel } from "../../protocol/cockpit.ts";
+import type { ContextTreeModel, CostModel, CostValues, InboxModel, LogRow, PlanViewModel, SettingsChanges, SettingsModel, StatusModel } from "../../protocol/cockpit.ts";
 import type { WireError } from "../../protocol/domain.ts";
 import { WebError, toWireError } from "../../protocol/domain.ts";
 import { followArgs, type Cpd, type FollowBoundary, type FollowProcess } from "./cli.ts";
@@ -48,7 +48,7 @@ export interface CockpitSnapshot { tree: ContextTreeModel | null; plan: PlanView
 export interface Extras {
   /** The machine status; `pane` is the serve status pane (CONTRACT §20) the snapshot last carried, or null before one arrives. */
   status(pane: StatusPane | null): Promise<StatusModel>;
-  costs(): Promise<CostModel>;
+  costs(): Promise<CostValues>;
   logs(): Promise<LogRow[]>;
   settings(): Promise<SettingsModel>;
   saveSettings(changes: SettingsChanges): Promise<void>;
@@ -197,11 +197,24 @@ export function createCockpitService(deps: { readModel: ReadModel; cpd: Cpd; fol
     if (extras === undefined) return;
     await refreshStatus();
     try {
-      const costs = await extras.costs();
+      const costs: CostModel = { state: "available", costs: await extras.costs() };
       if (stopped) return;
       snap = { ...snap, costs };
       emit({ kind: "pane", pane: "costs", data: costs });
-    } catch (e) { emitExtrasError("costs", e); }
+    } catch (e) {
+      const err = typeof e === "object" && e !== null ? e as { code?: unknown; errcode?: unknown } : null;
+      if (err?.code !== "ERR_SQLITE_ERROR" || typeof err.errcode !== "number" || (err.errcode & 255) !== 5) {
+        emitExtrasError("costs", e);
+        return;
+      }
+      if (stopped) return;
+      console.error("Background costs refresh busy", e);
+      const prior = snap.costs;
+      const costs: CostModel = prior !== undefined && prior.state !== "unavailable"
+        ? { state: "last-known", costs: prior.costs } : { state: "unavailable" };
+      snap = { ...snap, costs };
+      emit({ kind: "pane", pane: "costs", data: costs });
+    }
   };
   const need = (): Extras => {
     if (extras === undefined) throw new WebError("internal", "settings and logs are not available");

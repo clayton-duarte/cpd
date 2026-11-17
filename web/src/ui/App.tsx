@@ -137,7 +137,7 @@ export function App(props: AppProps): ReactElement {
   const [saving, setSaving] = useState(false);
   const [costsOn, setCostsOn] = useState(false); // off at start, never persisted
   const costs = useMemo(() => {
-    const flat = cockpit.costs ?? {};
+    const flat = cockpit.costs !== null && cockpit.costs.state !== "unavailable" ? cockpit.costs.costs : {};
     const contexts: Record<string, number> = {};
     const plans: Record<string, number> = {};
     for (const c of cockpit.tree?.contexts ?? []) {
@@ -295,6 +295,8 @@ export function App(props: AppProps): ReactElement {
       panelsRef={panelsRef}
       banner={
         <>
+          {costsOn && cockpit.costs?.state === "last-known" && <div role="status">Costs: last-known</div>}
+          {costsOn && cockpit.costs?.state === "unavailable" && <div role="status">Costs unavailable</div>}
           <OutboxList
             entries={outboxEntries}
             onRetry={(id) => void connection.outbox.retry(id)}
