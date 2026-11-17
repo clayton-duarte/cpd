@@ -262,11 +262,12 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
             "20261116T1801-paired-shaping",
             "20261116T1802-shaping-origin",
             "20261116T1803-shaping-promotion",
+            "20261116T1804-repoint-observation",
         ]
     );
     assert_eq!(
         NAMED.iter().next_back().map(|n| n.name),
-        Some("20261116T1803-shaping-promotion")
+        Some("20261116T1804-repoint-observation")
     );
 }
 

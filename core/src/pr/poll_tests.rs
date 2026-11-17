@@ -446,6 +446,10 @@ fn completed_no_change_repoint_update_is_not_requeued_for_same_observation() {
         })
         .unwrap()
         .expect("the first base-merged observation queues an update");
+    store.write("fixture", |tx| {
+        tx.execute("UPDATE jobs SET observed_head_oid = ?2, observed_base_oid = ?3 WHERE plan = 'pay' AND key = ?1", rusqlite::params![first.as_str(), head, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"])?;
+        Ok(())
+    }).unwrap();
     // The update did no work: base, submission and merged SHA are identical,
     // and its actual file set is empty, just like the two b95 updates.
     store.write("fixture", |tx| {
