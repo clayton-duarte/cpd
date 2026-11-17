@@ -83,6 +83,7 @@ struct Ahead {
     workflow: WorkflowKey,
     /// True when the default branch holds commits the Lead Branch lacks and the two merge cleanly.
     ahead: bool,
+    observation: Option<(String, String)>,
 }
 
 /// An armed pull request read before the write (commands.md §9.10): `pr merge` refused a head behind the default
@@ -991,13 +992,15 @@ fn apply(
         {
             continue;
         }
-        let is_ahead = ahead
+        let observed = ahead
             .iter()
-            .any(|a| a.plan == follow.plan && a.workflow == follow.workflow && a.ahead);
+            .find(|a| a.plan == follow.plan && a.workflow == follow.workflow);
+        let is_ahead = observed.is_some_and(|a| a.ahead);
         let (base_changed, job) = follow_base(
             tx,
             follow,
             is_ahead,
+            observed.and_then(|a| a.observation.as_ref()),
             tier_of(&follow.plan, &follow.workflow)?,
         )?;
         out.base_changed.push(base_changed);
@@ -1105,6 +1108,7 @@ fn follow_base(
     tx: &WriteTxn<'_>,
     follow: &Follow,
     ahead: bool,
+    observation: Option<&(String, String)>,
     tier: Tier,
 ) -> Result<(Value, Option<JobKey>), CpdError> {
     let Follow {
@@ -1150,7 +1154,15 @@ fn follow_base(
         && from_workflow.is_some()
         && to_workflow.is_none();
     let job = if base_merged {
-        queue_update_for(tx, plan, workflow, Trigger::BaseMerged, ahead, tier)?
+        queue_update_observed(
+            tx,
+            plan,
+            workflow,
+            Trigger::BaseMerged,
+            ahead,
+            tier,
+            observation,
+        )?
     } else {
         None
     };
@@ -1173,18 +1185,23 @@ fn ahead_of(conn: &rusqlite::Connection, follows: &[Follow]) -> Result<Vec<Ahead
         {
             continue;
         }
-        let row: Option<(String, String)> = conn
+        let row: Option<(String, String, Option<String>)> = conn
             .query_row(
-                "SELECT repo, lead_branch FROM workflows WHERE plan = ?1 AND key = ?2",
+                "SELECT w.repo, w.lead_branch, p.head_oid FROM workflows w LEFT JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2",
                 [follow.plan.as_str(), follow.workflow.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let Some((repo, lead)) = row else { continue };
+        let Some((repo, lead, head)) = row else {
+            continue;
+        };
+        let (is_ahead, observation) =
+            base_ahead(Path::new(&repo), &follow.to, &lead, head.as_deref());
         out.push(Ahead {
             plan: follow.plan.clone(),
             workflow: follow.workflow.clone(),
-            ahead: base_ahead(Path::new(&repo), &follow.to, &lead),
+            ahead: is_ahead,
+            observation,
         });
     }
     Ok(out)
@@ -1192,16 +1209,31 @@ fn ahead_of(conn: &rusqlite::Connection, follows: &[Follow]) -> Result<Vec<Ahead
 
 /// Whether `origin/<base>` holds commits `lead` lacks without a conflict, in `dir`: `fetch`, a clean `merge-tree`
 /// (`None`), then `merge-base --is-ancestor` exit 1 (not an ancestor). Any failure answers `false` (A4).
-fn base_ahead(dir: &Path, base: &str, lead: &str) -> bool {
+fn base_ahead(
+    dir: &Path,
+    base: &str,
+    lead: &str,
+    head: Option<&str>,
+) -> (bool, Option<(String, String)>) {
     let remote = format!("origin/{base}");
     if crate::git::run::fetch(dir, &["origin", base]).is_err() {
-        return false;
+        return (false, None);
     }
-    match crate::git::worktree::merge_conflicts(dir, &remote, lead) {
+    // Pin both operands for all checks: a moving branch must not mix two observations.
+    let base_oid = crate::git::run::rev_parse(dir, &remote).ok();
+    let lead_oid = crate::git::run::rev_parse(dir, lead).ok();
+    let base_arg = base_oid.as_deref().unwrap_or(&remote);
+    let lead_arg = lead_oid.as_deref().unwrap_or(lead);
+    match crate::git::worktree::merge_conflicts(dir, base_arg, lead_arg) {
         Ok(None) => {}
-        Ok(Some(_)) | Err(_) => return false,
+        Ok(Some(_)) | Err(_) => return (false, None),
     }
-    matches!(crate::git::run::run(dir, &["merge-base", "--is-ancestor", &remote, lead]), Ok(out) if out.code == 1)
+    let ahead = matches!(crate::git::run::run(dir, &["merge-base", "--is-ancestor", base_arg, lead_arg]), Ok(out) if out.code == 1);
+    let observation = match (head, lead_oid, base_oid) {
+        (Some(head), Some(lead), Some(base)) if head == lead => Some((lead, base)),
+        _ => None,
+    };
+    (ahead, observation)
 }
 
 /// The Workflow's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
@@ -1514,6 +1546,55 @@ pub(super) fn queue_update_for(
         return Ok(None);
     };
     open::queue_update(tx, plan, workflow, tier, COMMAND_BY, cause)
+}
+
+pub(super) fn queue_update_observed(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &WorkflowKey,
+    trigger: Trigger,
+    ahead: bool,
+    tier: Tier,
+    observation: Option<&(String, String)>,
+) -> Result<Option<JobKey>, CpdError> {
+    // The PR cache may have moved between the read and this transaction. Never
+    // use or persist a pair unless it still names the cached head.
+    let observation = if trigger == Trigger::BaseMerged && ahead {
+        if let Some((head, base)) = observation {
+            let current: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM workflows w JOIN pull_requests p ON p.id = w.pull_request WHERE w.plan = ?1 AND w.key = ?2 AND p.head_oid = ?3)",
+                rusqlite::params![plan.as_str(), key.as_str(), head], |r| r.get(0),
+            )?;
+            current.then_some((head, base))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some((head, base)) = observation {
+        let repeated: bool = tx.query_row(
+            "SELECT EXISTS (
+                SELECT 1 FROM jobs j JOIN attempts a ON a.plan = j.plan AND a.job = j.key
+                WHERE j.seq = (SELECT max(seq) FROM jobs WHERE plan = ?1 AND workflow = ?2 AND kind = 'update')
+                  AND j.status = 'merged' AND j.observed_head_oid = ?3 AND j.observed_base_oid = ?4
+                  AND j.merged_sha = ?3 AND a.status = 'ended' AND a.outcome = 'merged'
+                  AND a.base_sha = ?3 AND a.submitted_sha = ?3 AND a.merged_sha = ?3
+                  AND a.actual_files IS NOT NULL AND json_array_length(a.actual_files) = 0
+                  AND EXISTS (SELECT 1 FROM events e WHERE e.plan = j.plan AND e.job = j.key AND e.kind = 'job-added' AND json_extract(e.data, '$.reason') = 'base-merged')
+            )",
+            rusqlite::params![plan.as_str(), key.as_str(), head, base], |r| r.get(0),
+        )?;
+        if repeated {
+            return Ok(None);
+        }
+    }
+    let job = queue_update_for(tx, plan, key, trigger, ahead, tier)?;
+    if let (Some(job), Some((head, base))) = (&job, observation) {
+        tx.execute("UPDATE jobs SET observed_head_oid = ?3, observed_base_oid = ?4 WHERE plan = ?1 AND key = ?2",
+            rusqlite::params![plan.as_str(), job.as_str(), head, base])?;
+    }
+    Ok(job)
 }
 
 /// The Workflow `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,

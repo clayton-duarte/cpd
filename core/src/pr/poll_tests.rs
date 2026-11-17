@@ -7,7 +7,7 @@ use std::sync::Arc;
 use rusqlite::OptionalExtension;
 
 use super::PollArgs;
-use super::poll::{Trigger, poll, queue_update_for};
+use super::poll::{Trigger, poll, queue_update_for, queue_update_observed};
 use crate::args::PlanArg;
 use crate::config::Tier;
 use crate::host::runner::{Call, Handler, Reply};
@@ -435,6 +435,10 @@ fn completed_no_change_repoint_update_is_not_requeued_for_same_observation() {
     // The base Workflow merged; GitHub repointed api to main, but its cached
     // head remains the same throughout the repeated observations.
     let head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let observation = (
+        head.to_owned(),
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+    );
     store.write("fixture", |tx| {
         tx.execute("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'web'", [])?;
         tx.execute("UPDATE pull_requests SET head_oid = ?1 WHERE number = 801", [head])?;
@@ -442,14 +446,38 @@ fn completed_no_change_repoint_update_is_not_requeued_for_same_observation() {
     }).unwrap();
     let first = store
         .write("pr poll", |tx| {
-            queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+            queue_update_observed(
+                tx,
+                &pay,
+                &api,
+                Trigger::BaseMerged,
+                true,
+                tier(),
+                Some(&observation),
+            )
         })
         .unwrap()
         .expect("the first base-merged observation queues an update");
-    store.write("fixture", |tx| {
-        tx.execute("UPDATE jobs SET observed_head_oid = ?2, observed_base_oid = ?3 WHERE plan = 'pay' AND key = ?1", rusqlite::params![first.as_str(), head, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"])?;
-        Ok(())
-    }).unwrap();
+    let saved: (Option<String>, Option<String>) = store
+        .read(|conn| {
+            Ok(conn.query_row(
+        "SELECT observed_head_oid, observed_base_oid FROM jobs WHERE plan = 'pay' AND key = ?1",
+        [first.as_str()], |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
+        })
+        .unwrap();
+    assert_eq!(
+        saved,
+        (Some(observation.0.clone()), Some(observation.1.clone()))
+    );
+    let history_has_pair: bool = store.read(|conn| Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM history WHERE tbl = 'jobs' AND json_extract(pk, '$[0]') = (SELECT seq FROM jobs WHERE plan = 'pay' AND key = ?1) AND json_extract(after, '$.observed_head_oid') = ?2 AND json_extract(after, '$.observed_base_oid') = ?3)",
+        rusqlite::params![first.as_str(), observation.0, observation.1], |r| r.get(0),
+    )?)).unwrap();
+    assert!(
+        history_has_pair,
+        "generated history tracks the observations"
+    );
     // The update did no work: base, submission and merged SHA are identical,
     // and its actual file set is empty, just like the two b95 updates.
     store.write("fixture", |tx| {
@@ -461,7 +489,15 @@ fn completed_no_change_repoint_update_is_not_requeued_for_same_observation() {
     for _ in 0..2 {
         let again = store
             .write("pr poll", |tx| {
-                queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+                queue_update_observed(
+                    tx,
+                    &pay,
+                    &api,
+                    Trigger::BaseMerged,
+                    true,
+                    tier(),
+                    Some(&observation),
+                )
             })
             .unwrap();
         assert_eq!(
@@ -470,6 +506,143 @@ fn completed_no_change_repoint_update_is_not_requeued_for_same_observation() {
         );
     }
     assert_eq!(update_jobs(&mut store), vec![first.as_str().to_owned()]);
+    let changed_base = (
+        head.to_owned(),
+        "cccccccccccccccccccccccccccccccccccccccc".to_owned(),
+    );
+    let second = store
+        .write("pr poll", |tx| {
+            queue_update_observed(
+                tx,
+                &pay,
+                &api,
+                Trigger::BaseMerged,
+                true,
+                tier(),
+                Some(&changed_base),
+            )
+        })
+        .unwrap()
+        .expect("a new base commit must queue");
+    store.write("fixture", |tx| {
+        tx.execute("UPDATE jobs SET status = 'cancelled', cancel_reason = 'fixture', cancel_requested_at = 't' WHERE plan = 'pay' AND key = ?1", [second.as_str()])?;
+        tx.execute("UPDATE pull_requests SET head_oid = ?1 WHERE number = 801", ["dddddddddddddddddddddddddddddddddddddddd"])?;
+        Ok(())
+    }).unwrap();
+    let changed_head = (
+        "dddddddddddddddddddddddddddddddddddddddd".to_owned(),
+        observation.1.clone(),
+    );
+    let third = store
+        .write("pr poll", |tx| {
+            queue_update_observed(
+                tx,
+                &pay,
+                &api,
+                Trigger::BaseMerged,
+                true,
+                tier(),
+                Some(&changed_head),
+            )
+        })
+        .unwrap()
+        .expect("a new head must queue");
+    // A cache change after the read fails open and does not persist a false pair.
+    store.write("fixture", |tx| {
+        tx.execute("UPDATE jobs SET status = 'cancelled', cancel_reason = 'fixture', cancel_requested_at = 't' WHERE plan = 'pay' AND key = ?1", [third.as_str()])?;
+        Ok(())
+    }).unwrap();
+    let fourth = store
+        .write("pr poll", |tx| {
+            queue_update_observed(
+                tx,
+                &pay,
+                &api,
+                Trigger::BaseMerged,
+                true,
+                tier(),
+                Some(&observation),
+            )
+        })
+        .unwrap()
+        .expect("a stale observation must fail open");
+    let saved: (Option<String>, Option<String>) = store.read(|conn| Ok(conn.query_row(
+        "SELECT observed_head_oid, observed_base_oid FROM jobs WHERE plan = 'pay' AND key = ?1", [fourth.as_str()], |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)).unwrap();
+    assert_eq!(saved, (None, None));
+}
+
+#[test]
+fn completed_repoint_only_deduplicates_known_identical_observations() {
+    for case in ["head", "base", "unknown", "old-null", "conflict"] {
+        let rig = open_rig(&["api"]);
+        let mut store = Store::open(&rig.home, 5000).unwrap();
+        let plan = PlanId::parse("pay").unwrap();
+        let workflow = WorkflowKey::parse("api").unwrap();
+        let head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let pair = (
+            head.to_owned(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+        );
+        store
+            .write("fixture", |tx| {
+                tx.execute(
+                    "UPDATE pull_requests SET head_oid = ?1 WHERE number = 801",
+                    [head],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let first = store
+            .write("pr poll", |tx| {
+                queue_update_observed(
+                    tx,
+                    &plan,
+                    &workflow,
+                    Trigger::BaseMerged,
+                    true,
+                    tier(),
+                    Some(&pair),
+                )
+            })
+            .unwrap()
+            .unwrap();
+        store.write("fixture", |tx| {
+            tx.execute("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = ?1", [first.as_str()])?;
+            tx.execute("UPDATE jobs SET status = 'merged', merged_sha = ?2 WHERE plan = 'pay' AND key = ?1", rusqlite::params![first.as_str(), head])?;
+            tx.execute("INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, submitted_sha, submitted_at, merged_sha, actual_files, started_at, ended_at) VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', 'ended', 'merged', 'merged', 'cpd/pay/api', '/fixture', ?3, ?3, 't', ?3, '[]', 't', 't')", rusqlite::params![format!("{}-a1", first.as_str()), first.as_str(), head])?;
+            if case == "head" { tx.execute("UPDATE pull_requests SET head_oid = 'new-head' WHERE number = 801", [])?; }
+            if case == "old-null" { tx.execute("UPDATE jobs SET observed_head_oid = NULL, observed_base_oid = NULL WHERE plan = 'pay' AND key = ?1", [first.as_str()])?; }
+            Ok(())
+        }).unwrap();
+        let changed = match case {
+            "head" => ("new-head".to_owned(), pair.1.clone()),
+            "base" => (pair.0.clone(), "new-base".to_owned()),
+            _ => pair.clone(),
+        };
+        let next = store
+            .write("pr poll", |tx| {
+                queue_update_observed(
+                    tx,
+                    &plan,
+                    &workflow,
+                    if case == "conflict" {
+                        Trigger::Conflict
+                    } else {
+                        Trigger::BaseMerged
+                    },
+                    true,
+                    tier(),
+                    if case == "unknown" {
+                        None
+                    } else {
+                        Some(&changed)
+                    },
+                )
+            })
+            .unwrap();
+        assert!(next.is_some(), "{case} must not be suppressed");
+    }
 }
 
 // --- a cancelled Workflow whose pull request GitHub reopened (pro-d362, E5) ---
