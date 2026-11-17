@@ -32,3 +32,11 @@ Every "after" count is at or above its "before" count except shape_incomplete (1
 ## Summary (≤1500 characters)
 
 No cause is removed yet: the fixes are not installed. PR #983 (sources: skills, Spec template, writing-for-agents pointer, CLI help) and PR #985 (enforce: command-example guard) are open, unmerged, as of 02:47 EST 2026-11-08 — a cause only drops after its fix is installed, so a still-shipping install is the expected reading. The post-fix window (records after the last sources commit, 01:05–02:45 EST) still fires: usage 9 (CLI arg/flag errors — the --tier/--spec help fix is in that unmerged PR), loop guard >12 (4) and noblock_lead (2) (behaviour guards the sources fixes only seed, not remove), lint_failed 2, touches_missing 1, spec_invalid 1. Quiet in that window: outline_invalid, shape_incomplete, ask guard, primary_checkout, shape_violation, illegal_transition — but a ~1h40m window with a handful of Lead sessions cannot separate a removed cause from a quiet one; that check is the metrics workflow's job once the Events land. What the fixes target — usage through help text, spec_invalid/outline_invalid through the Spec template and stated fields, lint_failed through stated outline steps — all still appear post-commit, consistent with an install still shipping.
+
+## Documentation-reset disposition (2026-11-16)
+
+This historical report is retained unchanged as evidence, not current metrics or
+live refusal policy. Its counts and implementation references describe the
+report's original window. The documentation-reset worker's full assigned-path
+accounting is in Job evidence for `evidence-a1`; no removal or runtime change was
+made to this report.

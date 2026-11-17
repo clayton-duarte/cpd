@@ -1,14 +1,17 @@
 # CPD WebUI
 
-The browser interface for CPD. Start with the [WebUI contract](CONTRACT.md)
-for interaction requirements and the [core contract](../docs/contract.md) for
-domain behavior. The [runtime profile](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision)
+The browser interface for CPD. This README covers WebUI onboarding and manual
+verification. [CONTRACT.md](CONTRACT.md) owns WebUI-specific behavior;
+[the core contract](../docs/contract.md) owns shared domain behavior. The
+[runtime profile](../docs/contract.md#37b-the-serve-process-runtime-and-port-supervision)
 owns production and UI-only preview behavior; [WebUI access](../docs/architecture/webui-access.md)
-owns binding and authentication.
+owns binding and authentication. The [UI design contracts](src/ui/DESIGN.md)
+document presentation details and point to their focused chat, pane and composer
+contracts.
 
 Production uses port 3333; the UI-only preview uses 33333 and forwards to the
 same host's production engine. The preview opens no store and starts no agent.
-CPD.app and Electron are retired. Browser proof belongs in [VERIFY.md](README.md#manual-verification).
+CPD.app and Electron are retired. Browser proof belongs in [Manual verification](#manual-verification).
 
 ## Test conventions
 

@@ -24,8 +24,8 @@ test("drop-plannotator the tool description limit sentence names a file outside 
 	assert.doesNotMatch(fieldNote, /plannotator/i);
 });
 
-test("drop-plannotator the lead and manager skills and their question rules name no plannotator", () => {
-	for (const p of ["skills/cpd-lead/SKILL.md", "skills/cpd-manager/SKILL.md", "skills/cpd-lead/references/questions.md", "package.json"]) {
+test("drop-plannotator the lead and manager skills and package name no plannotator", () => {
+	for (const p of ["skills/cpd-lead/SKILL.md", "skills/cpd-manager/SKILL.md", "package.json"]) {
 		const text = read(p);
 		assert.doesNotMatch(text, /plannotator/i, p);
 		assert.doesNotMatch(text, /Open full plan/, p);

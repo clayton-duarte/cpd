@@ -137,8 +137,8 @@ _Avoid_: backlog, WIP
 
 ## Job and Workflow statuses
 
-**Draft** (state):
-A Job the User has not approved yet. The engine never runs it, and it is editable and cancellable. Every Job is a draft in phase `plan`; in a running Plan the Lead adds its later batches as drafts (`job add --draft`), and the User approves each batch through a Plan review, which queues them. A Workflow with a draft Job never opens its pull request by itself: its Open Job waits for the draft. A draft pull request on GitHub is a different thing, and cpd opens none.
+**Draft** (state, active product definition pro-d602):
+A fully defined Job awaiting User Plan approval only. The engine does not run it before approval. Undefined work and waits on the Lead or explore evidence must not be represented as draft Jobs. This definition supersedes pro-d598 and the broader draft meaning in pro-d549. Required lifecycle, lock and migration changes remain unspecified; the existing command and engine descriptions in [contract §2.2](docs/contract.md#22-objects) still document named-wait implementation mechanics and are not the active product definition. The count rule under pro-d602 is unspecified.
 _Avoid_: proposed, pending Job
 
 **Locked** (state):
@@ -442,7 +442,7 @@ How cpd makes its protocols hold: through tooling that can refuse, rather than p
 _Avoid_: prompt enforcement; convention
 
 **Refusal metric** (other, air-d86):
-Design intent, not a built thing: every gate refusal is logged as a metric, so the refusal rate is measured and improved on (the canonical definition in [README.md](README.md)). No refusal Events, metrics or alerts exist today; the work is Plan `agent-refusals`. Today's closest surfaces are the failed-Attempt causes in `cpd metrics` (`cpd_attempts_failed`, `cpd_attempt_retries`) and a `gate_failed` Attempt's gate columns (commands.md §14.7).
+Design intent in the canonical definition in [README.md](README.md): record refusals so they can be measured and improved. The contract specifies `guard` Events for adapter guard refusals and agent-caused CLI refusals, refusal metrics (`cpd metrics refusals`) and threshold alerts (§5.2, §5.7, §3.7; commands.md §14.7). That documented scope does not establish that every gate refusal is recorded, nor independently verify deployed runtime behavior. ADR-0016 preserves the original canonical sentence as a decision; its blanket design-intent wording should not be read as a verified implementation guarantee.
 
 ## Policy
 
