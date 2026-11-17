@@ -98,6 +98,26 @@ function textOf(content: unknown): string {
     .join("\n");
 }
 
+// Only the producer's digest baseline may omit a model message.
+function skillsBaseline(entry: Obj): boolean {
+  if (entry.kind !== "cpd-skills" || !Array.isArray(entry.model) || entry.model.length !== 0) return false;
+  const data = obj(entry.data, "skills data");
+  str(data.skill, "skills skill");
+  const files = obj(data.files, "skills files");
+  for (const digest of Object.values(files)) {
+    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) protocolError("invalid skills digest");
+  }
+  return true;
+}
+
+function skillsMessage(message: Obj): void {
+  if (message.role !== "user") protocolError(`skills message: expected role user, got ${String(message.role)}`);
+  if (typeof message.content === "string") return;
+  if (!Array.isArray(message.content) || !message.content.every((block: unknown) => isObj(block) && block.type === "text" && typeof block.text === "string")) {
+    protocolError("invalid skills message content");
+  }
+}
+
 const cut = (s: string): string => s.slice(0, FOLD_TITLE_MAX);
 const firstLine = (s: string): string => cut(s.split("\n")[0] ?? "");
 
@@ -203,9 +223,10 @@ function parseEntry(rawEntry: unknown): { id: number; parsed: Parsed } {
     const message = messageOf();
     return { id, parsed: { kind: "item", item: { kind: "compaction", id: `c:${id}`, ...isoOf(message), summary: textOf(message.content) } } };
   }
-  if (kind === "cpd-skills" && Array.isArray(entry.model) && entry.model.length === 0) return { id, parsed: { kind: "none" } };
+  if (skillsBaseline(entry)) return { id, parsed: { kind: "none" } };
   if ((FOLD_KINDS as readonly string[]).includes(kind)) {
     const message = messageOf();
+    if (kind === "cpd-skills") skillsMessage(message);
     const body = textOf(message.content);
     const foldKind = kind as FoldKind;
     const foldData =
@@ -788,10 +809,11 @@ function createEventsDialect(): Dialect {
       clearFailure(out);
       const message = obj(arr(entry.model, "compaction model")[0], "compaction model[0]");
       put({ kind: "compaction", id: `c:${entryId}`, ...isoOf(message), summary: textOf(message.content) }, out);
-    } else if (kind === "cpd-skills" && Array.isArray(entry.model) && entry.model.length === 0) {
+    } else if (skillsBaseline(entry)) {
       // The initial skill digest is bookkeeping with no display message.
     } else if ((FOLD_KINDS as readonly string[]).includes(kind)) {
       const message = obj(arr(entry.model, "fold model")[0], "fold model[0]");
+      if (kind === "cpd-skills") skillsMessage(message);
       const body = textOf(message.content);
       const foldKind = kind as FoldKind;
       const foldData =
