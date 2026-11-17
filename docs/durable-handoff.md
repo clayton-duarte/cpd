@@ -16,9 +16,11 @@ The sink is an injected adapter to public durable APIs: one `Harness.root(contex
 
 ## Exact typed boundary
 
-The following TypeScript types define the serialized contract. `JsonValue` is recursive JSON, with no `undefined`, bigint, function, symbol, cycles, or non-finite numbers. The caller supplies an immutable snapshot; the staging implementation never edits it or the source file.
+The following TypeScript types define the serialized contract. `JsonValue` is recursive JSON, with no `undefined`, bigint, function, symbol, cycles, or non-finite numbers. The caller supplies an immutable snapshot; the staging implementation never edits it or the source file. `DurableMessage`, `Tx`, `ConversationId`, and `EntryDraft` are the actual public exports from the pinned durable dependency graph, not locally recreated structural substitutes.
 
 ```ts
+import type { Message as DurableMessage } from "@earendil-works/pi-ai";
+import type { ConversationId, EntryDraft, Tx } from "@earendil-works/pi-durable";
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 
@@ -41,6 +43,8 @@ export type NativeSnapshot = {
   readonly entries: readonly NativeEntry[]; // all non-header entries in source file order
   readonly leafId: string | null;
   readonly tree: readonly { readonly id: string; readonly parentId: string | null }[];
+  /** Effective state computed by the pinned public SessionManager/projection APIs, not guessed from the last raw change row. */
+  readonly activeAgent: { readonly model: DurableModel; readonly thinkingLevel: string; readonly cwd: string };
   readonly codingAgentVersion: "1.5.2";
   readonly codingAgentPiAiVersion: "1.5.2";
   readonly durableVersion: "1.5.0";
@@ -81,18 +85,12 @@ export type DurableStageSink = {
   }): Promise<{ readonly conversationId: string }>;
 };
 
-/** Public durable Tx subset, not a private database interface. */
-export type PublicTx = {
-  appendEntry(conversationId: string, value: {
-    readonly kind: string;
-    readonly model?: readonly DurableMessage[];
-    readonly data?: JsonValue;
-  }): Promise<{ readonly id: string }>;
-};
-export type DurableMessage = object; // must be a value validated as pi-ai 1.5.0 Message at runtime; never cast to assert validity
+/** Narrow view of the actual public durable Tx supplied to ConversationInit. */
+export type PublicTx = Pick<Tx, "appendEntry">;
+// Every model message is constructed/validated as the actual durable pi-ai 1.5.0 Message; never cast to assert validity.
 ```
 
-`stageNativeConversation(input, sink)` takes the two `StageRequest` fields as positional arguments as shown by its signature: `stageNativeConversation(input: NativeSnapshot, sink: DurableStageSink): Promise<StageResult>`. The `sink` is part of the injectable public boundary for deterministic tests. Implementation catches and returns sink failures as `sink-failed`; it must not report `staged` until `createRoot` has committed successfully. A failed/ambiguous create is not retried against an existing root. The `sourceToDurableEntryId` result maps every source entry ID (including off-branch rows) to the durable ID of its provenance entry, never to an inferred model-message identity.
+`stageNativeConversation(input, sink)` takes the two `StageRequest` fields as positional arguments as shown by its signature: `stageNativeConversation(input: NativeSnapshot, sink: DurableStageSink): Promise<StageResult>`. The `sink` is part of the injectable public boundary for deterministic tests. Its `createRoot` implementation binds the public `Harness.root(context, { agent: { model, thinkingLevel }, init })`; cwd is supplied through the appropriate durable context configuration, not an undocumented `AgentChange` field. `PublicTx` is the public durable `Tx` subset. Implementation catches and returns sink failures as `sink-failed`; it must not report `staged` until `createRoot` has committed successfully. A failed/ambiguous create is not retried against an existing root. The `sourceToDurableEntryId` result maps every source entry ID (including off-branch rows) to the durable ID of its provenance entry, never to an inferred model-message identity.
 
 ## Validation and complete provenance
 
