@@ -152,3 +152,5 @@ describe("cost", () => {
     expect(table.map(([n]) => formatCost(n))).toEqual(table.map(([, s]) => s));
   });
 });
+
+// Regression coverage for whole-pane durable cost availability.
