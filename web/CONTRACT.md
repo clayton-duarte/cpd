@@ -1007,6 +1007,15 @@ export const FOLLOW_RESTART_BASE_MS = 1_000; // doubles per consecutive restart,
 
 export type CockpitUpdate = ({ kind: "pane" } & CockpitPaneData) | { kind: "error"; error: WireError };
 export interface CockpitSnapshot { tree: ContextTreeModel | null; plan: PlanViewModel | null; inbox: InboxModel | null }
+```
+
+### Background extras refresh diagnostics (Plan `webui-tier-efforts`, Job `b94-docs-2`)
+
+When the cockpit service refreshes background extras, failures are identified by the operation that failed: status refresh failures are reported as **status** diagnostics, and costs refresh failures as **costs** diagnostics. The safe operation context distinguishes these two existing refreshes; it does not assert which inner cost read, session, database, or writer caused a failure.
+
+The server retains the original error, including its cause and stack, through the existing server-side logger. The browser-facing error uses the existing `WireError` schema and carries only safe, bounded operation context; it must not expose the original error, cause, stack, filesystem paths, secrets, or payloads to the browser. This is diagnostic context on the existing error update, not a new message type or wire-schema expansion. Existing wire compatibility is preserved.
+
+This contract adds no stage/session attribution, retry, timeout, or silent skip. It is diagnostic only and is not a lock mitigation.
 
 export interface CockpitService {
   start(): Promise<void>; // initial loadAll, then ONE follow

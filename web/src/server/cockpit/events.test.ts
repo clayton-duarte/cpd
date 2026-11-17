@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebError } from "../../protocol/domain.ts";
 import { FakeScheduler } from "../../testing/scheduler.ts";
 import type { Disposable } from "../../protocol/runtime.ts";
@@ -528,4 +528,51 @@ it.each(["recover", "exhaust", "terminal"])("preserves initial load retry policy
   else expect(result).toMatchObject({ code: "cpd_failed" });
   service.stop();
   expect(scheduler.pending()).toBe(0);
+});
+
+
+describe("background extras errors", () => {
+  async function checkFailure(operation: "status" | "costs"): Promise<void> {
+      const scheduler = new FakeScheduler();
+      const cause = new Error("secret-cause /private/cause");
+      const failure = new Error("secret-token /private/database payload-sensitive", { cause });
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      const extras: Extras = {
+        async status() {
+          if (operation === "status") throw failure;
+          return { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false, mode: "production", drift: null };
+        },
+        async costs() { if (operation === "costs") throw failure; return {}; },
+        async logs() { return []; },
+        async settings() { throw new Error("not used"); },
+        async saveSettings() {},
+      };
+      const readModel: ReadModel = {
+        async loadAll() { return { tree: tree(1), plan: null, inbox }; },
+        async loadPanes() { return {}; },
+      };
+      const service = createCockpitService({ readModel, cpd: { json: async () => ({ ok: true }) }, follow: { start: (args) => new FakeFollow(args) }, scheduler, extras });
+      const updates: CockpitUpdate[] = [];
+      service.subscribe((update) => updates.push(update));
+      try {
+        await service.start();
+        await flush();
+        const errors = updates.filter((update) => update.kind === "error");
+        expect(errors).toHaveLength(1);
+        const wire = JSON.stringify(errors[0]);
+        expect(wire.toLowerCase()).toContain(operation);
+        expect(wire.toLowerCase()).not.toContain(operation === "status" ? "costs" : "status");
+        expect(wire).not.toMatch(/secret|\/private|payload-sensitive|stack|cause/i);
+        expect(errors[0]).toMatchObject({ kind: "error", error: { code: "internal" } });
+        expect(updates.some((update) => update.kind === "pane" && update.pane === operation)).toBe(false);
+        expect(log.mock.calls.some((args) => args.includes(failure))).toBe(true);
+        expect(failure.cause).toBe(cause);
+        expect(failure.stack).toBeTruthy();
+      } finally {
+        service.stop();
+        log.mockRestore();
+      }
+  }
+  it("reports status extras failures with status context", async () => { await checkFailure("status"); });
+  it("reports costs extras failures with costs context", async () => { await checkFailure("costs"); });
 });
