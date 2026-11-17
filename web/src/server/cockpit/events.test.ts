@@ -529,3 +529,4 @@ it.each(["recover", "exhaust", "terminal"])("preserves initial load retry policy
   service.stop();
   expect(scheduler.pending()).toBe(0);
 });
+
