@@ -501,3 +501,13 @@ describe("protocol 1 snapshot and events compaction", () => {
     expect(b.transcript.facts.compacting).toBe(false);
   });
 });
+
+describe("durable skills metadata", () => {
+  it("renders empty-model skills metadata", () => {
+    expect(true).toBe(false);
+  });
+
+  it("rejects malformed actual message", () => {
+    expect(true).toBe(false);
+  });
+});
