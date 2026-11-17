@@ -426,6 +426,48 @@ fn an_update_job_already_live_is_not_duplicated() {
     );
 }
 
+#[test]
+fn completed_no_change_repoint_update_is_not_requeued_for_same_observation() {
+    let rig = open_rig(&["api", "web"]);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let api = WorkflowKey::parse("api").unwrap();
+    // The base Workflow merged; GitHub repointed api to main, but its cached
+    // head remains the same throughout the repeated observations.
+    let head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    store.write("fixture", |tx| {
+        tx.execute("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'web'", [])?;
+        tx.execute("UPDATE pull_requests SET head_oid = ?1 WHERE number = 801", [head])?;
+        Ok(())
+    }).unwrap();
+    let first = store
+        .write("pr poll", |tx| {
+            queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+        })
+        .unwrap()
+        .expect("the first base-merged observation queues an update");
+    // The update did no work: base, submission and merged SHA are identical,
+    // and its actual file set is empty, just like the two b95 updates.
+    store.write("fixture", |tx| {
+        tx.execute("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = ?1", [first.as_str()])?;
+        tx.execute("UPDATE jobs SET status = 'merged', merged_sha = ?2 WHERE plan = 'pay' AND key = ?1", [first.as_str(), head])?;
+        tx.execute("INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, submitted_sha, submitted_at, merged_sha, actual_files, started_at, ended_at) VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', 'ended', 'merged', 'merged', 'cpd/pay/api', '/fixture', ?3, ?3, 't', ?3, '[]', 't', 't')", rusqlite::params![format!("{}-a1", first.as_str()), first.as_str(), head])?;
+        Ok(())
+    }).unwrap();
+    for _ in 0..2 {
+        let again = store
+            .write("pr poll", |tx| {
+                queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+            })
+            .unwrap();
+        assert_eq!(
+            again, None,
+            "the same cached head and base after a no-change completion must not queue another update"
+        );
+    }
+    assert_eq!(update_jobs(&mut store), vec![first.as_str().to_owned()]);
+}
+
 // --- a cancelled Workflow whose pull request GitHub reopened (pro-d362, E5) ---
 
 /// The in-process `gh` of the rebind: the search lists `acme/pay#801` as `state` (a closed pull request is not in the search),
