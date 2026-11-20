@@ -6952,6 +6952,39 @@ and its source for each Job and Attempt. A policy change alone must not silently
 change a running Attempt. Report configured selection separately from observed
 runtime selection; when the latter is unknown, say so.
 
+### Job selection persistence (forward slice)
+
+The independently deliverable Job-row contract (air-d181, air-d184, air-d197,
+air-d199, air-d240) is a persistence boundary, not a claim that direct selection
+is dispatched or observed at runtime. Owner selection remains governed by §8.3;
+this slice does not change provider resolution or Attempt and Session behavior.
+A Job stores exactly one of these states:
+
+- **Direct:** no tier, a nonempty selected model and a nonnegative integer
+  selected effort, stored together. The model and effort are explicit; no tier
+  is fabricated for them.
+- **Legacy:** a recorded tier and neither direct field. Preserve the tier as
+  historical evidence; do not infer a model from today's mapping. Existing
+  active work is left alone; where its original selection cannot be established,
+  refuse dispatch or retier rather than guess.
+- **Unselected:** no tier and neither direct field, permitted only for a Job
+  in `draft` or `cancelled` status. Workflow template drafts can be unselected;
+  this does not relax Job add's existing spec requirement or make Job add a
+  draft-stub creation path (air-d240).
+
+A partial direct pair, an empty model, negative effort, a tier combined with
+any direct field, or an unselected Job in any other status is invalid and must
+be rejected, including on row load. Selection fields are written atomically.
+
+The schema change is a **forward-only migration**: leave historical migrations
+and legacy rows unchanged, without model backfill or fabricated selection.
+Preserve existing columns, constraints, indexes, triggers and foreign-key
+integrity, including the Job locking invariant for selection fields. Any table
+rebuild must preserve the current schema and data; the migration is tested on
+disposable fixtures, not applied to a live database as part of this slice.
+This contract does not imply deployment, dispatch integration or runtime
+inference; configured selection and observed runtime remain distinct (§9).
+
 ### Boundaries
 
 This decision does not select providers, model IDs, machine-specific defaults,
