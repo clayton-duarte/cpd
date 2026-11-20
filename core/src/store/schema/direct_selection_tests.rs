@@ -27,6 +27,14 @@ fn job_legacy_selection_and_invalid_states() {
         Ok(q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
     }).unwrap()
     };
+    let inbound = |s: &mut Store| {
+        s.read(|c| {
+        let mut stmt = c.prepare("SELECT m.name, f.id, f.seq, f.\"table\", f.\"from\", f.\"to\", f.on_update, f.on_delete FROM sqlite_schema m, pragma_foreign_key_list(m.name) f WHERE m.type='table' AND f.\"table\"='jobs' ORDER BY m.name, f.id, f.seq")?;
+        Ok(stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    }).unwrap()
+    };
+    let before_fk = inbound(&mut old);
+    assert!(!before_fk.is_empty());
     let before = objects(&mut old);
     drop(old);
     assert!(
@@ -35,6 +43,7 @@ fn job_legacy_selection_and_invalid_states() {
     );
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none());
+    assert_eq!(inbound(&mut store), before_fk);
     let after = objects(&mut store);
     for obj in before {
         assert!(after.contains(&obj), "lost {obj:?}");
