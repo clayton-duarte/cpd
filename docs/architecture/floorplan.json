@@ -1,0 +1,186 @@
+{
+  "$schema": "floorplan/architecture@1",
+  "audience": "everyone",
+  "project": {
+    "name": "cpd",
+    "summary": "cpd turns one ticket into a reviewed pull request. A lead AI agent breaks the work into small jobs, a team of worker agents does them side by side, and cpd checks each step, merges the results and opens the pull request on GitHub. One program, cpd, holds the commands, the background engine and the shared rules; an add-on runs inside the pi agent, and a web and desktop app lets people watch and steer it.",
+    "entrypoints": ["cli/src/main.rs", "engine/src/lib.rs", "pi/extension.ts", "web/src/main.tsx", "web/src/electron/main.ts"]
+  },
+  "ignore": ["docs/**", "run/**"],
+  "nodes": [
+    {
+      "id": "cli",
+      "label": "Commands",
+      "kind": "service",
+      "summary": "The cpd program people and agents type commands into: it reads each command and hands it to the shared rules or the engine.",
+      "paths": ["cli/src", "cli/build.rs"],
+      "exclude": ["**/*_tests.rs", "**/tests.rs"]
+    },
+    {
+      "id": "engine",
+      "label": "Background engine",
+      "kind": "worker",
+      "summary": "Runs on every machine all the time, waking up every few seconds to start ready jobs, watch pull requests, raise alerts and keep agents alive.",
+      "paths": ["engine"],
+      "exclude": ["**/*_tests.rs", "**/tests.rs"]
+    },
+    { "id": "engine.loop", "parent": "engine", "label": "Heartbeat", "kind": "feature", "summary": "The repeating loop itself: when it wakes, what it runs each time, sleeping, restarting and making sure only one copy runs.", "paths": ["engine/src/watch/{mod,engine,lock,log,schedule,sleep,wake,restart,ensure,liveness,poll_run,testkit}.rs", "engine/src/lib.rs"] },
+    { "id": "engine.prs", "parent": "engine", "label": "Pull request watcher", "kind": "feature", "summary": "Opens pull requests when a piece of work is done, notices when they close or get stuck, and keeps outside data fresh.", "paths": ["engine/src/watch/{open,closed,parked,pr,swr,report}.rs"] },
+    { "id": "engine.alerts", "parent": "engine", "label": "Inbox and alerts", "kind": "feature", "summary": "Turns things that need a person (questions, failures, refusals, machine problems) into inbox items and alerts.", "paths": ["engine/src/watch/{inbox,asks,escalations,host_alert,refusal_alert,bug_guard,pill_texts}.rs"] },
+    { "id": "engine.agents", "parent": "engine", "label": "Agent upkeep", "kind": "feature", "summary": "Starts and stops worker agents, archives finished ones, tidies up, holds back when a model provider is down, and runs the knowledge tidier.", "paths": ["engine/src/watch/{workers,archive,archive_leads,janitor,permanent,provider_hold,models,titles,curate,distill,hosts}.rs", "engine/src/watch/workers"] },
+    { "id": "engine.live", "parent": "engine", "label": "Live feed", "kind": "feature", "summary": "Streams every change as it happens to the web app over a local connection.", "paths": ["engine/src/watch/{ws,webui}.rs"] },
+    { "id": "engine.doctor", "parent": "engine", "label": "Machine check", "kind": "feature", "summary": "Checks that this computer has everything cpd needs and reports what is missing.", "paths": ["engine/src/doctor"] },
+
+    {
+      "id": "core",
+      "label": "Shared rules",
+      "kind": "library",
+      "summary": "Everything cpd knows how to do, used by both the commands and the engine: plans, jobs, agent sessions, pull requests, the inbox and the saved records.",
+      "paths": ["core"],
+      "exclude": ["**/*_tests.rs", "**/tests.rs"]
+    },
+    { "id": "core.store", "parent": "core", "label": "Saved records", "kind": "data", "summary": "The database on each machine that keeps every plan, job, session and event, and the step-by-step history of how its layout changed.", "paths": ["core/src/store"] },
+    { "id": "core.context", "parent": "core", "label": "Shared knowledge", "kind": "feature", "summary": "Keeps the decisions and notes that several plans share, lets agents search them, and proposes tidying old ones for a person to approve.", "paths": ["core/src/context", "core/src/{classifier,embedding}.rs"] },
+    { "id": "core.planning", "parent": "core", "label": "Plans and jobs", "kind": "feature", "summary": "The work itself: a plan, its part in each code repository, and the small fully written-out jobs that workers pick up.", "paths": ["core/src/{plan,workflow,job,spec,tag}", "core/src/{phase,board,urgency}.rs"] },
+    { "id": "core.planning.plans", "parent": "core.planning", "label": "Plans", "kind": "feature", "summary": "A plan from start to finish: its phases, review, what waits on what, and how it is shown.", "paths": ["core/src/plan"] },
+    { "id": "core.planning.workflows", "parent": "core.planning", "label": "Repository parts", "kind": "feature", "summary": "A plan's share of work in one code repository, which ends in exactly one pull request.", "paths": ["core/src/workflow"] },
+    { "id": "core.planning.jobs", "parent": "core.planning", "label": "Jobs", "kind": "feature", "summary": "Adding, editing, retrying and cancelling the small jobs workers do, and the written instructions each one carries.", "paths": ["core/src/{job,spec}"] },
+    { "id": "core.sessions", "parent": "core", "label": "Agent sessions", "kind": "feature", "summary": "Starts, talks to and tracks every agent: the terminal windows they run in, each worker's attempt at a job, and handing in the result.", "paths": ["core/src/{session,host,attempt,driver}", "core/src/{agent_key,pill}.rs"] },
+    { "id": "core.sessions.talk", "parent": "core.sessions", "label": "Conversations", "kind": "feature", "summary": "Sending messages to agents, reading their history, renaming, switching and resuming them.", "paths": ["core/src/session"] },
+    { "id": "core.sessions.host", "parent": "core.sessions", "label": "Terminal windows", "kind": "feature", "summary": "Opens and arranges the tmux windows agents run in, and starts the pi agent inside them.", "paths": ["core/src/host"] },
+    { "id": "core.sessions.attempts", "parent": "core.sessions", "label": "Worker attempts", "kind": "feature", "summary": "One worker's try at one job: starting it, driving it to the end, and the single hand-in of its result.", "paths": ["core/src/{attempt,driver}"] },
+    { "id": "core.delivery", "parent": "core", "label": "Pull requests and merging", "kind": "feature", "summary": "Merges finished jobs, runs the quality check, picks which tests to run, and opens and updates the pull request on GitHub.", "paths": ["core/src/{pr,git,merge,gate,testsel,prune,version_sync}"] },
+    { "id": "core.delivery.prs", "parent": "core.delivery", "label": "Pull requests", "kind": "feature", "summary": "Opens, describes, pushes, rebases and tracks each pull request through GitHub's gh tool.", "paths": ["core/src/pr"] },
+    { "id": "core.delivery.git", "parent": "core.delivery", "label": "Branches and merging", "kind": "feature", "summary": "Working copies of the code, branches, merging finished jobs and clearing out old copies.", "paths": ["core/src/{git,merge,prune}"] },
+    { "id": "core.delivery.checks", "parent": "core.delivery", "label": "Quality check", "kind": "feature", "summary": "Runs the quality check before a pull request opens, picks which tests changed code needs, and keeps version numbers in step.", "paths": ["core/src/{gate,testsel,version_sync}"] },
+    { "id": "core.inbox", "parent": "core", "label": "Inbox and events", "kind": "feature", "summary": "Records every event, keeps the list of things waiting on a person, and holds questions agents ask.", "paths": ["core/src/{inbox,ask,events}", "core/src/incident.rs"] },
+    { "id": "core.outside", "parent": "core", "label": "Outside services", "kind": "feature", "summary": "Fetches and keeps a fresh copy of what cpd needs from GitHub, Jira, Slack and model providers, and remembers which of them are healthy.", "paths": ["core/src/{swr,models,resource}", "core/src/{slack,jira,mcp}.rs"] },
+    { "id": "core.settings", "parent": "core", "label": "Settings and permissions", "kind": "config", "summary": "Reads settings and rules, decides who may do what, and handles secrets kept in 1Password.", "paths": ["core/src/{config,policy,secret}", "core/src/{home,env}.rs"] },
+    { "id": "core.upkeep", "parent": "core", "label": "Install and upkeep", "kind": "infra", "summary": "Installing cpd on a machine, repairing it, upgrading, cleaning up, measuring usage, and feeding the terminal and web views.", "paths": ["core/src/{install,metrics,cockpit,app}", "core/src/{host_repair,host_repair_approval,upgrade,janitor,serve}.rs"] },
+
+    {
+      "id": "pi",
+      "label": "Agent add-on",
+      "kind": "library",
+      "summary": "Plugs cpd into the pi coding agent the lead and workers run in: delivers news to the lead, guards what agents may do, and adds cpd's own tools, skills and look.",
+      "paths": ["pi"],
+      "exclude": ["**/*.test.ts", "pi/test/**"]
+    },
+    { "id": "pi.lib", "parent": "pi", "label": "Add-on workings", "kind": "feature", "summary": "The heart of the add-on: calls cpd for the agent, delivers events, and guards against unsafe commands and loops.", "paths": ["pi/lib"] },
+    { "id": "pi.durablehost", "parent": "pi", "label": "Long-running agent host", "kind": "service", "summary": "A small server that keeps agent conversations alive even when no terminal window is open.", "paths": ["pi/durable-host"] },
+    { "id": "pi.durableworker", "parent": "pi", "label": "Long-running worker", "kind": "worker", "summary": "Runs one worker agent's conversation inside the long-running host.", "paths": ["pi/durable-worker"] },
+    { "id": "pi.ask", "parent": "pi", "label": "Question cards", "kind": "feature", "summary": "Lets an agent stop and ask the person a multiple-choice question inside the agent's screen.", "paths": ["pi/ask-user-question"] },
+    { "id": "pi.ask.view", "parent": "pi.ask", "label": "Card drawing", "kind": "feature", "summary": "Draws the question card, its options and free-text answer on the agent's screen.", "paths": ["pi/ask-user-question/view"] },
+    { "id": "pi.ask.state", "parent": "pi.ask", "label": "Answer tracking", "kind": "feature", "summary": "Remembers which option is picked and what has been typed while the person answers.", "paths": ["pi/ask-user-question/state"] },
+    { "id": "pi.ask.tool", "parent": "pi.ask", "label": "Ask tool", "kind": "feature", "summary": "The tool the agent calls to ask, and how the answer goes back to it.", "paths": ["pi/ask-user-question/tool"] },
+    { "id": "pi.compact", "parent": "pi", "label": "Tidy tool output", "kind": "feature", "summary": "Shows the agent's tool calls in short, readable rows instead of long raw output.", "paths": ["pi/compact-tools"] },
+    { "id": "pi.extras", "parent": "pi", "label": "Skills and extras", "kind": "feature", "summary": "Written guides for the lead and manager agents, the colour theme, and small measuring and analysis tools.", "paths": ["pi/{skills,themes,tools,measure}"] },
+
+    {
+      "id": "web",
+      "label": "Web and desktop app",
+      "kind": "ui",
+      "summary": "The screens people use to watch plans move, read agent conversations, answer the inbox and type to agents, in a browser or as a desktop app.",
+      "paths": ["web"],
+      "exclude": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "web/src/testing/**"]
+    },
+    { "id": "web.ui", "parent": "web", "label": "Screens", "kind": "ui", "summary": "Everything people see: the main layout, the conversation view, the plan board, the message box and the pop-up windows.", "paths": ["web/src/ui", "web/src/main.tsx", "web/src/components"] },
+    { "id": "web.ui.chat", "parent": "web.ui", "label": "Conversation view", "kind": "feature", "summary": "Shows an agent's conversation as it streams in, with folded tool calls and formatted text.", "paths": ["web/src/ui/chat"] },
+    { "id": "web.ui.cockpit", "parent": "web.ui", "label": "Plan board and inbox", "kind": "feature", "summary": "The overview: the tree of contexts and plans, each plan's jobs as a picture, and the inbox of things waiting on you.", "paths": ["web/src/ui/cockpit"] },
+    { "id": "web.ui.composer", "parent": "web.ui", "label": "Message box", "kind": "feature", "summary": "Where you type to an agent, attach files, pick the model level and keep drafts.", "paths": ["web/src/ui/composer"] },
+    { "id": "web.ui.dialogs", "parent": "web.ui", "label": "Pop-up windows", "kind": "feature", "summary": "Question cards, plan review, settings, logs and help windows.", "paths": ["web/src/ui/dialogs"] },
+    { "id": "web.ui.kit", "parent": "web.ui", "label": "Building blocks", "kind": "library", "summary": "The shared buttons, menus, panels and other pieces every screen is made from.", "paths": ["web/src/ui/components"] },
+    { "id": "web.server", "parent": "web", "label": "App's local server", "kind": "service", "summary": "Runs next to the screens, reads agent conversations and cpd's data, and passes them to the browser as they change.", "paths": ["web/src/server"] },
+    { "id": "web.server.cockpit", "parent": "web.server", "label": "Overview data", "kind": "feature", "summary": "Builds the overview the plan board shows, its costs, statuses and logs, and carries out actions people click.", "paths": ["web/src/server/cockpit"] },
+    { "id": "web.server.pi", "parent": "web.server", "label": "Conversation reader", "kind": "feature", "summary": "Reads agent conversations from their saved files and live windows and turns them into rows for the screen.", "paths": ["web/src/server/{pi,durable}"] },
+    { "id": "web.server.hub", "parent": "web.server", "label": "Browser connections", "kind": "feature", "summary": "Keeps track of every open browser tab and sends each the updates it asked for.", "paths": ["web/src/server/hub"] },
+    { "id": "web.desktop", "parent": "web", "label": "Desktop app", "kind": "ui", "summary": "Wraps the screens as a desktop app with its own menu, terminal tabs, health checks and self-updates.", "paths": ["web/src/electron", "web/electron.html"] },
+    { "id": "web.shared", "parent": "web", "label": "Shared app pieces", "kind": "library", "summary": "The message format between screens and server, the app's memory of what is on screen, and shared styles.", "paths": ["web/src/{protocol,state,lib,generated}"] },
+
+    {
+      "id": "tests",
+      "label": "Tests",
+      "kind": "test",
+      "summary": "Automatic checks that cpd behaves as its documents say, with stand-ins for git, tmux and the agents so they run without the real thing.",
+      "paths": ["**/*_tests.rs", "**/tests.rs"]
+    },
+    { "id": "tests.cli", "parent": "tests", "label": "End-to-end command tests", "kind": "test", "summary": "Run whole cpd commands and engine loops against a throw-away machine and check the results.", "paths": ["cli/tests"] },
+    { "id": "tests.rust", "parent": "tests", "label": "Rules and engine tests", "kind": "test", "summary": "Checks next to the shared rules and the engine, plus stand-ins for git, tmux and models.", "paths": ["core/**/*_tests.rs", "core/**/tests.rs", "engine/**/*_tests.rs", "core/src/fakes", "cli/src/fakes", "cli/src/bin", "core/src/store/testing.rs", "cli/src/*_tests.rs"] },
+    { "id": "tests.pi", "parent": "tests", "label": "Agent add-on tests", "kind": "test", "summary": "Checks for the add-on's guards, event delivery, question cards and long-running host.", "paths": ["pi/test", "pi/**/*.test.ts"] },
+    { "id": "tests.web", "parent": "tests", "label": "App tests", "kind": "test", "summary": "Checks for every screen, the local server and the desktop app, plus full click-through runs.", "paths": ["web/**/*.test.ts", "web/**/*.test.tsx", "web/**/*.spec.ts", "web/src/testing"] },
+
+    {
+      "id": "scripts",
+      "label": "Helper scripts",
+      "kind": "script",
+      "summary": "Scripts for installing cpd, running the quality check and tests, previewing the app, and releasing new versions.",
+      "paths": ["scripts", "ideas"]
+    },
+
+    { "id": "sqlite", "label": "Local database file", "kind": "external", "summary": "The SQLite file on each machine where cpd keeps everything.", "packages": ["cargo:rusqlite"] },
+    { "id": "github", "label": "GitHub", "kind": "external", "summary": "Where the code lives and where cpd opens and tracks pull requests.", "hosts": ["github.com", "*.github.com"] },
+    { "id": "piagent", "label": "pi coding agent", "kind": "external", "summary": "The AI coding agent the lead and every worker run in.", "packages": ["npm:@earendil-works/*"] },
+    { "id": "slack", "label": "Slack", "kind": "external", "summary": "Team chat cpd can read from and post to.", "hosts": ["*.slack.com"] },
+    { "id": "jira", "label": "Jira", "kind": "external", "summary": "The ticket tracker a plan can be linked to.", "hosts": ["*.atlassian.net", "mcp.atlassian.com"] },
+    { "id": "onepassword", "label": "1Password", "kind": "external", "summary": "Where secrets are kept; cpd asks it for them only when a rule allows." },
+    { "id": "tmux", "label": "tmux terminal windows", "kind": "external", "summary": "The terminal manager that hosts the lead, the workers and the terminal view." }
+  ],
+  "edges": [
+    { "from": "cli", "to": "core", "kind": "import", "label": "uses", "description": "Every command is carried out by the shared rules." },
+    { "from": "cli", "to": "engine", "kind": "import", "label": "starts", "description": "cpd watch and cpd doctor run the engine and the machine check." },
+    { "from": "engine", "to": "core", "kind": "import", "label": "uses", "description": "Each heartbeat runs steps from the shared rules." },
+    { "from": "pi.lib", "to": "cli", "kind": "call", "label": "runs cpd", "description": "The add-on runs cpd commands for the agent and reads their answers." },
+    { "from": "pi.durablehost", "to": "cli", "kind": "call", "label": "runs cpd" },
+    { "from": "core.sessions", "to": "tmux", "kind": "call", "label": "opens windows", "description": "Each agent runs in its own tmux window." },
+    { "from": "core.sessions", "to": "piagent", "kind": "call", "label": "starts agents", "description": "Lead and worker agents are started as pi sessions." },
+    { "from": "core.delivery", "to": "github", "kind": "http", "label": "git and gh", "description": "Pushes branches and opens, updates and reads pull requests through git and the gh tool." },
+    { "from": "core.outside", "to": "github", "kind": "http", "label": "reads" },
+    { "from": "core.settings", "to": "onepassword", "kind": "call", "label": "op", "description": "Secrets are fetched with the 1Password op tool." },
+    { "from": "engine.live", "to": "web.server", "kind": "http", "label": "live feed", "description": "The engine streams every new event to the app's server over a local connection." },
+    { "from": "engine.loop", "to": "engine.prs", "kind": "call", "label": "each heartbeat" },
+    { "from": "engine.loop", "to": "engine.agents", "kind": "call", "label": "each heartbeat" },
+    { "from": "engine.loop", "to": "engine.alerts", "kind": "call", "label": "each heartbeat" },
+    { "from": "web.server", "to": "cli", "kind": "call", "label": "runs cpd", "description": "Actions clicked in the app are carried out by running cpd commands." },
+    { "from": "scripts", "to": "cli", "kind": "call", "label": "builds and installs" }
+  ],
+  "annotations": [
+    { "path": "core/src/pr/gh.rs", "note": "Over 3,000 lines: all of cpd's talk with GitHub's gh tool is here.", "tags": ["hotspot"] }
+  ],
+  "flows": [
+    {
+      "id": "ticket-to-pr",
+      "title": "A ticket becomes a pull request",
+      "description": "How one piece of work travels from the lead agent's plan to a pull request on GitHub.",
+      "steps": [
+        { "node": "pi.lib", "note": "The lead agent, inside pi, writes the plan and its jobs by running cpd commands." },
+        { "node": "cli", "note": "cpd reads each command and hands it to the shared rules." },
+        { "node": "core.planning", "note": "The plan, its parts and its jobs are checked and saved." },
+        { "node": "core.store", "note": "Everything is written to the machine's database." },
+        { "node": "engine.loop", "note": "On its next heartbeat the engine sees jobs that are ready to start." },
+        { "node": "core.sessions", "note": "It opens a fresh worker agent for each job, in its own copy of the code." },
+        { "node": "core.delivery", "note": "When a worker hands in its result, cpd merges it, runs the quality check and opens the pull request." },
+        { "node": "github", "note": "The pull request appears on GitHub, ready for review." }
+      ]
+    },
+    {
+      "id": "watch-live",
+      "title": "Watching work live in the app",
+      "description": "How a change in cpd shows up on someone's screen.",
+      "steps": [
+        { "node": "core.inbox", "note": "Something happens, such as a job finishing, and cpd records an event." },
+        { "node": "engine.live", "note": "The engine's live feed sends the new event out straight away." },
+        { "node": "web.server", "note": "The app's local server receives it and works out what changed on screen." },
+        { "node": "web.ui.cockpit", "note": "The plan board and inbox update in the browser." }
+      ]
+    }
+  ],
+  "tour": [
+    { "node": "cli", "title": "One program, many jobs", "note": "cpd is a single program. People and AI agents type cpd commands to create plans, add jobs and check on progress." },
+    { "node": "core", "title": "The shared rules", "note": "All of cpd's knowledge lives here, so the commands and the background engine behave exactly the same way." },
+    { "node": "engine", "title": "Always running", "note": "The engine wakes every few seconds on each machine, starting ready jobs, watching pull requests and keeping agents alive." },
+    { "node": "pi", "title": "Inside the agent", "note": "The lead and the workers are AI agents running in pi. This add-on connects them to cpd and keeps them safe." },
+    { "node": "web", "title": "Watching and steering", "note": "The web and desktop app show every plan and conversation live, and let you answer what's waiting for you." },
+    { "node": "github", "title": "Where work ends up", "note": "Each finished piece of work becomes a pull request on GitHub." },
+    { "node": "web/src/ui/cockpit/PlanView.tsx", "title": "A plan at a glance", "note": "This screen draws one plan and its jobs, showing what's done, running and waiting." }
+  ]
+}
