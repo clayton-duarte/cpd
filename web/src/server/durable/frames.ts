@@ -14,6 +14,7 @@ import { arr, isObj, num, obj, protocolError, str, type Obj } from "./frames/val
 import { FOLD_KINDS, foldTitle, isoOf, skillsBaseline, skillsMessage, textOf } from "./frames/message-fields.ts";
 import type { Dialect, DialectOutput, DurableFacts, DurableTranscript } from "./frames/types.ts";
 import { blocksOf, parseEntry, toolBlocksOf, type Parsed, type ToolBlock } from "./frames/view-entries.ts";
+import { adopt, agentOf, costOf, liveMessageOf, liveOf, queuedOf, slotsOf, type Slot, type View } from "./frames/view-documents.ts";
 
 export { dialogFromRequest } from "./frames/ui-request.ts";
 export type { BaseFrame, Dialect, DialectOutput, DurableFacts, DurableTranscript, Gap, IncrementFrame } from "./frames/types.ts";
@@ -34,73 +35,6 @@ export function assertSupportedHost(welcome: { pi_durable: string; protocol: num
     );
   }
 }
-
-type View = { entries: unknown[]; before?: number; docs: Obj };
-type Slot = { callId: string; name: string; status: string; entry?: number };
-type Queued = { id: number; mode: string };
-type AgentFacts = { model?: string; thinking?: string };
-
-function adopt(raw: unknown): View {
-  const v = obj(raw, "view");
-  const entries = arr(v.entries, "view.entries");
-  const docs = obj(v.docs, "view.docs");
-  if (v.before !== undefined) num(v.before, "view.before");
-  return { entries, docs, ...(v.before === undefined ? {} : { before: v.before as number }) };
-}
-
-// An absent document is unknown; a present one that is not an object is a protocol error.
-const doc = (view: View, name: string): Obj => {
-  const d = view.docs[name];
-  return d === undefined ? {} : obj(d, `document ${name}`);
-};
-const liveOf = (view: View): Obj => doc(view, "pi.live");
-const liveMessageOf = (view: View): Obj | undefined => {
-  const generation = liveOf(view).generation;
-  return isObj(generation) && isObj(generation.message) ? generation.message : undefined;
-};
-const slotsOf = (view: View): Slot[] => {
-  const tools = liveOf(view).tools;
-  if (tools === undefined) return [];
-  return arr(tools, "pi.live tools").map((t) => {
-    const o = obj(t, "tool slot");
-    return {
-      callId: str(o.callId, "slot callId"),
-      name: str(o.name, "slot name"),
-      status: str(o.status, "slot status"),
-      ...(typeof o.entry === "number" ? { entry: o.entry } : {}),
-    };
-  });
-};
-const queuedOf = (view: View): Queued[] => {
-  const items = doc(view, "pi.inbox").items;
-  if (items === undefined) return [];
-  return arr(items, "inbox items")
-    .map((q) => obj(q, "inbox item"))
-    .filter((o) => o.mode !== "write")
-    .map((o) => ({ id: num(o.id, "inbox id"), mode: str(o.mode, "inbox mode") }));
-};
-const agentOf = (view: View): AgentFacts => {
-  const agent = doc(view, "pi.agent");
-  const out: AgentFacts = {};
-  if (agent.model !== undefined) {
-    const m = obj(agent.model, "agent.model");
-    out.model = `${str(m.provider, "model provider")}/${str(m.modelId, "model id")}`;
-  }
-  if (typeof agent.thinkingLevel === "string") out.thinking = agent.thinkingLevel;
-  return out;
-};
-const costOf = (view: View): number => {
-  const usage = doc(view, "pi.usage");
-  let total = 0;
-  for (const part of [usage.models, usage.tools]) {
-    if (!isObj(part)) continue;
-    for (const u of Object.values(part)) {
-      const cost = isObj(u) && isObj(u.cost) ? u.cost.total : undefined;
-      if (typeof cost === "number") total += cost;
-    }
-  }
-  return total;
-};
 
 const same = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
 
