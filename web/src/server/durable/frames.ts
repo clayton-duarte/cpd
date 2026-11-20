@@ -12,28 +12,13 @@ import {
 import { createReplica } from "./ops.ts";
 import { arr, isObj, num, obj, protocolError, str, type Obj } from "./frames/validation.ts";
 import { FOLD_KINDS, foldTitle, isoOf, skillsBaseline, skillsMessage, textOf } from "./frames/message-fields.ts";
+import type { Dialect, DialectOutput, DurableFacts, DurableTranscript } from "./frames/types.ts";
 
 export { dialogFromRequest } from "./frames/ui-request.ts";
+export type { BaseFrame, Dialect, DialectOutput, DurableFacts, DurableTranscript, Gap, IncrementFrame } from "./frames/types.ts";
 
 // The dialect seam (CONTRACT 10.8): durable-host protocol 1 (pi-durable 1.3.0 `snapshot` / `events`) and
 // protocol 2 (pi-durable 1.5.0 `view` / `ops`) -> domain transcript.
-
-export interface DurableFacts {
-  model?: string;
-  thinking?: string | null;
-  busy: boolean;
-  compacting: boolean;
-  costUsd: number;
-  lastContextTokens?: number;
-  queued: { id: number; mode: string }[];
-  cwd?: string;
-}
-export interface DurableTranscript {
-  readonly items: TranscriptItem[];
-  readonly facts: DurableFacts;
-  readonly before?: number;
-  readonly openDialog?: Dialog | undefined;
-}
 
 export const SUPPORTED_HOSTS: readonly { protocol: 1 | 2; piDurable: string }[] = [
   { protocol: 1, piDurable: "1.3.0" },
@@ -47,32 +32,6 @@ export function assertSupportedHost(welcome: { pi_durable: string; protocol: num
       { piDurable: welcome.pi_durable, protocol: welcome.protocol },
     );
   }
-}
-
-export interface DialectOutput {
-  append: TranscriptItem[];
-  update: TranscriptItem[];
-  deltas: { itemId: string; blockIndex: number; blockType: "text" | "thinking"; text: string }[];
-  busy?: boolean;
-  compacting?: boolean;
-  queued?: { id: number; mode: string }[];
-  agent?: { model?: string; thinking?: string | null };
-  replaced?: boolean;
-}
-export interface Gap {
-  readonly after: number;
-  readonly upTo: number;
-}
-/** A `snapshot` (protocol 1) or `view` (protocol 2) frame; epoch and seq are the protocol 2 stream cursor. */
-export type BaseFrame = { snapshot: unknown } | { view: unknown; epoch?: string; seq?: number };
-/** An `events` (protocol 1) or `ops` (protocol 2) frame. */
-export type IncrementFrame = { events: unknown[] } | { ops: unknown[]; epoch?: string; seq?: number };
-export interface Dialect {
-  applyBase(frame: BaseFrame): { transcript: DurableTranscript };
-  applyIncrement(frame: IncrementFrame): DialectOutput;
-  applyHistory(frame: { entries: readonly unknown[]; next?: string }): void;
-  readonly gap: Gap | undefined;
-  readonly transcript: DurableTranscript;
 }
 
 /** Text and thinking blocks of an assistant message; a live (partial) message may lack fields. */
