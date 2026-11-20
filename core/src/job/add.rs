@@ -65,6 +65,34 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 
 /// [`add`] on an open `env`: what a test hands in.
 pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
+    add_with_selection_in(env, args, None)
+}
+
+/// Add a Job through the common writer boundary, optionally with a direct selection.
+pub(crate) fn add_with_selection_in(
+    env: &mut Env,
+    args: AddArgs,
+    selection: Option<crate::policy::RoleSelection>,
+) -> Result<Output, CpdError> {
+    if let Some(selection) = selection {
+        if selection.model.trim().is_empty() {
+            return Err(CpdError::bad_row("empty direct Job model"));
+        }
+        let path = args
+            .spec
+            .as_deref()
+            .ok_or_else(|| CpdError::bad_row("direct Job selection requires a Spec"))?;
+        let kind = args.kind.as_deref().unwrap_or("work");
+        let spec = spec::read_for(path, kind)?;
+        spec.check_kind(kind)?;
+        return Err(CpdError::bad_row(
+            "direct Job selection persistence is unsupported",
+        ));
+    }
+    add_legacy_in(env, args)
+}
+
+fn add_legacy_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     // A Manager runs this only on a Lead-less shaping Plan of its own Context (commands.md §5.1; air-d19, air-d22).
     let shaping = env
@@ -807,16 +835,4 @@ pub(crate) fn added_docs(
         }
     }
     Ok(added)
-}
-
-/// Direct-selection add boundary, not yet supported by the Job writer.
-#[cfg(test)]
-pub(crate) fn add_with_selection_in(
-    _env: &mut Env,
-    _args: AddArgs,
-    _selection: crate::plan::jobs::JobSelection,
-) -> Result<Output, CpdError> {
-    Err(CpdError::bad_row(
-        "direct Job selection persistence is unsupported",
-    ))
 }

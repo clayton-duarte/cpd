@@ -64,8 +64,15 @@ fn job_direct_selection_roundtrip() {
     });
     let spec = _dir.path().join("direct-spec.json");
     std::fs::write(&spec, r#"{"goal":"g","context":"c","touches":["src/a.rs"],"acceptance":["works"],"out_of_scope":[]}"#).unwrap();
-    add_with_selection_in(&mut env, args("direct", &spec), selection.clone())
-        .expect("direct writer accepts a complete selection");
+    add_with_selection_in(
+        &mut env,
+        args("direct", &spec),
+        Some(match selection.clone() {
+            JobSelection::Direct(direct) => direct,
+            _ => unreachable!(),
+        }),
+    )
+    .expect("direct writer accepts a complete selection");
     let jobs = load(&mut env);
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].selection(), selection);
