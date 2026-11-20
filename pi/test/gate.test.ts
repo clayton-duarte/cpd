@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -77,6 +77,16 @@ test("the CI workflow sets NEXTEST_TEST_THREADS: \"8\" in the env of the Rust te
 });
 
 // CI runs on pull_request and workflow_dispatch (push to main removed per pro-d498).
+test("all CI workflows use GitHub-hosted Ubuntu runners", () => {
+  const workflows = join(fileURLToPath(import.meta.url), "..", "..", "..", ".github", "workflows");
+  for (const file of readdirSync(workflows).filter((name) => /\.ya?ml$/.test(name))) {
+    const workflow = readFileSync(join(workflows, file), "utf8");
+    const runners = [...workflow.matchAll(/^\s*runs-on:\s*(.+)$/gm)].map((match) => match[1]);
+    assert.ok(runners.length > 0, file);
+    assert.deepEqual(runners, runners.map(() => "ubuntu-latest"), file);
+  }
+});
+
 test("the CI workflow runs on pull_request and workflow_dispatch", () => {
   const ci = readFileSync(join(fileURLToPath(import.meta.url), "..", "..", "..", ".github", "workflows", "ci.yml"), "utf8");
   assert.doesNotMatch(ci, /^  push:/m);
