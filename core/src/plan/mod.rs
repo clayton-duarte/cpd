@@ -406,3 +406,6 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     };
     crate::atomic::write_atomic(path, text).map_err(failed)
 }
+
+#[cfg(test)]
+mod job_direct_selection_tests;

@@ -808,3 +808,15 @@ pub(crate) fn added_docs(
     }
     Ok(added)
 }
+
+/// Direct-selection add boundary, not yet supported by the Job writer.
+#[cfg(test)]
+pub(crate) fn add_with_selection_in(
+    _env: &mut Env,
+    _args: AddArgs,
+    _selection: crate::plan::jobs::JobSelection,
+) -> Result<Output, CpdError> {
+    Err(CpdError::bad_row(
+        "direct Job selection persistence is unsupported",
+    ))
+}

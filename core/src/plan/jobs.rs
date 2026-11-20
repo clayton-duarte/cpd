@@ -502,3 +502,19 @@ mod tests {
         );
     }
 }
+
+/// Persisted Job selection at the Job-row boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JobSelection {
+    LegacyTier(String),
+    Direct(crate::policy::RoleSelection),
+    Unselected,
+}
+
+impl Job {
+    pub fn selection(&self) -> JobSelection {
+        self.tier
+            .clone()
+            .map_or(JobSelection::Unselected, JobSelection::LegacyTier)
+    }
+}

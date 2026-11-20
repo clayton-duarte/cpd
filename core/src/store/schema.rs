@@ -1188,3 +1188,6 @@ mod host_bound_tests {
         assert_eq!(row, (0, None));
     }
 }
+
+#[cfg(test)]
+mod direct_selection_tests;
