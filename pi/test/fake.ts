@@ -271,7 +271,12 @@ export class Fixture {
     mkdirSync(join(this.dir, "bin"));
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
-    this.watcher = watch(this.cpdHome, { recursive: true }, () => notify());
+    // Only adapter-log writes need filesystem notifications. Watching the whole
+    // home recursively races with tests replacing summary directories with files
+    // on Linux (Node's recursive watcher can throw ENOTDIR on a stale child).
+    const logDir = join(this.cpdHome, "run", "adapter");
+    mkdirSync(logDir, { recursive: true });
+    this.watcher = watch(logDir, () => notify());
     mkdirSync(this.adapterDir);
     for (const skill of ["cpd-lead", "cpd-manager"]) {
       mkdirSync(join(this.adapterDir, "skills", skill), { recursive: true });

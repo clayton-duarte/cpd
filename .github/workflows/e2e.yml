@@ -1,7 +1,7 @@
 name: E2E
 
 # Non-blocking desktop e2e (plan desktop-e2e, job e2e-ci): the Playwright Electron suite on the
-# self-hosted hs runner under a virtual display. Deliberately separate from ci.yml's Gate: this
+# GitHub-hosted Ubuntu runner under a virtual display. Deliberately separate from ci.yml's Gate: this
 # check is not in [pr] required_checks ("gate" only), so a failure surfaces as pr-feedback and
 # never blocks a merge.
 on:
@@ -11,29 +11,27 @@ on:
 permissions:
   contents: read
 
-# One run per ref: a newer run of the same pull request cancels the older one (each hs runner
-# runs one job at a time).
+# One run per ref: a newer run of the same pull request cancels the older one.
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   e2e:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      # clean: false keeps node_modules/ between runs in the runner's workspace, like ci.yml.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          clean: false
-      # Drop untracked leftovers of an earlier branch (not ignored files: node_modules/ stays).
-      - name: Remove untracked files
-        run: git clean -ffd
-      # Like ci.yml, no setup steps: the runner provides node >= 22.19.0 (engines, package.json) and
-      # pnpm 12.6.0 (packageManager, package.json).
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - name: Dependencies
         run: pnpm install --frozen-lockfile
+      - name: Desktop system dependencies
+        run: pnpm --filter cpd-web-client exec playwright install-deps chromium
       # pnpm-workspace.yaml sets allowBuilds.electron = false, so the frozen install leaves the
       # Electron binary out; this downloads it (web/package.json, e2e:install).
       - name: Electron binary

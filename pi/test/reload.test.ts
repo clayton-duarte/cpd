@@ -625,7 +625,9 @@ test("a log that cannot be written is notified once per run, starts no turn, and
     await f.pi.fire("session_shutdown", { reason: "reload" });
     await f.pi.fire("session_start", { reason: "reload" });
   };
-  mkdirSync(join(f.cpdHome, "run"));
+  // The fixture creates the adapter-log directory for its filesystem watcher.
+  // Replace that directory with a file to exercise a genuinely unwritable log.
+  rmSync(join(f.cpdHome, "run", "adapter"), { recursive: true });
   writeFileSync(join(f.cpdHome, "run", "adapter"), "a file where the log directory should be");
   f.load(arm(t));
   await f.pi.fire("session_start");

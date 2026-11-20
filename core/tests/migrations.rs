@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -1538,11 +1539,12 @@ fn script_tree(existing: &[&str]) -> (tempfile::TempDir, PathBuf) {
         scripts.join("sync-version.sh"),
     )
     .unwrap();
-    // sync-version.sh, which new-migration.sh runs, reads and rewrites these.
-    fs::create_dir_all(dir.path().join("core/src/events")).unwrap();
-    for f in ["core/src/events/kind.rs", "Cargo.toml", "Cargo.lock"] {
-        fs::copy(repo_root().join(f), dir.path().join(f)).unwrap();
-    }
+    // sync-version.sh, which new-migration.sh runs, takes the tree's own build first: a stub,
+    // so these tests never reach a cpd installed on the machine (version_sync's tests cover the sync).
+    let stub = dir.path().join("target/debug/cpd");
+    fs::create_dir_all(stub.parent().unwrap()).unwrap();
+    fs::write(&stub, "#!/bin/sh\n[ \"$*\" = \"version sync\" ]\n").unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     for name in existing {
         fs::write(migrations.join(name), "-- cpd-migration: additive\n").unwrap();
     }

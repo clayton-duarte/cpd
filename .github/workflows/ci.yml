@@ -1,6 +1,6 @@
 name: CI
 
-# cpd's PR gate (hs-d16, hs-d17): the Gate, `pnpm run verify`, on the self-hosted runner on hs.
+# cpd's PR gate: the Gate, `pnpm run verify`, on GitHub-hosted Ubuntu.
 on:
   pull_request:
   workflow_dispatch:
@@ -8,26 +8,30 @@ on:
 permissions:
   contents: read
 
-# One run per branch: a newer push cancels the older run of a pull request (each runner runs one job at a time; hs has two).
+# One run per branch: a newer push cancels the older run of a pull request.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   gate:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       # Full history: scripts/check-migrations-frozen.sh diffs against origin/main.
-      # clean: false keeps target/ and node_modules/ between runs in the runner's workspace
-      # (a clean checkout would rebuild everything each time).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          clean: false
-      # Drop untracked leftovers of an earlier branch (not ignored files: target/ and node_modules/ stay).
-      - name: Remove untracked files
-        run: git clean -ffd
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      # Reads the pnpm version from package.json's packageManager.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy && rustup default stable
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
+        with:
+          tool: nextest
       # The Gate's stages (package.json, verify:steps) as separate steps, so the run shows where it spends time and what failed;
       # pi/test/gate.test.ts pins them equal. Each runs under gate-run.sh (the leak check); the first failure stops the job (hs-d355).
       # Installs node_modules when they are stale (the Gate does it in preverify).
