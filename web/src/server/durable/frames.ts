@@ -1,5 +1,4 @@
 import {
-  FOLD_TITLE_MAX,
   WebError,
   type AssistantBlock,
   type AssistantItem,
@@ -13,6 +12,8 @@ import {
 } from "../../protocol/domain.ts";
 import type { HostFrame } from "./client.ts";
 import { createReplica } from "./ops.ts";
+import { arr, isObj, num, obj, protocolError, str, type Obj } from "./frames/validation.ts";
+import { FOLD_KINDS, foldTitle, isoOf, skillsBaseline, skillsMessage, textOf } from "./frames/message-fields.ts";
 
 // The dialect seam (CONTRACT 10.8): durable-host protocol 1 (pi-durable 1.3.0 `snapshot` / `events`) and
 // protocol 2 (pi-durable 1.5.0 `view` / `ops`) -> domain transcript.
@@ -72,70 +73,6 @@ export interface Dialect {
   applyHistory(frame: { entries: readonly unknown[]; next?: string }): void;
   readonly gap: Gap | undefined;
   readonly transcript: DurableTranscript;
-}
-
-type Obj = Record<string, unknown>;
-const protocolError = (message: string): never => {
-  throw new WebError("protocol_error", message);
-};
-const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
-const obj = (v: unknown, what: string): Obj => (isObj(v) ? v : protocolError(`${what} is not an object`));
-const str = (v: unknown, what: string): string => (typeof v === "string" ? v : protocolError(`${what} is not a string`));
-const arr = (v: unknown, what: string): unknown[] => (Array.isArray(v) ? v : protocolError(`${what} is not an array`));
-
-const num = (v: unknown, what: string): number => (typeof v === "number" && Number.isFinite(v) ? v : protocolError(`${what} is not a number`));
-
-const isoOf = (message: Obj): { at?: string } =>
-  typeof message.timestamp === "number" && Number.isFinite(message.timestamp) ? { at: new Date(message.timestamp).toISOString() } : {};
-
-/** Text blocks of a message `content` (a string as is), joined with "\n". */
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((b): b is Obj => isObj(b) && b.type === "text" && typeof b.text === "string")
-    .map((b) => b.text as string)
-    .join("\n");
-}
-
-// Only the producer's digest baseline may omit a model message.
-function skillsBaseline(entry: Obj): boolean {
-  if (entry.kind !== "cpd-skills" || !Array.isArray(entry.model) || entry.model.length !== 0) return false;
-  const data = obj(entry.data, "skills data");
-  str(data.skill, "skills skill");
-  const files = obj(data.files, "skills files");
-  for (const digest of Object.values(files)) {
-    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) protocolError("invalid skills digest");
-  }
-  return true;
-}
-
-function skillsMessage(message: Obj): void {
-  if (message.role !== "user") protocolError(`skills message: expected role user, got ${String(message.role)}`);
-  if (typeof message.content === "string") return;
-  if (!Array.isArray(message.content) || !message.content.every((block: unknown) => isObj(block) && block.type === "text" && typeof block.text === "string")) {
-    protocolError("invalid skills message content");
-  }
-}
-
-const cut = (s: string): string => s.slice(0, FOLD_TITLE_MAX);
-const firstLine = (s: string): string => cut(s.split("\n")[0] ?? "");
-
-const FOLD_KINDS: readonly FoldKind[] = ["cpd-context", "cpd-plan-decision", "cpd-plan-summary", "cpd-skills"];
-
-function foldTitle(kind: FoldKind, body: string, data: Obj): string {
-  switch (kind) {
-    case "cpd-context":
-      return typeof data.summary === "string" && data.summary !== "" ? cut(data.summary) : firstLine(body);
-    case "cpd-plan-summary":
-      return `Plan review ${String(data.review)} summary`;
-    case "cpd-plan-decision":
-      return `Plan review ${String(data.review)} ${data.approved === true ? "approved" : "rejected"}`;
-    case "cpd-skills":
-      return firstLine(body);
-    case "cpd":
-      return firstLine(body);
-  }
 }
 
 /** Text and thinking blocks of an assistant message; a live (partial) message may lack fields. */
