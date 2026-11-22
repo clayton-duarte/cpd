@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import type { DragEvent, ReactElement } from "react";
 import type { Connection } from "../state/connection.ts";
 import type { SessionView } from "../state/store.ts";
+import type { ContextTreeModel } from "../protocol/cockpit.ts";
 import { Button } from "./components/button.tsx";
 import { ChatHeader } from "./chat/ChatHeader.tsx";
+import { resolveChatCommand } from "./chatCommands.ts";
 import { Transcript } from "./chat/Transcript.tsx";
 import { buildPrompt, filesFromDrop } from "./composer/attachments.ts";
 import type { FileReaderBoundary } from "./composer/attachments.ts";
@@ -36,9 +38,11 @@ function useChatToggles(): {
 
 const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes("Files");
 
-export function ChatPane(props: { view: SessionView; connection: Connection; reader: FileReaderBoundary; stopped?: boolean }): ReactElement {
+export function ChatPane(props: { view: SessionView; connection: Connection; reader: FileReaderBoundary; tree?: ContextTreeModel | null; stopped?: boolean }): ReactElement {
   const { view, connection, reader, stopped = view.ref?.state === "stopped" } = props;
   const composer = useRef<ComposerHandle>(null);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  useEffect(() => setCommandError(null), [view.id]);
   const { dialog } = view;
   const toggles = useChatToggles();
   const sessionKey = view.ref?.key ?? view.id;
@@ -67,6 +71,11 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
         completion={view.completion ?? null}
         {...(view.ref === null ? {} : { role: view.ref.role, runner: view.ref.runner })}
       />
+      {commandError === null ? null : (
+        <p role="alert" data-part="chat-command-error" className="mx-4 text-sm text-destructive">
+          {commandError}
+        </p>
+      )}
       {stopped ? (
         <Button type="button" data-action="resume" onClick={() => {
           try { connection.action({ kind: "session.resume", sessionId: view.id }); } catch { /* The connection reports transport errors to the toast. */ }
@@ -113,6 +122,21 @@ export function ChatPane(props: { view: SessionView; connection: Connection; rea
             />
           }
           onSubmit={({ text, attachments, whenBusy }) => {
+            const command = resolveChatCommand(text, props.tree ?? null, view.id);
+            if (command.kind === "error") {
+              setCommandError(command.message);
+              return;
+            }
+            if (command.kind === "action") {
+              setCommandError(null);
+              try {
+                connection.action(command.action);
+              } catch {
+                // The connection reports transport errors through the existing error toast.
+              }
+              return;
+            }
+            setCommandError(null);
             const { text: prompt, images, files } = buildPrompt(text, attachments);
             connection.submit({ text: prompt, images, ...(files.length > 0 ? { files } : {}), whenBusy });
           }}

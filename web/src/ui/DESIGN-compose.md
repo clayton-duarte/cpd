@@ -8,7 +8,7 @@ Scope: Plan `webui-phase3-good`, Workflow `ui`, package `web/`, amended by the a
 
 ## 0. ChatPane wiring (the one place the three pieces meet)
 
-`web/src/ui/ChatPane.tsx` keeps its props `{ view: SessionView; connection: Connection; reader: FileReaderBoundary }` and the `div[data-chat-dropzone]` with its `onDragOver` (`preventDefault` when files are dragged) and `onDrop` (`preventDefault`, then `composer.current?.addFiles(filesFromDrop(e.dataTransfer))`), pinned by `App.test` "dropping an image sends it as an attachment".
+`web/src/ui/ChatPane.tsx` keeps its props `{ view: SessionView; connection: Connection; reader: FileReaderBoundary; tree: ContextTreeModel | null }` and the `div[data-chat-dropzone]` with its `onDragOver` (`preventDefault` when files are dragged) and `onDrop` (`preventDefault`, then `composer.current?.addFiles(filesFromDrop(e.dataTransfer))`), pinned by `App.test` "dropping an image sends it as an attachment".
 
 Child order inside the dropzone, top to bottom: `ChatHeader` (DESIGN-chat 1), `Transcript` (DESIGN-chat 2), then either the dialog card or the `Composer` (1): the dialog card (`AskCard` for `ask_user_question`, else `PlanReviewCard`; `readOnly = !dialog.interactive`) REPLACES the `Composer` while `view.dialog !== null`, and the `Composer` is shown only when it is null (pro-d82). The main `main[aria-label="Chat"]` is `flex flex-col`; `Transcript` is the only `flex-1 min-h-0` child.
 
@@ -18,7 +18,7 @@ What ChatPane passes (source field → prop):
 |---|---|---|
 | `Composer.busy` | `view.busy \|\| view.pending.some((p) => p.state === "sending")` (DESIGN-chat 2.4 and DESIGN.md 2h) | `view.busy`, `view.pending` |
 | `Composer.settings` | `<TierSelector capabilities footer models busy onConfigure onRequestModels />` | `view.capabilities`, `view.footer`, `view.models`, `view.busy`, `connection.configure`, `connection.listModels` |
-| `Composer.onSubmit` | `({ text, attachments, whenBusy }) => { const { text: prompt, images, files } = buildPrompt(text, attachments); connection.submit({ text: prompt, images, files, whenBusy }) }` | `attachments.ts` |
+| `Composer.onSubmit` | intercepts exact `/archive` and `/unarchive` commands (1.4.1), else `({ text, attachments, whenBusy }) => { const { text: prompt, images, files } = buildPrompt(text, attachments); connection.submit({ text: prompt, images, files, whenBusy }) }` | `attachments.ts`, `chatCommands.ts` |
 | `Composer.onCancelQueued` | `(id) => connection.abortSubmission(id)` | `connection` |
 | `Footer.footer` | `view.footer` | `SessionView.footer` (the Footer is mounted, 3) |
 | `AskCard.onRespond`, `PlanReviewCard.onRespond` | `(r) => connection.respond(dialog.id, r)` | `connection` |
@@ -148,7 +148,7 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 
 ### 1.4 Keyboard and submit behaviour
 
-`canSend` = `text.trim() !== "" || attachments.length > 0` (KEPT). `canSubmit` = `capabilities !== null && canSend`. `send()` is a no-op when `!canSubmit`; otherwise it calls `onSubmit({ text, attachments, whenBusy: "followUp" })` and clears text, attachments and rejections (KEPT).
+`canCompose` = `capabilities !== null`; `canAttach` = `canCompose && !archived`; `hasContent` = `text.trim() !== "" || attachments.length > 0`; `canSubmit` = `canCompose && hasContent && (!archived || text.trim() === "/unarchive")`. `send()` is a no-op when `!canSubmit`; otherwise it calls `onSubmit({ text, attachments, whenBusy: "followUp" })` and clears text, attachments and rejections (KEPT).
 
 | Key / action (focus in the textarea unless said) | Result |
 |---|---|
@@ -162,6 +162,18 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 - **Send is never disabled by `busy`.** It is disabled only when there is nothing to send, or when `capabilities` is `null`. Busy does not change what Send does: it submits a follow-up (`whenBusy: "followUp"`). **Resolution:** pro-d57 says "Send always enabled"; the approved preview disables Send for an empty composer, and this contract keeps that.
 - There is no Alt+Enter, no Ctrl+C abort and no busy-dependent Enter. The Phase 2 `Steer` on busy Enter is removed (pro-d57).
 
+### 1.4.1 Chat slash commands
+
+`web/src/ui/chatCommands.ts` owns command parsing and target resolution. `ChatPane` intercepts exact `/archive` and `/unarchive` before `buildPrompt`/`connection.submit`; a recognized command dispatches a `CockpitAction` and produces no user turn. Unknown slash commands continue to the agent. A recognized command with arguments is a local error and is never sent to the agent.
+
+| Selected chat | `/archive` | `/unarchive` |
+|---|---|---|
+| Manager | `context.archive` (the recursive Context cascade) | `context.unarchive` |
+| Plan Lead | `plan.archive` | `plan.unarchive` |
+| Standalone/forked Lead | `session.archive` | `session.unarchive` |
+
+Neither command asks for confirmation. The current session id is resolved through `ContextTreeModel`; `SessionRef.key` is not parsed. When no Manager/Plan target exists, ChatPane renders `p[role="alert"][data-part="chat-command-error"]` and does not submit the text.
+
 ### 1.5 States
 
 | State | Rendering |
@@ -169,6 +181,8 @@ div[data-part="composer"]                                       mx-3 mb-2.5 flex
 | idle | footer: attach, settings, Send (disabled when empty) |
 | busy (`view.busy` or a send pending) | the same footer, plus the Stop button when `capabilities.abort.supported` (1.2); the `InputGroup` carries `prompt-border-pulse` (DESIGN.md 2h); no Steer or Follow-up control exists |
 | `capabilities === null` | textarea, attach button and file picker `disabled`; Send `disabled`; the placeholder is the same string |
+| archived | textarea enabled; attach button and file picker `disabled`; only the exact `/unarchive` text enables Send; placeholder `Session is archived — type /unarchive to restore it` |
+| chat-command error | `p[role="alert"][data-part="chat-command-error"]` appears below `ChatHeader`; it clears on the next normal submit or session change |
 | queued present | queue chips in the header (1.2) |
 | attachments staged | attachment chips in the header |
 | rejections | the `role="alert"` list above the InputGroup |

@@ -354,7 +354,7 @@ export function App(props: AppProps): ReactElement {
         session === null ? (
           <Empty className="h-full text-muted-foreground">Select a session</Empty>
         ) : (
-          <ErrorBoundary name="ChatPane" {...crash}><ChatPane view={session} connection={connection} reader={reader} stopped={session.attached ? session.ref?.state === "stopped" : selectedTreeSession?.ref.state === "stopped"} /></ErrorBoundary>
+          <ErrorBoundary name="ChatPane" {...crash}><ChatPane view={session} connection={connection} reader={reader} tree={cockpit.tree} stopped={session.attached ? session.ref?.state === "stopped" : selectedTreeSession?.ref.state === "stopped"} /></ErrorBoundary>
         )
       }
       inbox={

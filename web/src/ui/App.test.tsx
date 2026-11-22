@@ -189,7 +189,7 @@ describe("App", () => {
     });
   });
 
-  it("selecting an archived session disables the Composer", () => {
+  it("selecting an archived session permits only the /unarchive command", () => {
     const transport = new FakeTransport();
     const view = mount(<App transport={transport} scheduler={new FakeScheduler()} reader={reader} newId={() => "c1"} />);
     mounted = view;
@@ -209,7 +209,10 @@ describe("App", () => {
     });
     const ta = view.container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');
     expect(ta).not.toBeNull();
-    expect(ta!.disabled).toBe(true);
+    expect(ta!.disabled).toBe(false);
+    expect(ta!.placeholder).toContain("/unarchive");
+    expect(view.container.querySelector<HTMLButtonElement>('button[data-action="send"]')!.disabled).toBe(true);
+    expect(view.container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!.disabled).toBe(true);
   });
 });
 

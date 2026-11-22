@@ -1019,9 +1019,9 @@ An archived fork Session has no Delete.
 
 **Server hot reload.** The Electron main process reloads the server and the renderer on `SIGUSR1`. The steps and their failure modes are in `docs/contract.md#37b-the-serve-process-runtime-and-port-supervision` (Server hot reload).
 
-### 3h. Archived selection and the disabled Composer (pro-d406)
+### 3h. Archived selection and archive chat commands (pro-d406, amended by chat-archive-commands)
 
-Status: contract for the web Job that implements it. No reducer or `App` code does it yet.
+Status: the archive navigation is implemented; chat command routing lives in `chatCommands.ts` (DESIGN-compose 1.4.1).
 
 **Navigation out of an archived selection (A1).** The web compares the `cockpit.tree` it holds with the next one (a `cockpit.snapshot`, or a `cockpit.patch` of pane `tree`). It navigates when the selected session, the selected Plan or the selected Context goes from live (`archived` false) to archived (`archived` true). That covers an archive the User clicked, `/q` or `/quit` (CONTRACT 6.6) and engine E14 alike. It does **not** navigate when the User dispatches an archive: an archive can be refused (`archive_blocked`), and the User must then stay where they are. Where the selection goes:
 
@@ -1032,11 +1032,11 @@ Status: contract for the web Job that implements it. No reducer or `App` code do
 
 **Archived rows the User opens (A2).** An archived row opened on purpose from the Archive section (3d) keeps the selection. Only a live-to-archived transition navigates. A selection that is already archived when the client first sees it (a fresh load, a restore from `sessionStorage`) does not navigate either; the disabled Composer below covers it.
 
-**Composer disabled on an archived selection.** When the selected session, the selected Plan or the active Context (the Context of the selected session; the Header breadcrumb that showed it is removed, DESIGN-panes 4.1) is archived, the Composer's textarea, attach button and Send button are `disabled`, and the textarea placeholder reads exactly:
+**Composer on an archived selection.** When the selected session, the selected Plan or the active Context (the Context of the selected session; the Header breadcrumb that showed it is removed, DESIGN-panes 4.1) is archived, the Composer remains focusable so the User can type the recursive `/unarchive` command. The attach button and file picker are disabled; ordinary text and `/archive` cannot be submitted. The placeholder reads exactly:
 
-    Session is archived - unarchive to send messages
+    Session is archived — type /unarchive to restore it
 
-It replaces the Composer placeholder of DESIGN-compose.md while the condition holds. Unarchive (the archived row menu, 3g) clears it.
+`/unarchive` dispatches `context.unarchive`, `plan.unarchive` or `session.unarchive` by the same routing as DESIGN-compose 1.4.1. Unarchive from the archived row menu (3g) still clears the state too. `/archive` and `/unarchive` never ask for confirmation and never create an agent turn.
 
 ### 3i. TopPaneHeader, the shared pane header (pro-d84, pro-d85, pro-d86)
 

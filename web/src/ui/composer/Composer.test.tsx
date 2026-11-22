@@ -18,12 +18,12 @@ const base: Capabilities = {
 const reader: FileReaderBoundary = { readBase64: async () => "QUJD", readText: async () => "txt" };
 
 type Submit = { text: string; attachments: readonly Attachment[]; whenBusy: WhenBusy };
-function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queued?: QueuedSubmission[]; settings?: React.ReactNode } = {}) {
+function setup(over: { capabilities?: Capabilities | null; busy?: boolean; queued?: QueuedSubmission[]; settings?: React.ReactNode; archived?: boolean } = {}) {
   const submits: Submit[] = [];
   const onAbort = vi.fn();
   const onCancelQueued = vi.fn();
   const m = mount(
-    <Composer sessionId="s1" capabilities={over.capabilities === undefined ? base : over.capabilities} busy={over.busy ?? false} queued={over.queued ?? []}
+    <Composer sessionId="s1" capabilities={over.capabilities === undefined ? base : over.capabilities} archived={over.archived ?? false} busy={over.busy ?? false} queued={over.queued ?? []}
       reader={reader} onSubmit={(i) => submits.push(i)} onAbort={onAbort} onCancelQueued={onCancelQueued} settings={over.settings} />,
   );
   return { m, submits, onAbort, onCancelQueued };
@@ -185,19 +185,37 @@ it("without capabilities the textarea, attach button and send button are disable
   m.unmount();
 });
 
-it("archived Composer is disabled with the archived placeholder", () => {
-  const m = mount(
-    <Composer sessionId="s1" capabilities={base} archived busy={false} queued={[]} reader={reader}
-      onSubmit={() => {}} onAbort={() => {}} onCancelQueued={() => {}} />,
-  );
+it("archived Composer accepts /unarchive but no ordinary message", () => {
+  const { m, submits } = setup({ archived: true });
   const t = textarea(m.container);
-  expect(t.disabled).toBe(true);
+  const send = m.container.querySelector<HTMLButtonElement>('[data-action="send"]')!;
+  expect(t.disabled).toBe(false);
   expect(t.placeholder).toMatch(/archived/i);
+  expect(t.placeholder).toContain("/unarchive");
   expect(t.placeholder).not.toContain("Enter to send");
   const attach = m.container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!;
   expect(attach.disabled).toBe(true);
   expect(m.container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
+
+  typeText(t, "hello");
+  expect(send.disabled).toBe(true);
+  press(t, "Enter");
+  expect(submits).toEqual([]);
+
+  typeText(t, "/unarchive");
+  expect(send.disabled).toBe(false);
+  press(t, "Enter");
+  expect(submits).toEqual([{ text: "/unarchive", attachments: [], whenBusy: "followUp" }]);
+  m.unmount();
+});
+
+it("archived Composer does not submit /archive", () => {
+  const { m, submits } = setup({ archived: true });
+  const t = textarea(m.container);
+  typeText(t, "/archive");
   expect(m.container.querySelector<HTMLButtonElement>('[data-action="send"]')!.disabled).toBe(true);
+  press(t, "Enter");
+  expect(submits).toEqual([]);
   m.unmount();
 });
 

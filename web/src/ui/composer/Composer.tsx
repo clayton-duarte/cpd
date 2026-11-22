@@ -81,9 +81,11 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const archived = props.archived ?? false;
-  const canSend = capabilities !== null && !archived;
+  const canCompose = capabilities !== null;
+  const canAttach = canCompose && !archived;
+  const unarchiveCommand = text.trim() === "/unarchive";
   const hasContent = text.trim() !== "" || attachments.length > 0;
-  const canSubmit = canSend && hasContent;
+  const canSubmit = canCompose && hasContent && (!archived || unarchiveCommand);
   const stateRef = useRef({ attachments, capabilities, reader });
   useEffect(() => {
     stateRef.current = { attachments, capabilities, reader };
@@ -190,7 +192,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
         type="file"
         multiple
         aria-label="Attach files"
-        disabled={!canSend}
+        disabled={!canAttach}
         className="hidden"
         onChange={(e) => {
           const list = e.currentTarget.files;
@@ -328,9 +330,9 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
         <InputGroupTextarea
           ref={textareaRef}
           aria-label="Message"
-          disabled={!canSend}
+          disabled={!canCompose}
           rows={1}
-          placeholder={archived ? "Session is archived - unarchive to send messages" : "Ask anything… (Enter to send, Shift+Enter for newline)"}
+          placeholder={archived ? "Session is archived — type /unarchive to restore it" : "Ask anything… (Enter to send, Shift+Enter for newline)"}
           className="min-h-10 px-4 py-3 text-sm leading-relaxed"
           value={text}
           onChange={(e) => {
@@ -350,7 +352,7 @@ const SessionComposer = forwardRef<ComposerHandle, ComposerProps>(function Sessi
               size="icon-sm"
               className="rounded-full"
               aria-label="Attach files"
-              disabled={!canSend}
+              disabled={!canAttach}
               onClick={() => fileInputRef.current?.click()}
             >
               <PlusIcon />
