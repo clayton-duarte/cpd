@@ -228,6 +228,26 @@ impl GithubSource {
                 absent.push((!vanished.contains(&key), !s.own, s.created_at.clone(), key));
             }
         }
+        // A stale PR archive bit must not hide an open Workflow's PR when cached repository
+        // metadata explicitly establishes that the repository is active and unarchived.
+        let stale_owned: Vec<(String, i64, String)> = cx.store.read(|c| {
+            let mut stmt = c.prepare(
+                "SELECT pr.repo, pr.number, pr.created_at FROM pull_requests pr
+                 JOIN swr_repos r ON r.repo = pr.repo
+                 WHERE pr.state = 'open' AND pr.archived = 1
+                   AND r.is_archived = 0 AND r.inactive_at IS NULL
+                   AND EXISTS (SELECT 1 FROM workflows w WHERE w.pull_request = pr.id AND w.status = 'open')",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })?;
+        for (repo, number, created_at) in stale_owned {
+            let key = (repo, number);
+            if !prev.contains(&key) {
+                absent.push((!vanished.contains(&key), false, created_at, key));
+            }
+        }
         let floor = now.unix_timestamp() - SLACK_WINDOW;
         // Every active Slack-posted pull request not yet merged or closed is read each pass (pro-d453): one with no row is
         // first-seen, one whose row is open and not archived stays live (a teammate's PR is neither authored nor requested).
