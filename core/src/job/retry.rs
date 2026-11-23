@@ -134,6 +134,28 @@ fn decide(
             .with("found", found));
         }
     }
+    if let Some(workflow) = &job.workflow {
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM workflows WHERE plan = ?1 AND key = ?2",
+                [plan.as_str(), workflow.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if status
+            .as_deref()
+            .is_some_and(|s| matches!(s, "merged" | "cancelled"))
+        {
+            return Err(CpdError::new(
+                ErrorCode::WorkflowEnded,
+                format!(
+                    "Workflow {workflow} of Plan {plan} has ended; its Jobs cannot be retried."
+                ),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", workflow.as_str()));
+        }
+    }
     if job.status == "queued"
         && job.retry_tier.as_deref() == Some(tier)
         && retried_since_last_start(conn, plan, key)?
