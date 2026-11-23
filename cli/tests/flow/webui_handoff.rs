@@ -1,41 +1,43 @@
 use crate::common::{fx::Fx, refused};
-use cpd_core::host::spawn::{Pid, Signal, Spawn};
+use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use serde_json::json;
 
 #[test]
 fn real_webui_commands_prepare_validate_activate_and_reject_dead_records() {
     let fx = Fx::with_ports();
-    let entry = fx.env.cpd_home().join("web/src/server/serve.ts");
-    std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
-    std::fs::write(entry, "// fixture").unwrap();
-    let prepared = fx.cpd(&["webui", "--prepare"]).ok();
-    let pid = prepared["pid"].as_u64().unwrap() as u32;
+    let run = fx.env.cpd_home().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let pid = fx.fakes.spawn.spawn(&Launch::default()).unwrap();
     fx.fakes
         .spawn
-        .set_cmdline(Pid(pid), "node web/src/server/serve.ts");
-    assert_eq!(fx.cpd(&["webui", "--prepare"]).ok()["pid"], pid);
-    assert_eq!(fx.cpd(&["webui", "--ready"]).ok()["ready"], false);
-    refused(&fx.cpd(&["webui", "--activate"]), "setup_failed", 1);
-    let run = fx.env.cpd_home().join("run");
-    std::fs::write(
-        run.join("webui-prepared.json"),
-        json!({"pid":pid,"ready":true,"phase":"staged"}).to_string(),
-    )
-    .unwrap();
+        .set_cmdline(pid, "node web/src/server/serve.ts");
+    std::fs::write(run.join("webui-preparing.pid"), pid.0.to_string()).unwrap();
+    let record = json!({"pid":pid.0,"ready":true,"phase":"staged"}).to_string();
+    std::fs::write(run.join("webui-prepared.json"), &record).unwrap();
+    let launches = fx.fakes.spawn.launches().len();
+
     assert_eq!(fx.cpd(&["webui", "--ready"]).ok()["ready"], true);
-    fx.cpd(&["webui", "--activate"]).ok();
+    for flag in ["--prepare", "--activate"] {
+        let error = refused(&fx.cpd(&["webui", flag]), "setup_failed", 1);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("handoff is disabled")
+        );
+    }
+    assert_eq!(fx.fakes.spawn.launches().len(), launches);
+    assert!(fx.fakes.spawn.signals().is_empty());
+    assert!(!run.join("webui-activate.pid").exists());
     assert_eq!(
-        std::fs::read_to_string(run.join("webui-activate.pid")).unwrap(),
-        pid.to_string()
+        std::fs::read_to_string(run.join("webui-prepared.json")).unwrap(),
+        record
     );
-    // A later install must prepare a fresh process, not reuse the previous active generation.
-    std::fs::write(
-        run.join("webui-prepared.json"),
-        json!({"pid":pid,"ready":true,"phase":"active"}).to_string(),
-    )
-    .unwrap();
-    let later = fx.cpd(&["webui", "--prepare"]).ok();
-    assert_ne!(later["pid"], pid);
-    fx.fakes.spawn.signal(Pid(pid), Signal::Term).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(run.join("webui-preparing.pid")).unwrap(),
+        pid.0.to_string()
+    );
+
+    fx.fakes.spawn.exit(Pid(pid.0), 0);
     assert_eq!(fx.cpd(&["webui", "--ready"]).ok()["ready"], false);
 }
