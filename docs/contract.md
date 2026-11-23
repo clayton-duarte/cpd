@@ -479,6 +479,8 @@ and a valid selection.
 
 **Draft Jobs (active product definition, pro-d602).** A draft is fully defined work awaiting User Plan approval only. Undefined work and waits on the Lead or explore evidence must not be represented by draft Jobs. This User decision supersedes pro-d598 and the broader draft meaning in pro-d549; pro-d550 records the earlier acceptance of that broader premise. The required transition, lock and migration changes remain unspecified; this definition does not prescribe those mechanics or how existing drafts are reconciled. In particular, do not infer new lifecycle or counting behavior.
 
+**Draft and outside-handoff lifecycle (pro-d636, freeze pro-d635; appended clarification).** [Lifecycle rules to follow.]
+
 **Existing implementation documentation.** The command and engine descriptions that follow in this contract and in commands.md still describe the named-wait mechanics recorded by pro-d549 (including `--waiting-on`, lock behavior and parked-draft handling). They describe the currently documented interface, not the active product definition in pro-d602; this docs-only reconciliation does not verify runtime behavior or change it. Preserve those descriptions only as implementation context until the product-level transition, lock and migration requirements are decided. The affected mechanics are detailed in §3.7 and in commands.md §§4.8 and 5.1; schema and migration consequences are not specified here (§4.4–§4.5). The count rule for drafts under pro-d602 is not specified. An `open` Job is not a draft in the documented implementation: it is created `queued` when its Workflow starts (§3.8 "Opening"), and while its Workflow is `waiting` no `open` Job row exists.
 
 #### Job kinds (hs-d340, hs-d341)
