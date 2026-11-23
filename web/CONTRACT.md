@@ -3009,3 +3009,7 @@ The following are decided elsewhere or deferred:
 - **Dedup persistence layer:** The WebUI service owns one shared store persisted atomically in `$CPD_HOME/run/webui-dedup.json`. Successful session entries retain their acknowledgement for replay across connections and restarts. Failed actions are forgotten so a manual retry executes again. Browser request IDs use `crypto.randomUUID()` so a page reload cannot reuse an earlier outbox ID.
 
 Cockpit startup cancellation: stopping before the initial load completes cancels the owned retry timer and prevents further startup reads, snapshot publication, follow processes and safety work. The pending start settles normally; unresolved ready() rejects with reason stopped. An already-issued ReadModel call has no abort interface and may finish, but its late result/error is ignored. Starting a stopped service is a no-op; create a new service for a new lifecycle.
+
+## 35. WebUI handoff and candidate ownership (Plan `b101-webui-convergence`)
+
+A WebUI handoff transfers one production writer and its traffic ownership without losing persisted mutation receipts or client continuity. A staged candidate is not a production service. Production activation remains disabled in this workflow; this section documents the required handoff contract, not shipped activation or candidate reconciliation.
