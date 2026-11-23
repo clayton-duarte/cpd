@@ -702,7 +702,7 @@ fn a_gh_failure_for_a_pull_request_already_closed_is_not_a_failure() {
 
 #[test]
 fn an_unknown_plan_is_plan_not_found() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports_empty();
     fx.env
         .write_config("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n");
     refused(

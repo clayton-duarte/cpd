@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 /// `setup_with_fork` with Manager `mgr1` (`ctx`), Leads `lead1` (`ctx:pay`) and `lead2` (`ctx:other`), Worker `worker1`
 /// (`ctx:pay:api`) and the fork `fork1` of `lead1` (`ctx:pay (fork)`).
 fn world() -> Fx {
-    let fx = Fx::new();
+    let fx = Fx::with_ports_empty();
     setup_with_fork(&fx.env);
     fx.env.sql(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
@@ -79,7 +79,7 @@ fn pane_title(fx: &Fx, pane: &str) -> String {
         .to_owned()
 }
 
-/// `plan new pay` in Context `ctx` on fake ports: the Lead's session id and pane.
+/// Create a durable Lead, then seed a historical native Lead for pane coverage.
 fn new_plan(fx: &Fx) -> (String, String) {
     fx.env.write_tmux_config("");
     fx.cockpit();
@@ -99,10 +99,19 @@ fn new_plan(fx: &Fx) -> (String, String) {
             "Retry payouts",
         ])
         .ok();
-    (
-        out["lead"]["session"].as_str().unwrap().to_owned(),
-        out["lead"]["pane"].as_str().unwrap().to_owned(),
-    )
+    assert!(out["lead"]["pane"].is_null(), "{out}");
+    let lead = out["lead"]["session"].as_str().unwrap().to_owned();
+    assert!(!fx.panes().iter().any(|p| p.session == lead));
+    fx.env
+        .sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead'");
+    fx.cpd(&["session", "open", &lead]).ok();
+    let pane = fx
+        .panes()
+        .into_iter()
+        .find(|p| p.session == lead)
+        .unwrap()
+        .pane;
+    (lead, pane)
 }
 
 #[test]
