@@ -6,7 +6,6 @@ use std::sync::{Mutex, MutexGuard};
 use clap::Parser;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::host::runner::Reply;
 use cpd_core::output::Output;
 use cpd_core::ports::{Fakes, Ports};
 use cpd_core::store::Store;
@@ -51,7 +50,7 @@ impl Fixture {
         .into_iter()
         .map(|key| (key, std::env::var_os(key)))
         .collect();
-        // This binary serializes environment access and starts no threads.
+        // Environment changes are serialized; spawned threads are joined before restoration.
         unsafe {
             std::env::set_var("CPD_HOME", home.root());
             std::env::set_var("HOME", dir.path());
@@ -97,77 +96,50 @@ impl Drop for Fixture {
 
 #[test]
 fn concurrent_context_provisioning_serializes_same_id() {
-    use cpd_core::host::runner::{Call, Handler};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
-    use std::time::Duration;
+    use std::sync::{Arc, Barrier};
 
-    struct Gate {
-        entered: mpsc::SyncSender<()>,
-        release: Mutex<mpsc::Receiver<()>>,
-        first: AtomicBool,
-    }
-    impl Handler for Gate {
-        fn handle(&self, call: &Call) -> Reply {
-            if call.args.iter().any(|a| a == "new-window")
-                && call.args.iter().any(|a| a == "ctx-ctx")
-                && self.first.swap(false, Ordering::SeqCst)
-            {
-                let _ = self.entered.try_send(());
-                let _ = self
-                    .release
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(Duration::from_secs(5));
-                Reply::ok("@1 %1\n")
-            } else if call.args.iter().any(|a| a == "new-window") {
-                Reply::ok("@2 %2\n")
-            } else {
-                Reply::ok("")
-            }
-        }
-    }
     fn run(ports: &Ports, id: &str) -> Result<Output, CpdError> {
         let command =
             Cli::parse_from(["cpd", "new", id, "--title", "Context", "--owner", "acme"]).command;
         Ports::scope(ports, || cpd_core::context::run(command))
     }
-    let f = Fixture::new("pi");
-    let (entered_tx, entered_rx) = mpsc::sync_channel(1);
-    let (release_tx, release_rx) = mpsc::sync_channel(1);
-    (*f.fakes.runner).clone().route(
-        "tmux",
-        Arc::new(Gate {
-            entered: entered_tx,
-            release: Mutex::new(release_rx),
-            first: AtomicBool::new(true),
-        }),
-    );
+    let f = Fixture::new("durable");
+    // Initialize the store before either caller starts. Both callers cross the
+    // authored command boundary together, rather than waiting for tmux (which
+    // durable Managers never invoke).
+    drop(f.store());
+    let barrier = Arc::new(Barrier::new(3));
     std::thread::scope(|scope| {
-        let first_ports = f.fakes.ports.clone();
-        let first = scope.spawn(move || run(&first_ports, "ctx"));
-        entered_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("first provisioning reached tmux");
-        let waiter_ports = f.fakes.ports.clone();
-        let waiter = scope.spawn(move || run(&waiter_ports, "ctx"));
-        let other = run(&f.fakes.ports, "other");
-        release_tx.send(()).unwrap();
-        let first_result = first.join().unwrap();
-        let second_result = waiter.join().unwrap();
-        first_result.unwrap();
-        second_result.unwrap();
-        other.unwrap();
+        let mut callers = Vec::new();
+        for _ in 0..2 {
+            let ports = f.fakes.ports.clone();
+            let barrier = barrier.clone();
+            callers.push(scope.spawn(move || {
+                barrier.wait();
+                run(&ports, "ctx")
+            }));
+        }
+        barrier.wait();
+        for caller in callers {
+            caller.join().unwrap().unwrap();
+        }
+        run(&f.fakes.ports, "other").unwrap();
     });
     assert_eq!(f.rows("SELECT id FROM contexts WHERE id='ctx'").len(), 1);
     assert_eq!(
-        f.rows("SELECT id FROM sessions WHERE context='ctx' AND role='manager'")
+        f.rows(
+            "SELECT id FROM sessions WHERE context='ctx' AND role='manager' AND runner='durable'"
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        f.rows("SELECT id FROM events WHERE context='ctx' AND kind='session-registered'")
             .len(),
         1
     );
     assert_eq!(
-        f.rows("SELECT id FROM events WHERE context='ctx' AND kind='session-moved'")
-            .len(),
+        f.rows("SELECT a.id FROM events a JOIN events b ON a.txn=b.txn AND a.context=b.context JOIN sessions s ON s.id=b.session WHERE a.context='ctx' AND a.kind='context-created' AND b.kind='session-registered' AND s.role='manager'").len(),
         1
     );
 }

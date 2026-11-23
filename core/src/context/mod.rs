@@ -442,3 +442,5 @@ fn new(args: NewArgs) -> Result<Output, CpdError> {
     }
     Ok(Output::success(out))
 }
+#[cfg(test)]
+mod manager_durable_tests;

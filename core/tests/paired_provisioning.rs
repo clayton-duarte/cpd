@@ -215,53 +215,31 @@ fn paired_future_context_creation() {
             events
         );
     }
-    // External provisioning is outside the transaction: failure retains a retryable pair.
+    // The first-message write is after the pair commits. A filesystem failure
+    // retains the same durable pair and registration for a successful retry.
     {
         let f = Fixture::new("pi");
-        (*f.fakes.runner)
-            .clone()
-            .on(
-                "tmux",
-                |call| call.args.iter().any(|arg| arg == "list-sessions"),
-                Reply::ok("$1\n"),
-            )
-            .on(
-                "tmux",
-                |call| call.args.iter().any(|arg| arg == "has-session"),
-                Reply::ok(""),
-            )
-            .on(
-                "tmux",
-                |call| call.args.iter().any(|arg| arg == "list-panes"),
-                Reply::ok(""),
-            )
-            .on(
-                "tmux",
-                |call| call.args.iter().any(|arg| arg == "new-window"),
-                Reply::exit(1, "", "injected tmux failure"),
-            );
-        let error = f
-            .context(CONTEXT_ARGS)
-            .expect_err("fake tmux failure must be reported");
-        assert!(
-            error.to_string().contains("injected tmux failure"),
-            "unexpected provisioning error: {error:?}"
-        );
+        let message = f
+            .home
+            .manager_message(&cpd_core::ids::ContextId::parse("ctx").unwrap());
+        std::fs::create_dir_all(&message).unwrap();
+        assert!(f.context(CONTEXT_ARGS).is_err());
         let manager = f.manager();
+        let events = f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id");
+        std::fs::remove_dir(&message).unwrap();
+        assert_success(f.context(CONTEXT_ARGS));
+        assert_eq!(f.manager(), manager);
         assert_eq!(
+            f.rows("SELECT * FROM events WHERE context='ctx' ORDER BY id"),
+            events
+        );
+        assert_eq!(f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager' AND runner='durable'"), 1);
+        assert!(
             f.fakes
                 .runner
                 .calls()
                 .iter()
-                .filter(|call| call.args.iter().any(|arg| arg == "new-window"))
-                .count(),
-            1
-        );
-        assert!(f.context(CONTEXT_ARGS).is_err());
-        assert_eq!(f.manager(), manager);
-        assert_eq!(
-            f.count("SELECT count(*) FROM sessions WHERE context='ctx' AND role='manager'"),
-            1
+                .all(|call| !call.args.iter().any(|arg| arg == "new-window"))
         );
     }
     // Concurrent matching creation uses one pair, with no duplicate registration history.

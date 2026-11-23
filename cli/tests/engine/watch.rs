@@ -2100,6 +2100,12 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
 /// are launches of the `FakeSpawn` (nothing runs; the driver's own tests are in flow): its `self_exe` is a file that exists, which
 /// `driver::start` checks before it spawns.
 fn engine_scheduling(config_extra: &str) -> Ip {
+    let fx = engine_scheduling_fresh(config_extra);
+    fx.legacy_permanent_managers();
+    fx
+}
+
+fn engine_scheduling_fresh(config_extra: &str) -> Ip {
     let fx = engine_with_plan(&format!("concurrency = 1\nretry_cap = 0\n{config_extra}"));
     let exe = fx.env.root().join("cpd-installed");
     fs::write(&exe, "").unwrap();
@@ -2169,6 +2175,40 @@ fn driver_pid(fx: &Ip, id: &str) -> Option<i64> {
     fx.env.query::<Option<i64>>(&format!(
         "SELECT driver_pid FROM attempts WHERE id = '{id}'"
     ))
+}
+
+/// Fresh permanent Managers are durable: E22 creates them and the host supervisor launches each once.
+#[test]
+fn e3_scheduling_also_supervises_fresh_permanent_managers() {
+    let fx = engine_scheduling_fresh("");
+    fx.add_job("api", &[], "");
+    fx.watch_first_tick().unwrap();
+    let launches = fx.fakes.spawn.launches_but_janitor();
+    assert_eq!(
+        launches.len(),
+        4,
+        "one driver and three hosts: {launches:?}"
+    );
+    driver_launch(&fx, "api-a1");
+    let mut ids: Vec<String> = launches
+        .iter()
+        .filter(|l| {
+            l.args
+                .first()
+                .is_some_and(|a| a.ends_with("durable-host/main.ts"))
+        })
+        .map(|l| {
+            assert_eq!(l.args.get(1).map(String::as_str), Some("--session"));
+            l.args[2].clone()
+        })
+        .collect();
+    ids.sort();
+    let expected = fx.env.read(|conn| {
+        let mut stmt = conn.prepare("SELECT id FROM sessions WHERE role = 'manager' AND runner = 'durable' AND context IN ('cpd', 'host', 'codereview') ORDER BY id")?;
+        stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()
+    });
+    assert_eq!(expected.len(), 3);
+    assert_eq!(ids, expected, "exactly one host per permanent Manager");
 }
 
 #[test]
@@ -4548,6 +4588,7 @@ impl Titles {
     /// [`Titles::new`] with `pi` scripted by `script` on the `Fx`.
     fn with_pi(panes: usize, script: impl FnOnce(&Ip)) -> Titles {
         let fx = engine_home("");
+        fx.legacy_permanent_managers();
         fx.engine_config_on_tmux("");
         fx.engine_routes_on_tmux();
         fx.engine_plan();

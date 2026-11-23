@@ -1,7 +1,4 @@
-//! `context manager --by-user` (commands.md §3.10, §10.8 step 3, hs-d542), run in this process (`Fx::with_ports`) on the
-//! fake tmux. `context manager` writes the first-message file only without `--by-user`, and records the flag on the
-//! Session row, which `session run` reads to start pi with `-- @<path>` or without a first message (the session area's,
-//! `start` in `session/run.rs`): here the file, the row and the window's command are asserted.
+//! Durable Manager first-message and by-user registration, with fake tmux.
 
 use crate::common;
 
@@ -16,25 +13,6 @@ fn setup(fx: &Fx) {
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Payments', 't', 'm1');",
     );
     fx.cockpit();
-}
-
-/// The argv the fake server started in the Manager's window: `new-window` made it once, and it is `cpd session run <id>`.
-fn window_argv(fx: &Fx, id: &str) -> Vec<String> {
-    let made: Vec<_> = fx
-        .calls("tmux")
-        .into_iter()
-        .map(|c| c.args)
-        .filter(|a| a.iter().any(|x| x == "new-window") && a.iter().any(|x| x == "ctx-ctx"))
-        .collect();
-    assert_eq!(made.len(), 1, "one new-window: {made:?}");
-    let argv: Vec<String> = made[0]
-        .iter()
-        .skip_while(|a| *a != "--")
-        .skip(1)
-        .cloned()
-        .collect();
-    assert_eq!(argv, ["cpd", "session", "run", id]);
-    argv
 }
 
 fn manager(fx: &Fx, by_user: bool) -> String {
@@ -53,10 +31,10 @@ fn context_manager_by_user_starts_the_manager_without_a_first_message() {
     let fx = Fx::with_ports();
     setup(&fx);
     let id = manager(&fx, true);
-    let argv = window_argv(&fx, &id);
     assert!(
-        !argv.iter().any(|a| a == "--" || a.starts_with('@')),
-        "no first message file: {argv:?}"
+        fx.calls("tmux")
+            .iter()
+            .all(|c| !c.args.iter().any(|a| a == "new-window"))
     );
     assert!(
         !fx.env
@@ -76,7 +54,11 @@ fn context_manager_without_by_user_keeps_the_first_message() {
     let fx = Fx::with_ports();
     setup(&fx);
     let id = manager(&fx, false);
-    window_argv(&fx, &id);
+    assert!(
+        fx.calls("tmux")
+            .iter()
+            .all(|c| !c.args.iter().any(|a| a == "new-window"))
+    );
     let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
     assert!(
         fs::read_to_string(&path)

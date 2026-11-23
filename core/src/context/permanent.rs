@@ -73,7 +73,7 @@ pub fn ensure(
             Some((_, false)) => {}
         }
         if let Some(p) = &prepared {
-            insert(tx, &id, p, false, config.manager_runner)?;
+            insert(tx, &id, p, false)?;
         }
         Ok(())
     })?;
