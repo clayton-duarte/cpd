@@ -7,11 +7,12 @@ use std::sync::Arc;
 use rusqlite::OptionalExtension;
 
 use super::PollArgs;
-use super::poll::{Trigger, poll, queue_update_for};
+use super::poll::{Trigger, poll, poll_in, queue_update_for};
 use crate::args::PlanArg;
-use crate::config::Tier;
+use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
+use crate::config::{RoleTiers, Tier};
 use crate::host::runner::{Call, Handler, Reply};
-use crate::ids::{PlanId, WorkflowKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::janitor_tests::Rig;
 use crate::ports::Ports;
 use crate::store::Store;
@@ -1290,4 +1291,180 @@ fn a_merged_workflow_poll_does_not_requeue_its_failed_open_or_update_jobs() {
         state,
         ("merged".into(), "failed".into(), "failed".into(), 0)
     );
+}
+
+fn running_merge_rig() -> Rig {
+    let mut rig = Rig::new();
+    rig.running = true;
+    rig.workflow_with("api", "open", "running", "failed");
+    rig.sql("UPDATE attempts SET driver_pid = 4242 WHERE id = 'api-a1'");
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(Gh { merged: vec![801] }));
+    rig
+}
+
+fn poll_running_merge(rig: &Rig) {
+    Ports::scope(&rig.fakes.ports, || {
+        poll_in(
+            &rig.fakes.ports,
+            &rig.home,
+            PollArgs {
+                plan: PlanArg { plan: None },
+            },
+        )
+    })
+    .unwrap();
+}
+
+fn end_running_attempt(store: &mut Store, end: &End) {
+    let attempt = store
+        .read(|conn| {
+            ledger::load(
+                conn,
+                &PlanId::parse("pay").unwrap(),
+                &AttemptId::parse("api-a1").unwrap(),
+            )
+        })
+        .unwrap();
+    let catalog = crate::attempt::explore_tests::catalog();
+    let ladder = Ladder {
+        catalog: &catalog,
+        retry_cap: 3,
+        roles: RoleTiers {
+            decide: Tier::parse("OX").unwrap(),
+            auxiliar: Tier::parse("GX").unwrap(),
+            worker: Tier::parse("H0").unwrap(),
+            lead: Tier::parse("S4").unwrap(),
+            manager: Tier::parse("O4").unwrap(),
+        },
+    };
+    store
+        .write("test", |tx| {
+            ledger::end(tx, &attempt, end, None, &ladder, Stage::Driver)
+        })
+        .unwrap();
+}
+
+fn settlement_events(store: &mut Store) -> Vec<(String, String)> {
+    store
+        .read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT kind, text FROM events WHERE plan = 'pay'
+                   AND kind IN ('pr-merged', 'attempt-ended', 'attempt-retry',
+                                'job-cancelled', 'job-failed', 'plan-done')
+                   ORDER BY id",
+            )?;
+            Ok(stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap()
+}
+
+#[test]
+fn merged_workflow_settles_an_interrupted_attempt_without_requeue() {
+    let rig = running_merge_rig();
+    rig.sql("UPDATE attempts SET stop_request = 'cancelled' WHERE id = 'api-a1'");
+    poll_running_merge(&rig);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    end_running_attempt(&mut store, &End::Interrupted);
+    let state: (String, String, bool, String, String, String, bool) = store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT j.status, j.cancel_reason, j.cancel_requested_at = a.ended_at,
+                        a.status, a.outcome, a.cause, a.driver_pid IS NULL
+                   FROM jobs j JOIN attempts a ON a.plan = j.plan AND a.job = j.key
+                  WHERE j.plan = 'pay' AND j.key = 'api'",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            "cancelled".into(),
+            "workflow ended".into(),
+            true,
+            "ended".into(),
+            "cancelled".into(),
+            "cancel_requested".into(),
+            true,
+        )
+    );
+    let events = settlement_events(&mut store);
+    let kinds: Vec<_> = events.iter().map(|(kind, _)| kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["pr-merged", "attempt-ended", "job-cancelled", "plan-done"]
+    );
+}
+
+#[test]
+fn workflow_merge_and_no_submit_preserve_attempt_history_in_both_orders() {
+    for merge_first in [true, false] {
+        let rig = running_merge_rig();
+        let mut store = Store::open(&rig.home, 5000).unwrap();
+        if merge_first {
+            poll_running_merge(&rig);
+        }
+        end_running_attempt(
+            &mut store,
+            &End::Failed {
+                cause: Cause::NoSubmit,
+                detail: "The Worker did not submit.".into(),
+            },
+        );
+        if !merge_first {
+            poll_running_merge(&rig);
+        }
+        let state: (String, Option<String>, String, String, String) = store
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT j.status, j.failed_cause, a.status, a.outcome, a.cause
+                       FROM jobs j JOIN attempts a ON a.plan = j.plan AND a.job = j.key
+                      WHERE j.plan = 'pay' AND j.key = 'api'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(state.2, "ended");
+        assert_eq!(state.3, "failed");
+        assert_eq!(state.4, "no_submit");
+        let events = settlement_events(&mut store);
+        let kinds: Vec<_> = events.iter().map(|(kind, _)| kind.as_str()).collect();
+        if merge_first {
+            assert_eq!(state.0, "failed");
+            assert_eq!(state.1.as_deref(), Some("no_submit"));
+            assert_eq!(kinds, ["pr-merged", "attempt-ended", "job-failed"]);
+            assert!(events[2].1.contains("cannot be retried"), "{events:?}");
+            assert!(!events[2].1.contains("cpd job retry"), "{events:?}");
+            assert!(events[2].1.contains("cpd job cancel"), "{events:?}");
+        } else {
+            assert_eq!(state.0, "cancelled");
+            assert_eq!(state.1, None);
+            assert_eq!(
+                kinds,
+                [
+                    "attempt-ended",
+                    "attempt-retry",
+                    "job-cancelled",
+                    "pr-merged",
+                    "plan-done"
+                ]
+            );
+        }
+    }
 }

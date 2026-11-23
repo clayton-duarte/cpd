@@ -75,13 +75,7 @@ pub(super) fn cancel_in(
         _ => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, shape)? {
             Decision::Already(job) => Ok((job.status.clone(), job.status == "running", true, Failed::default())),
             Decision::Cancel(job) => {
-                tx.execute(
-                    "UPDATE jobs SET status = 'cancelled', failed_cause = NULL,
-                            cancel_reason = coalesce(cancel_reason, ?3),
-                            cancel_requested_at = coalesce(cancel_requested_at, (SELECT at FROM txns WHERE id = cpd_txn()))
-                      WHERE plan = ?1 AND key = ?2",
-                    [plan.as_str(), job.key.as_str(), reason.as_str()],
-                )?;
+                mark_cancelled(tx, &plan, &key, &job.status, &reason)?;
                 let text = format!("Job {key} of Plan {plan} was cancelled: {reason} Next: cpd plan show --plan {plan}");
                 append(tx, NewEvent::job_cancelled(text, &reason).plan(plan.clone()).job(key.clone()))?;
                 // The dependents fail or are cancelled in the same transaction (contract §3.2 "Cancel", hs-d647).
@@ -126,6 +120,24 @@ pub(super) fn cancel_in(
         out["cancelled"] = json!(failed.cancelled);
     }
     Ok(Output::success(out))
+}
+
+/// Settle one Job, keeping existing cancel metadata or recording it in the
+/// same update. The caller owns the cancellation Event and dependent cascade.
+pub(crate) fn mark_cancelled(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &JobKey,
+    status: &str,
+    reason: &str,
+) -> Result<usize, CpdError> {
+    Ok(tx.execute(
+        "UPDATE jobs SET status = 'cancelled', failed_cause = NULL,
+                cancel_reason = coalesce(cancel_reason, ?3),
+                cancel_requested_at = coalesce(cancel_requested_at, (SELECT at FROM txns WHERE id = cpd_txn()))
+          WHERE plan = ?1 AND key = ?2 AND status = ?4",
+        [plan.as_str(), key.as_str(), reason, status],
+    )?)
 }
 
 /// In the caller's transaction, fail or cancel every Job of `plan` that needs `cancelled`, directly or
