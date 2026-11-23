@@ -6186,3 +6186,122 @@ fn a_preopen_push_lets_a_blocked_test_job_submit() {
         "the blocked red-test Job submitted once its test was found"
     );
 }
+
+#[test]
+fn an_owned_stale_archived_pr_closed_unmerged_wakes_lead_once() {
+    use cpd_core::clock::Clock;
+    use cpd_core::swr::source::{Cx as SwrCx, github::GithubSource};
+
+    struct SwrGh(Arc<Gh>);
+    impl Handler for SwrGh {
+        fn handle(&self, call: &Call) -> Reply {
+            if call.args.iter().any(|arg| arg.contains("authored: search")) {
+                let mut pull: Value = serde_json::from_str(&pay("CLOSED", None, None)).unwrap();
+                pull["headRefOid"] = json!("head");
+                pull["headRefName"] = json!("cpd/pay");
+                pull["baseRefName"] = json!("main");
+                pull["author"] = json!({"login": "me"});
+                pull["repository"]["defaultBranchRef"] = json!({"name": "main"});
+                pull["labels"] = json!({"nodes": []});
+                pull["latestReviews"] = json!({"nodes": []});
+                pull["reviewThreads"]["pageInfo"] = json!({"hasNextPage": false});
+                pull["autoMergeRequest"] = Value::Null;
+                Reply::ok(&json!({"data": {
+                    "viewer": {"login": "me"},
+                    "rateLimit": {"remaining": 4900, "cost": 1, "resetAt": "2026-10-20T11:00:00Z"},
+                    "authored": {"issueCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false}},
+                    "reviews": {"issueCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false}},
+                    "p0": {"pullRequest": pull}
+                }}).to_string())
+            } else {
+                self.0.handle(call)
+            }
+        }
+    }
+    let kit = Kit::with_ports_empty();
+    kit.env.write_config("version = 1\nmachine = \"t\"\n");
+    let repo = kit.keyed_repo("pay");
+    let lead = repo.clone();
+    let home = CpdHome::resolve(Some(kit.env.cpd_home().into()), None).unwrap();
+    let gh = Arc::new(Gh {
+        search: Slot::new(Reply::ok(EMPTY_SEARCH)),
+        lookup: Slot::new(Reply::ok("{\"data\":{}}")),
+        list: Seq::new(Reply::ok("[]")),
+        create: Seq::new(Reply::ok(URL)),
+        update: Seq::new(Reply::ok("")),
+        root: kit.env.root().to_path_buf(),
+        fail: Mutex::new(None),
+        comments: Mutex::new(None),
+    });
+    let _ = (*kit.fakes.runner).clone().route("gh", gh.clone());
+    let fx = Poll {
+        fx: kit,
+        home,
+        repo: repo.clone(),
+        origin: repo.clone(),
+        lead: lead.clone(),
+        merged_sha: "a".repeat(40),
+        lock_pushed: "a".repeat(40),
+        branch: "cpd/pay".into(),
+        gh,
+    };
+    seed_pay(
+        fx.store(),
+        "deploy",
+        "merged",
+        "cpd/pay",
+        &repo,
+        &lead,
+        &fx.merged_sha,
+    );
+    fx.env.sql("UPDATE sessions SET runner = 'durable' WHERE id = 'lead1'; UPDATE pull_requests SET archived = 1 WHERE number = 812; INSERT INTO swr_repos (repo, is_archived, fetched_at) VALUES ('acme/pay', 0, '2099-01-01T00:00:00Z');");
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(SwrGh(fx.gh.clone())));
+    let mut store = fx.store();
+    let config = Config::load(&fx.home).unwrap();
+    let mut cx = SwrCx {
+        store: &mut store,
+        ports: &fx.fakes.ports,
+        home: &fx.home,
+        config: &config,
+    };
+    cpd_core::ports::Ports::scope(&fx.fakes.ports, || {
+        GithubSource::default().pass_with_effects(&mut cx, fx.fakes.clock.utc())
+    })
+    .unwrap();
+    assert_eq!(
+        fx.pr_data().3,
+        "closed",
+        "stale archive must not hide the closed owned PR"
+    );
+    fx.scoped(|| fx.watch_ticks(2)).unwrap();
+    fx.scoped(|| fx.watch_ticks(2)).unwrap();
+    let messages = fx.events("session-message");
+    let wakes: Vec<_> = messages
+        .iter()
+        .filter(|(_, data)| {
+            data["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("closed without a merge"))
+                && data["wake"] == true
+                && data["from"].is_null()
+        })
+        .collect();
+    assert_eq!(
+        wakes.len(),
+        1,
+        "the owning Lead is woken once: {messages:?}"
+    );
+    assert_eq!(fx.workflow_status("repo"), "open");
+    assert_eq!(fx.plan_row().0, "deploy");
+    assert!(fx.events("workflow-cancelled").is_empty());
+    assert!(fx.events("pr-merged").is_empty());
+    assert_eq!(
+        fx.gh_calls()
+            .iter()
+            .filter(|c| c.iter().any(|arg| arg.contains("p0: repository(")))
+            .count(),
+        1
+    );
+}
