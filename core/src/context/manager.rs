@@ -186,14 +186,7 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
     let (manager, registered) = match found {
         Some(manager) => (manager, false),
         None => (
-            register(
-                &home,
-                &config,
-                &mut store,
-                &context,
-                &row,
-                args.by_user,
-            )?,
+            register(&home, &config, &mut store, &context, &row, args.by_user)?,
             true,
         ),
     };
