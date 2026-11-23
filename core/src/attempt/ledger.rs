@@ -614,6 +614,7 @@ pub fn end_opened(
             .job(attempt.job.clone())
             .attempt(attempt.id.clone()),
     )?;
+    let mut cancellation = None;
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
             // hs-d514: the merge that leaves a draft and no queued or running Job but `open` and `update` Jobs turns the Lead. An `open` Job's own merge never turns it.
@@ -673,14 +674,19 @@ pub fn end_opened(
                     "Job {job} cancelled ({reason}): Attempt {id} stopped before its merge. Next: cpd plan show --plan {plan}"
                 ),
             };
-            ("cancelled", None, NewEvent::job_cancelled(text, &reason))
+            let event = NewEvent::job_cancelled(text, &reason);
+            cancellation = Some(reason);
+            ("cancelled", None, event)
         }
         End::Interrupted if terminal_workflow(tx, attempt)? => {
-            let reason = "workflow ended";
+            let reason = cancel_request(tx, &attempt.plan, &attempt.job)?
+                .unwrap_or_else(|| "workflow ended".to_owned());
             let text = format!(
                 "Job {job} cancelled: {reason}; interrupted Attempt {id} will not retry. Next: cpd plan show --plan {plan}"
             );
-            ("cancelled", None, NewEvent::job_cancelled(text, reason))
+            let event = NewEvent::job_cancelled(text, &reason);
+            cancellation = Some(reason);
+            ("cancelled", None, event)
         }
         End::Interrupted => {
             // The Job has no `cancel_requested_at` (the caller decided that): the stop is incident mode's, and the Job
@@ -703,8 +709,8 @@ pub fn end_opened(
                 End::GateFailed { triage, .. } => triage.as_ref(),
                 _ => None,
             };
-            let next = if terminal_workflow(tx, attempt)? || triage.is_some_and(Triage::skips_retry)
-            {
+            let terminal = terminal_workflow(tx, attempt)?;
+            let next = if terminal || triage.is_some_and(Triage::skips_retry) {
                 None
             } else {
                 next_tier(tx, attempt, *cause, ladder)?
@@ -750,11 +756,10 @@ pub fn end_opened(
                         params![plan, job],
                         |r| r.get(0),
                     )?;
-                    let used_up = match cause {
-                        Cause::ProviderError => {
-                            format!(" The {PROVIDER_RETRIES} retries are used up.")
-                        }
-                        _ => String::new(),
+                    let used_up = if *cause == Cause::ProviderError && !terminal {
+                        format!(" The {PROVIDER_RETRIES} retries are used up.")
+                    } else {
+                        String::new()
                     };
                     let gate = matches!(cause, Cause::GateFailed | Cause::GateError)
                         .then(|| crate::merge::gate_text_body(detail))
@@ -764,13 +769,21 @@ pub fn end_opened(
                         .and_then(|t| Some((t.label, t.confidence?)))
                         .map(|(l, c)| format!("\nTriage: {} ({c:.2}), not retried.", l.as_str()))
                         .unwrap_or_default();
+                    let cancel = format!("cpd job cancel {job} --reason <text> --plan {plan}");
+                    let action = if terminal {
+                        format!(
+                            "Its Workflow has ended, so this Job cannot be retried. Next: {cancel}"
+                        )
+                    } else {
+                        format!("Decide: cpd job retry {job} --tier <T> --plan {plan}, or {cancel}")
+                    };
                     let text = match gate {
                         Some(body) => format!(
-                            "Job {job} failed ({}): {body}{skipped}\nDecide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                            "Job {job} failed ({}): {body}{skipped}\n{action}",
                             cause.as_str()
                         ),
                         None => format!(
-                            "Job {job} failed ({}): {detail}{used_up} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
+                            "Job {job} failed ({}): {detail}{used_up} {action}",
                             cause.as_str()
                         ),
                     };
@@ -790,10 +803,14 @@ pub fn end_opened(
             }
         }
     };
-    let changed = tx.execute(
-        "UPDATE jobs SET status = ?3, merged_sha = ?4, failed_cause = ?5 WHERE plan = ?1 AND key = ?2 AND status = 'running'",
-        params![plan, job, status, merged_sha, failed_cause],
-    )?;
+    let changed = if let Some(reason) = &cancellation {
+        crate::job::cancel::mark_cancelled(tx, &attempt.plan, &attempt.job, "running", reason)?
+    } else {
+        tx.execute(
+            "UPDATE jobs SET status = ?3, merged_sha = ?4, failed_cause = ?5 WHERE plan = ?1 AND key = ?2 AND status = 'running'",
+            params![plan, job, status, merged_sha, failed_cause],
+        )?
+    };
     if changed == 0 {
         return Err(cas_lost("The Job's status"));
     }
@@ -810,13 +827,11 @@ pub fn end_opened(
         crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;
     }
     // The transaction that makes the Job `cancelled` also fails or cancels its dependents (contract §3.2 "Cancel", hs-d647).
-    if status == "cancelled" {
-        let reason = cancel_request(tx, &attempt.plan, &attempt.job)?
-            .unwrap_or_else(|| "workflow ended".to_owned());
-        crate::job::cancel::fail_dependents(tx, &attempt.plan, &attempt.job, &reason)?;
+    if let Some(reason) = &cancellation {
+        crate::job::cancel::fail_dependents(tx, &attempt.plan, &attempt.job, reason)?;
     }
     // A Job that reached a final state may be the last one holding its Plan in `deploy`.
-    if matches!(end, End::Merged { .. } | End::Cancelled) {
+    if matches!(end, End::Merged { .. }) || cancellation.is_some() {
         crate::plan::done::settle_done(tx, &attempt.plan, None)?;
     }
     Ok(())
