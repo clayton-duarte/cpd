@@ -26,6 +26,7 @@ fn engine(policy: &str) -> Fx {
 /// [`engine`] with `concurrency` Worker slots.
 fn engine_with(policy: &str, concurrency: u32) -> Fx {
     let fx = Fx::with_ports();
+    fx.legacy_permanent_managers();
     fx.engine_config(&format!("concurrency = {concurrency}\nretry_cap = 0\n"));
     fx.engine_routes();
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");

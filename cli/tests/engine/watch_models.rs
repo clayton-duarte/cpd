@@ -199,6 +199,7 @@ fn fx(watch: &str, first: &Value) -> Fx {
 
 fn fx_on(machine: &str, watch: &str, first: &Value) -> Fx {
     let ip = Ip::with_ports();
+    ip.legacy_permanent_managers();
     let adapter = ip.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();

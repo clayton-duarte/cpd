@@ -76,6 +76,7 @@ fn team_with(period: Option<u32>, gh: &str) -> Team {
         None => (String::new(), String::new()),
     };
     let fx = Fx::with_ports();
+    fx.legacy_permanent_managers();
     let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
