@@ -310,58 +310,17 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
         0,
         "a new Plan has no PR"
     );
-    let (pane, window) = (
-        out["lead"]["pane"].as_str().unwrap(),
-        out["lead"]["window"].as_str().unwrap(),
-    );
-
-    // The Lead: stopped, in its parked window, with its pane recorded, in the User's home.
+    // Fresh durable Leads have no tmux pane or window.
+    assert!(out["lead"]["pane"].is_null());
+    assert!(out["lead"]["window"].is_null());
     let lead = fx.cpd(&["session", "show", &session]).ok()["session"].clone();
     assert_eq!(
-        (&lead["role"], &lead["plan"], &lead["state"], &lead["tier"]),
-        (
-            &json!("lead"),
-            &json!("pay"),
-            &json!("stopped"),
-            &json!("O2")
-        )
+        (&lead["role"], &lead["plan"], &lead["tier"]),
+        (&json!("lead"), &json!("pay"), &json!("O2"))
     );
-    assert_eq!(
-        (&lead["cwd"], &lead["tmux_pane"], &lead["place"]),
-        (&json!(cwd), &json!(pane), &json!("parked"))
-    );
-    assert_eq!(
-        inproc::panes(&fx),
-        vec![(pane.to_owned(), "park-pay".to_owned(), session.clone())],
-        "the cockpit is created with the Lead's window"
-    );
-    // What cpd asked tmux for (`-c` and `-e` of `new-session`), read from the route (a real pane would inherit it).
-    let state = fx
-        .tmux_state()
-        .expect("plan new started the cockpit server");
-    let started = state
-        .panes()
-        .into_iter()
-        .find(|p| p.id == pane)
-        .expect("the Lead's pane");
-    assert_eq!(started.cwd, cwd, "the pane starts in the User's home");
-
-    // The pane runs `cpd session run <id>` with the Plan's variables (§15.5).
-    let pane_vars = state.pane_env(pane);
-    for (key, value) in [
-        ("CPD_HOME", fx.env.cpd_home().display().to_string()),
-        ("CPD_SESSION", session.clone()),
-        ("CPD_PLAN", "pay".to_owned()),
-    ] {
-        assert!(
-            pane_vars.contains(&(key.to_owned(), value.clone())),
-            "{key}={value} not in {pane_vars:?}"
-        );
-    }
-    assert_eq!(
-        started.argv[started.argv.len() - 3..],
-        ["session", "run", session.as_str()]
-    );
+    assert_eq!(lead["cwd"], cwd);
+    assert!(lead["tmux_pane"].is_null());
+    assert!(inproc::panes(&fx).is_empty());
 
     // Events: plan-created and session-registered together, then the record, then the window.
     let created = &inproc::events(&fx, "plan-created")[0];
@@ -386,13 +345,10 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
         registered[0]["id"].as_i64().unwrap(),
         created["id"].as_i64().unwrap() + 1
     );
-    let moved: Vec<_> = inproc::events(&fx, "session-moved")
-        .into_iter()
-        .filter(|e| e["plan"] == "pay")
-        .collect();
-    assert_eq!(
-        moved[0]["data"],
-        json!({"pane": pane, "window": window, "place": "parked"})
+    assert!(
+        inproc::events(&fx, "session-moved")
+            .iter()
+            .all(|e| e["plan"] != "pay")
     );
 
     // The `plan` record in the Context store: no `repo`; `context show` lists the Plan's PR repos.
@@ -751,7 +707,6 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     let first = inproc::new_plan_only(&fx, "pay");
-    let session = first["plan"]["lead_session"].as_str().unwrap().to_owned();
     let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
 
     // From another directory: still `already`, and the stored cwd stays.
@@ -783,19 +738,11 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
         txns,
         "nothing written"
     );
-    assert_eq!(inproc::panes(&fx).len(), 1);
+    assert!(inproc::panes(&fx).is_empty());
+    assert!(first["lead"]["pane"].is_null());
 
-    // A crash after the first transaction: no pane, no message. Rerunning redoes both.
-    store(&fx.env)
-        .write("fixture", |tx| {
-            exec(
-                tx,
-                &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{session}';"),
-            )
-        })
-        .unwrap();
+    // A missing message is repaired on retry without creating a durable pane.
     fs::remove_file(home(&fx.env).lead_message(&pid("pay"))).unwrap();
-    fx.kill_tmux_server();
     let redone = fx
         .cpd_in(
             &repo,
@@ -812,27 +759,13 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
         .ok();
     assert_eq!(redone["already"], true);
     assert_eq!(redone["lead"]["cwd"], first["lead"]["cwd"]);
-    let pane = redone["lead"]["pane"].as_str().unwrap();
-    let state = fx.tmux_state().expect("the rerun started the server again");
-    let redone_pane = state
-        .panes()
-        .into_iter()
-        .find(|p| p.id == pane)
-        .expect("the redone Lead's pane");
-    assert_eq!(
-        redone_pane.cwd,
-        first["lead"]["cwd"].as_str().unwrap(),
-        "redone in the stored cwd"
-    );
-    assert_ne!(redone["lead"]["pane"], Value::Null);
-    assert_eq!(inproc::panes(&fx).len(), 1);
+    assert!(redone["lead"]["pane"].is_null());
+    assert!(inproc::panes(&fx).is_empty());
     assert!(home(&fx.env).lead_message(&pid("pay")).exists());
-    assert_eq!(
+    assert!(
         inproc::events(&fx, "session-moved")
             .iter()
-            .filter(|e| e["plan"] == "pay")
-            .count(),
-        2
+            .all(|e| e["plan"] != "pay")
     );
     assert_eq!(inproc::events(&fx, "plan-created").len(), 1);
 
@@ -2873,6 +2806,19 @@ fn rename_sets_the_title_and_appends_one_event() {
     assert_eq!(inproc::events(&fx, "plan-renamed").len(), 1);
 }
 
+/// Materialize a historical native Lead through the mocked tmux port.
+fn historical_native_lead(fx: &Fx, lead: &str) -> String {
+    fx.env.sql(&format!(
+        "UPDATE sessions SET runner = 'pi' WHERE id = '{lead}'"
+    ));
+    fx.cpd(&["session", "open", lead]).ok();
+    fx.cpd(&["session", "park"]).ok();
+    fx.cpd(&["session", "show", lead]).ok()["session"]["tmux_pane"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 /// `@cpd_title` of `pane`.
 fn pane_title(fx: &Fx, pane: &str) -> String {
     let out = fx.tmux(&["show", "-pqv", "-t", pane, "@cpd_title"]);
@@ -2897,10 +2843,8 @@ fn the_leads_pane_carries_its_key_and_plan_rename_leaves_it() {
             "Retry payouts",
         ])
         .ok();
-    let (lead, pane) = (
-        out["lead"]["session"].as_str().unwrap().to_owned(),
-        out["lead"]["pane"].as_str().unwrap().to_owned(),
-    );
+    let lead = out["lead"]["session"].as_str().unwrap().to_owned();
+    let pane = historical_native_lead(&fx, &lead);
     assert_eq!(pane_title(&fx, &pane), "ctx:pay");
 
     fx.cpd(&[
@@ -2961,10 +2905,8 @@ fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
             "Retry payouts",
         ])
         .ok();
-    let (lead, pane) = (
-        out["lead"]["session"].as_str().unwrap().to_owned(),
-        out["lead"]["pane"].as_str().unwrap().to_owned(),
-    );
+    let lead = out["lead"]["session"].as_str().unwrap().to_owned();
+    let pane = historical_native_lead(&fx, &lead);
     // Untitled: the header follows the rename (the test above). Titled: it keeps the title.
     store(&fx.env)
         .write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{lead}';")))
@@ -3082,6 +3024,7 @@ fn plan_with_fork(fx: &Fx) -> (String, String) {
         .as_str()
         .unwrap()
         .to_owned();
+    historical_native_lead(fx, &lead);
     let fork = fx.cpd(&["session", "fork", &lead]).ok()["session"]["id"]
         .as_str()
         .unwrap()
