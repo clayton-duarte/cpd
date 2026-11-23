@@ -1117,4 +1117,47 @@ mod tests {
         assert_eq!(phase, Some(Phase::Dispatch));
         assert_eq!(kinds(&mut store), ["pr-merged"]);
     }
+    #[test]
+    fn recording_a_merged_pull_request_does_not_requeue_failed_jobs_of_adopted_workflow() {
+        let (_dir, mut store) = fixture(true);
+        let plan = PlanId::parse("pay").unwrap();
+        let key = WorkflowKey::parse("api").unwrap();
+        store.write("fixture", |tx| {
+            tx.execute_batch("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, failed_cause) VALUES ('pay','api','failed-open','J','S2','g','c','[]','[]','[]','open','failed',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','crashed');
+                INSERT INTO attempts (plan,id,job,number,tier,origin,status,outcome,cause,branch,worktree,driver_pid,started_at,ended_at) VALUES ('pay','failed-open-a1','failed-open',1,'S2','ladder','ended','failed','crashed','b','/w',1,'t','t');
+                INSERT INTO events (txn,at,kind,context,plan,job,text,data) VALUES (cpd_txn(),'t','job-failed','ctx','pay','failed-open','x','{}');")?;
+            Ok(())
+        }).unwrap();
+        store.write("fixture", |tx| {
+            tx.execute_batch("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, merged_sha) VALUES ('pay','api','fix','J','S2','g','c','[]','[]','[]','work','merged',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','abc');")?;
+            Ok(())
+        }).unwrap();
+        let pulled = Pulled {
+            row: pull(PrState::Merged, Some("2026-10-20T11:00:00Z")),
+            merged: true,
+        };
+        store
+            .write("test", |tx| {
+                record(tx, &plan, &key, &pulled)?;
+                crate::job::fix_retry::retry_after_fix(
+                    tx,
+                    &plan,
+                    &crate::ids::JobKey::parse("fix").unwrap(),
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let state: (String, String, String, String, String) = store.read(|c| Ok(c.query_row("SELECT (SELECT status FROM workflows WHERE key='api'), (SELECT status FROM workflows WHERE key='web'), (SELECT phase FROM plans WHERE id='pay'), (SELECT status FROM jobs WHERE key='failed-open'), (SELECT outcome FROM attempts WHERE id='failed-open-a1')", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?)).unwrap();
+        assert_eq!(
+            state,
+            (
+                "merged".into(),
+                "waiting".into(),
+                "dispatch".into(),
+                "failed".into(),
+                "failed".into()
+            )
+        );
+        assert!(!kinds(&mut store).contains(&"job-retried".to_owned()));
+    }
 }
