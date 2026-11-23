@@ -24,6 +24,7 @@ struct Fx {
 /// is a chat slot. The engine runs in-process on virtual time, its `cpd pr poll` answered.
 fn fx() -> Fx {
     let env = Ip::with_ports();
+    env.legacy_permanent_managers();
     env.engine_config_on_tmux("");
     env.engine_routes_on_tmux();
     fs::create_dir_all(env.env.root().join("install")).unwrap();

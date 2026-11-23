@@ -114,6 +114,17 @@ impl Clock for Stepped {
 }
 
 impl Fx {
+    /// Existing legacy Pi Managers keep unrelated scheduling and title fixtures focused on their own launches.
+    /// Fresh Managers are durable; tests of their supervision must not use this fixture.
+    pub fn legacy_permanent_managers(&self) {
+        self.env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES
+            ('cpd', 'Cpd', 't', 'm1'), ('host', 'Host', 't', 'm1'), ('codereview', 'Codereview', 't', 'm1');
+            INSERT INTO sessions (id, role, context, name, cwd, tier, runner, state, state_at, created_at) VALUES
+            ('legacy-cpd', 'manager', 'cpd', 'legacy-cpd', '/', 'O3', 'pi', 'stopped', 't', 't'),
+            ('legacy-host', 'manager', 'host', 'legacy-host', '/', 'O3', 'pi', 'stopped', 't', 't'),
+            ('legacy-codereview', 'manager', 'codereview', 'legacy-codereview', '/', 'O3', 'pi', 'stopped', 't', 't');");
+    }
+
     /// `config.toml` of machine `m1` for the engine on virtual time: a tick a second, no PR poll in the way (3600 s).
     /// `extra` is more TOML before the tables (top-level keys, or tables), as `TestEnv::write_tmux_config`'s.
     pub fn engine_config(&self, extra: &str) {
