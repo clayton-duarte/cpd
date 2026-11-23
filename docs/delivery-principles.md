@@ -2,7 +2,7 @@
 
 Accepted by the User on 2026-11-16. These are project-wide product decisions, not preferences local to one Context. The living [essence after the live trial](essence.md) applies these principles to the November 23 trial observations; the [pre-live-trial essence](archive/essence-pre-live-trial.md) remains unchanged historical text.
 
-## Own outcomes, not workflow activity
+## Own outcomes, not execution activity
 
 CPD makes delegated agent work dependable from intent to verified delivery, without making the engineer supervise every execution step. Track the outcome independently of PR lifecycle: an outcome can require no PR, one PR, or several. A merge, closure, commit, green check or stopped agent proves only that event, not delivery of the outcome. Preserve the User's final authority to merge.
 

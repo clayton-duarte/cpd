@@ -19,7 +19,7 @@ A separate accepted simplification-run record gives concrete, bounded evidence: 
 
 ## Subtract before adding
 
-Enforce boundaries that protect outcomes, authority, evidence, and concrete harm. Do not prescribe workflow shape, agent count, or a sequence of docs, tests, implementation and PRs without a necessary reason. Prefer one executor for cohesive work; split only when it buys meaningful parallelism, independent verification, distinct authority/deliverables, or a unit otherwise too large to specify and verify coherently. Review material changes to scope, risk or authority—not row arrangement. This direction does not authorize bypassing current safeguards; legitimate approval, recovery, cancellation and evidence requirements remain.
+Enforce boundaries that protect outcomes, authority, evidence, and concrete harm. Do not prescribe work structure, agent count, or a sequence of docs, tests, implementation and PRs without a necessary reason. Prefer one executor for cohesive work; split only when it buys meaningful parallelism, independent verification, distinct authority/deliverables, or a unit otherwise too large to specify and verify coherently. Review material changes to scope, risk or authority—not row arrangement. This direction does not authorize bypassing current safeguards; legitimate approval, recovery, cancellation and evidence requirements remain.
 
 Keep the Inbox actionable-only: show decisions or actions the engineer can take now, and wake an owner because an outcome needs action—not to report inert state. A successful approval should let authorized work advance, not create more bookkeeping for the User.
 
