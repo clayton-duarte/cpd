@@ -1,35 +1,27 @@
 # CPD delivery principles
 
-Accepted by the User on 2026-11-16. These are project-wide product decisions, not preferences local to one Context. They refine the original CPD essence analysis without changing its verbatim historical text.
+Accepted by the User on 2026-11-16. These are project-wide product decisions, not preferences local to one Context. The living [essence after the live trial](essence.md) applies these principles to the November 23 trial observations; the [pre-live-trial essence](archive/essence-pre-live-trial.md) remains unchanged historical text.
 
-## Enforce contracts, not choreography
+## Own outcomes, not workflow activity
 
-CPD makes delegated agent work dependable from intent to verified, reviewed delivery. It enforces authority, authorized scope, required outcome evidence and real dependencies. Within those boundaries, agents choose their execution strategy.
+CPD makes delegated agent work dependable from intent to verified delivery, without making the engineer supervise every execution step. Track the outcome independently of PR lifecycle: an outcome can require no PR, one PR, or several. A merge, closure, commit, green check or stopped agent proves only that event, not delivery of the outcome. Preserve the User's final authority to merge.
 
-The delivery contract establishes:
-
-- **Authority:** who may decide or perform an action.
-- **Scope:** the authorized outcome and its boundaries.
-- **Evidence:** what demonstrates that this particular outcome is acceptable.
-- **Coordination:** which real dependencies prevent work from starting.
-- **Recovery:** how authorized work continues after failure or interruption.
-
-Preferred sequences are guidance unless a necessary invariant justifies a mandatory transition. Parallelism serves delivery; maximizing agents, tasks or activity is not the goal.
+CPD should enforce authority, authorized scope, required evidence, real dependencies and recoverability. Within those boundaries, agents choose how to execute. Preferred sequences are guidance unless a necessary invariant justifies a mandatory transition. Keep the UI that helps the engineer see and direct work; keep the Inbox actionable-only and wake owners because an outcome needs action.
 
 ## Roles are boundaries, not mandatory ceremony
 
-The Manager settles product intent with the User, the Lead coordinates bounded work, and Workers execute it. Distinct responsibilities do not require elaborate handoffs for every request. An already-clear request can be delegated immediately, specified as one Job and completed by one Worker.
+The Manager settles product intent with the User, the Lead coordinates bounded work, and Workers execute it. Distinct responsibilities do not require elaborate handoffs for every request. An already-clear request can be delegated immediately as one Job to one Worker.
 
 ## Keep cohesive work cohesive
 
-Start clear, cohesive work as one execution unit. Split only when the cost of handoffs, lost context, repeated reading, scheduling and integration is justified by:
+Prefer a single executor for cohesive work. Split only when the real benefit justifies handoff, context, scheduling and integration costs:
 
-- Independent work that benefits from parallel execution.
-- Meaningful verification by a separate author.
-- Distinct permissions or deliverables requiring separate ownership.
-- Work too large to specify or verify coherently as one unit.
+- Independent work benefits from parallel execution.
+- Separate authorship provides meaningful independent verification.
+- Distinct permissions or deliverables need separate ownership.
+- Work is too large to specify or verify coherently as one unit.
 
-Bounded work does not mean fragmenting everything. Separate file families alone do not establish a dependency; each mandatory ordering needs a real reason.
+Separate file families alone do not establish dependency. Review material changes to authorized scope, risk or authority, not the arrangement or renaming of Jobs. Preserve legitimate controls and do not bypass them under the banner of simplification.
 
 ## Resolve uncertainty at the appropriate boundary
 
@@ -39,31 +31,21 @@ Bounded work does not mean fragmenting everything. Separate file families alone 
 
 Some uncertainty prevents safe work; some can be resolved during reversible execution. Complete knowledge of every implementation detail is not a prerequisite to starting authorized work.
 
-## Approve the contract, not its representation
-
-Approval attaches to the authorized scope, risk and authority—not the serialization or arrangement of Jobs. A material change to that contract may require approval. Renaming or reorganizing Jobs, improving a Spec, or discovering an actual file path does not by itself require renewed approval.
-
-Keep human attention for genuine decisions, rather than repeated approval of already-authorized work.
-
 ## Match evidence to the deliverable
 
-Documentation changes need evidence about accuracy, discoverability and references. Behavior changes need evidence about behavior. Refactors need evidence that behavior was preserved. Meaningful independent verification remains valuable where the outcome requires it.
+Documentation needs evidence of accuracy, discoverability and working references. Behavior changes need evidence about behavior. Refactors need evidence that behavior was preserved. Deployment claims require verification of the running instance. Meaningful independent verification remains valuable where the outcome requires it.
 
-Do not require unrelated milestones merely because they belong to a usual sequence. A stopped agent, passing test, commit, merged pull request and production deployment establish different facts. Activity prescriptions, such as arbitrary commit intervals, do not establish a successful outcome.
+Do not require unrelated milestones merely because they belong to a usual sequence. Preserve failed Attempts as evidence. Explicit deferral or disposition is not delivery; a blocked item names a concrete next actor and action. Reject unchanged retries; establish what changed or which supported recovery makes retry viable. Reconcile ambiguous effects before retrying. Quiet, component-specific deployment must preserve work and verify the actual running component.
 
-## Justify constraints before enforcing them
-
-Deterministic enforcement is valuable only after establishing that the constraint deserves to exist. An enforced unnecessary rule can stop delivery. Reassess the need for a rule before strengthening its enforcement.
-
-Guardrails must not accumulate into another rigid process. Avoid new universal simplification protocols, elaborate small/medium/large or fast-lane eligibility taxonomies, extra agents reviewing procedural compliance, and guards that merely compensate for contradictory guards.
+A stopped agent, passing test, commit, merged PR and production deployment establish different facts. Activity prescriptions do not establish a successful outcome.
 
 ## Recoverability is correctness
 
-For every state preventing progress, identify who can resolve it and ensure that the resolving action does not depend on the condition being resolved. Legitimate resume, cancellation and recovery must be supported without an external bypass.
+For every state preventing progress, identify who can resolve it and a supported action that does not depend on the condition being resolved. Legitimate resume, cancellation and recovery must be supported without an external bypass. Recovery does not fabricate success or waive required evidence. Continuing, cancelling and delivering are distinct outcomes.
 
-Recovery does not fabricate success or waive required evidence. Continuing or cancelling work is distinct from declaring its result acceptable.
+CPD owns bugs: assign, execute, verify and deliver the root fix. The supervisor owns incidents that prevent CPD from acting: contain the symptom, restore a usable path, record the intervention and queue the root fix through CPD. A workaround is not proof the root cause was fixed.
 
-Deadlocks, internal loops and circular prerequisites are design failures, not merely inconvenient edge cases. Prefer fewer mandatory transitions, not merely a shorter mandatory workflow.
+Keep the Inbox for actions the engineer can take now. Wake owners when an outcome requires action; do not turn stale state, informational notices or bookkeeping into decisions.
 
 ## Evidence behind these decisions
 
@@ -71,10 +53,12 @@ During the documentation-simplification Plan, observation of the Lead transcript
 
 The observed problems included repeated discovery to recover missing handoff detail, renewed review of already-authorized work, a serial chain without an established reason for every link, and activity-based commit timing instructions. The Manager's exhaustive-accounting brief also contributed overhead. These are accepted observations of that execution; they do not establish every underlying cause or the quality of its finished artifacts.
 
-The failure pattern was: **agents optimized for satisfying the process instead of using the minimum process needed to deliver the result.**
+The November 23 live-trial observations supplied with User decision pro-d659 (2026-11-23 15:33 EST) include CI failure on PR #1414 waking its owning Lead; approved work stalled after verdict/Lock; a retry against a merged Workflow and stale archive metadata hiding a closed PR; failed jobs and duplicate/informational cards obscuring actionable work; and a Merge card reappearing after acknowledgement with a later click triggering a branch update, while merged fixes did not automatically reach running components. These are concrete observations reported in the decision context, not independently re-run here, frequency estimates or proof of current runtime behavior. The living [essence](essence.md) summarizes them and their implications.
+
+The failure pattern in the simplification run was: **agents optimized for satisfying the process instead of using the minimum process needed to deliver the result.** It is evidence for reconsidering unnecessary choreography, not grounds to remove controls that protect authority, outcomes, evidence or concrete harm.
 
 ## Intended behavior and implementation
 
-These decisions define product direction. They do not certify that existing runtime machinery already conforms, authorize bypassing current safety controls, or settle unspecified transition and migration designs. Documentation must expose such mismatches rather than hiding them or claiming they are resolved.
+These principles define product direction. They do not certify that existing runtime machinery conforms, authorize bypassing current safety controls, or settle unspecified transition and migration designs. Documentation must expose such mismatches rather than hide them or claim they are resolved.
 
 CPD should make unauthorized actions difficult, missing evidence visible, and legitimate progress easy. It constrains the boundaries of work—not every movement inside them.
