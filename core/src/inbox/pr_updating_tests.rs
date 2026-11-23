@@ -43,9 +43,10 @@ fn row(merge_state: &str, kind: &str, status: &str) -> (Urgency, String) {
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('pay', 'ctx', 'Pay', 'deploy', 'l-pay', '{T}', '{T}');
                  INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
-                                            mergeable, authored, review_requested, merge_state, feedback, base_ref, default_branch)
+                                            mergeable, authored, review_requested, merge_state, feedback, base_ref, default_branch,
+                                            head_oid, open_threads, review_threads_complete)
                  VALUES ('acme/shop', 1, 'https://github.com/acme/shop/pull/1', 'T', 0, 'open', 'approved', 'passed', '{T}', '{T}',
-                         'mergeable', 1, 0, '{merge_state}', '[]', 'main', 'main');
+                         'mergeable', 1, 0, '{merge_state}', '[]', 'main', 'main', 'h1', '[]', 1);
                  INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pull_request, pr_number, pr_url,
                                         pr_opened_at, created_txn, created_at, started_at)
                  VALUES ('pay', 'p1', '/r', 'main', 'open', 'cpd/pay/p1', '/lw',
@@ -117,7 +118,10 @@ fn a_clean_pr_with_only_a_finished_job_is_not_an_updating_row() {
         ("docs", "failed"),
         ("test", "cancelled"),
     ] {
-        let (_, label) = row("clean", kind, status);
-        assert_ne!(label, "updating", "{kind} {status}");
+        assert_eq!(
+            row("clean", kind, status),
+            (Urgency::Yellow, "ready to merge".to_owned()),
+            "{kind} {status}"
+        );
     }
 }

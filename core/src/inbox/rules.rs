@@ -1521,7 +1521,9 @@ mod tests {
             let mut f = fixture("dispatch");
             pull_request(&mut f, 1, "passed", "mergeable", review);
             set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
-            one(f.of(Kind::PrReady)).label == "shop#1 ready to merge\nT"
+            f.of(Kind::PrReady)
+                .iter()
+                .any(|c| c.label == "shop#1 ready to merge\nT")
         };
         // hs-d525: only clean is ready; unstable and has_hooks are not.
         for merge_state in ["clean"] {
@@ -1555,19 +1557,21 @@ mod tests {
     }
 
     #[test]
-    fn an_open_pr_ready_item_closes_when_its_pull_request_becomes_blocked_hs_d481() {
-        let mut f = fixture("dispatch");
-        pull_request(&mut f, 5, "passed", "mergeable", "none");
-        let found = conditions(&mut f.store, &f.home).unwrap();
-        assert_eq!(reconcile(&mut f.store, &found, T).unwrap().opened.len(), 1);
-        set(&mut f, 5, "merge_state = 'blocked'");
-        let found = conditions(&mut f.store, &f.home).unwrap();
-        let changes = reconcile(&mut f.store, &found, T).unwrap();
-        assert_eq!(
-            (changes.opened.len(), changes.closed.len()),
-            (1, 1),
-            "a colour change closes the yellow row and opens a cyan one"
-        );
+    fn a_pr_item_closes_without_replacement_when_it_starts_waiting() {
+        for state in ["merge_state = 'blocked'", "checks = 'pending'"] {
+            let mut f = fixture("dispatch");
+            pull_request(&mut f, 5, "passed", "mergeable", "none");
+            let found = conditions(&mut f.store, &f.home).unwrap();
+            assert_eq!(reconcile(&mut f.store, &found, T).unwrap().opened.len(), 1);
+            set(&mut f, 5, state);
+            let found = conditions(&mut f.store, &f.home).unwrap();
+            let changes = reconcile(&mut f.store, &found, T).unwrap();
+            assert_eq!(
+                (changes.opened.len(), changes.closed.len()),
+                (0, 1),
+                "{state}"
+            );
+        }
     }
 
     #[test]
