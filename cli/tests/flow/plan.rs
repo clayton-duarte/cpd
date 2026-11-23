@@ -114,7 +114,7 @@ fn section<'a>(text: &'a str, pr: &str) -> &'a str {
     &rest[..end]
 }
 
-/// The fixtures of the migrated tests, on `Fx::with_ports()`: every external (tmux, git, `cpd watch --ensure`) is a
+/// The fixtures of the migrated tests, on `Fx::with_ports_empty()`: every external (tmux, git, `cpd watch --ensure`) is a
 /// route or a rule of the `FakeRunner`. The tests not yet migrated use the binary and the helpers above.
 mod inproc {
     use super::*;
@@ -258,7 +258,7 @@ mod inproc {
 
 #[test]
 fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     fx.cpd(&[
         "context",
@@ -524,7 +524,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
 /// G11: `set -p … @cpd_session` fails after `new-window`: the window is killed, the error returned.
 #[test]
 fn new_leaves_no_window_when_a_step_after_new_window_fails() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     inproc::new_plan_only(&fx, "first");
     let windows = || {
@@ -591,7 +591,7 @@ fn briefs(fx: &Fx) -> Vec<Value> {
 
 #[test]
 fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     let text = "Retry the failed payouts.\n\nMore detail, second paragraph.\n";
     let out = new_with_brief(&fx, "pay", text).ok();
@@ -684,7 +684,7 @@ fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() 
 
 #[test]
 fn new_again_with_the_brief_writes_no_second_brief_record() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     new_with_brief(&fx, "pay", "The brief.\n").ok();
     let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
@@ -719,7 +719,7 @@ fn new_again_with_the_brief_writes_no_second_brief_record() {
 
 #[test]
 fn new_refuses_an_empty_brief_file_and_writes_nothing() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
     refused(&new_with_brief(&fx, "pay", ""), "usage", 2);
@@ -729,7 +729,7 @@ fn new_refuses_an_empty_brief_file_and_writes_nothing() {
 
 #[test]
 fn new_takes_neither_repo_nor_base() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     let repo_arg = repo.to_str().unwrap();
     let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
@@ -745,7 +745,7 @@ fn new_takes_neither_repo_nor_base() {
 
 #[test]
 fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     let first = inproc::new_plan_only(&fx, "pay");
     let session = first["plan"]["lead_session"].as_str().unwrap().to_owned();
@@ -844,7 +844,7 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
 
 #[test]
 fn new_again_in_an_archived_context_is_already_not_archived() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     let first = inproc::new_plan_only(&fx, "pay");
     finish_plan(&fx, "pay");
@@ -880,7 +880,7 @@ fn new_again_in_an_archived_context_is_already_not_archived() {
 
 #[test]
 fn new_and_rename_titles_are_1_to_200_characters_with_no_control_characters() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     let (long, ok) = ("a".repeat(201), "a".repeat(200));
     let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
@@ -917,7 +917,7 @@ fn new_and_rename_titles_are_1_to_200_characters_with_no_control_characters() {
 
 #[test]
 fn new_refusals_write_nothing() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     let new = |extra: &[&str]| {
         let mut args = vec!["plan", "new", "pay", "--title", "T"];
@@ -949,7 +949,7 @@ fn new_refusals_write_nothing() {
 
 #[test]
 fn new_in_a_context_with_no_owner_is_owner_unset_and_writes_nothing() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     // A Context made before the policy keys has no owner.
     store(&fx.env)
@@ -985,7 +985,7 @@ fn new_in_a_context_with_no_owner_is_owner_unset_and_writes_nothing() {
 
 #[test]
 fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let origin = inproc::setup(&fx);
     fx.git(&origin, &["branch", "trunk"]);
     // The fake git route has no writing `symbolic-ref`: `switch` moves HEAD to `trunk` (the same commit, so the same tree).
@@ -1084,7 +1084,7 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
 
 #[test]
 fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     let first = inproc::new_plan(&fx, "pay", &repo);
     let lead = first["plan"]["lead_session"].as_str().unwrap().to_owned();
@@ -1173,7 +1173,7 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
 
 #[test]
 fn phase_refusals() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::new_plan(&fx, "pay", &repo);
     let error = refused(
@@ -1220,7 +1220,7 @@ fn phase_refusals() {
 /// A Plan with no PR yet (`plan new` alone) is found by every Plan read: phase, list, show, archive and unarchive.
 #[test]
 fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 0);
@@ -1264,7 +1264,7 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
 /// one store of the env behind a `Barrier` (the store is ours; the lock and the busy timeout are SQLite's, in-process).
 #[test]
 fn plans_moving_to_phase_plan_at_once_all_move() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     let plans = ["pa", "pb", "pc", "pd", "pe", "pf"];
     for plan in plans {
@@ -1327,7 +1327,7 @@ fn plans_moving_to_phase_plan_at_once_all_move() {
 
 #[test]
 fn list_and_show_are_snapshots_with_an_events_cursor() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::planned(&fx, &repo, "pay");
     inproc::new_plan(&fx, "refund", &repo);
@@ -1467,7 +1467,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
 
 #[test]
 fn show_lists_attempts_open_escalations_and_tampered_fingerprints() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::planned(&fx, &repo, "pay");
     let fingerprint = "f".repeat(64);
@@ -1525,7 +1525,7 @@ fn show_lists_attempts_open_escalations_and_tampered_fingerprints() {
 
 #[test]
 fn render_writes_the_plan_markdown_and_its_fingerprint() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::planned(&fx, &repo, "pay");
     add_job(&fx.env, "pay", "gone", &[]);
@@ -1599,7 +1599,7 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
 
 #[test]
 fn render_shows_the_opener_placeholder_until_the_pr_starts() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
     // A template PR: `workflow add` lays out its shape's stubs and no opener; its `pay-config` stub is cancelled.
@@ -1681,7 +1681,7 @@ fn render_shows_the_opener_placeholder_until_the_pr_starts() {
 
 #[test]
 fn review_requests_a_pending_review_once_per_fingerprint() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::new_plan(&fx, "pay", &repo);
     let error = refused(
@@ -1787,7 +1787,7 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
 
 #[test]
 fn review_requires_a_title_and_stores_it() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::new_plan(&fx, "pay", &repo);
     fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
@@ -1827,7 +1827,7 @@ fn review_requires_a_title_and_stores_it() {
 
 #[test]
 fn decide_records_the_decision_once() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::planned(&fx, &repo, "pay");
     fx.outline_for_review("pay");
@@ -1973,7 +1973,7 @@ fn job_status(env: &TestEnv, key: &str) -> String {
 
 #[test]
 fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_them() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -2216,7 +2216,7 @@ fn add_draft_open(env: &TestEnv, plan: &str, key: &str) {
 /// stays current, and an approval queues it in the same transaction with every other draft it covers (hs-n677).
 #[test]
 fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_with_the_drafts() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -2265,7 +2265,7 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
 /// B1 (hs-d573 O4): `draft_jobs` and `no_draft_jobs` do not count a draft `open` Job, and the review document shows it as context.
 #[test]
 fn a_draft_open_job_is_no_job_under_review() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -2309,7 +2309,7 @@ fn a_draft_open_job_is_no_job_under_review() {
 /// exactly as for any stub, and once completed and no longer waiting the review covers it and an approval queues it.
 #[test]
 fn an_incomplete_stub_after_the_lock_refuses_a_review_request() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -2361,7 +2361,7 @@ fn an_incomplete_stub_after_the_lock_refuses_a_review_request() {
 /// hs-n677: after the lock an approval queues every draft the review covers, whether it waits or not.
 #[test]
 fn an_approval_queues_every_covered_draft() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -2390,7 +2390,7 @@ fn an_approval_queues_every_covered_draft() {
 
 #[test]
 fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     let head = fx.git(&repo, &["rev-parse", "HEAD"]);
@@ -2492,7 +2492,7 @@ fn with_origin(fx: &Fx, repo: &Path) -> PathBuf {
 
 #[test]
 fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     let origin = with_origin(&fx, &repo);
     inproc::approved(&fx, &repo);
@@ -2521,7 +2521,7 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
 
 #[test]
 fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     with_origin(&fx, &repo);
     inproc::approved(&fx, &repo);
@@ -2590,7 +2590,7 @@ fn remote_lead_branch_then_main_moves(fx: &Fx, repo: &Path, conflicting: bool) -
 fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one_merely_behind_it()
 {
     // hs-d490: only a conflict refuses; a base that merely moved ahead of the branch does not.
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     with_origin(&fx, &repo);
     inproc::approved(&fx, &repo);
@@ -2619,7 +2619,7 @@ fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one
 
 #[test]
 fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     with_origin(&fx, &repo);
     inproc::approved(&fx, &repo);
@@ -2643,7 +2643,7 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
 
 #[test]
 fn lock_without_an_origin_remote_is_as_before() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -2654,7 +2654,7 @@ fn lock_without_an_origin_remote_is_as_before() {
 
 #[test]
 fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     with_origin(&fx, &repo);
     inproc::approved(&fx, &repo);
@@ -2687,7 +2687,7 @@ fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
 
 #[test]
 fn lock_stays_locked_when_the_engine_cannot_start() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::approved(&fx, &repo);
     inproc::watch_once(
@@ -2719,7 +2719,7 @@ fn lock_stays_locked_when_the_engine_cannot_start() {
 
 #[test]
 fn lock_refusals_change_nothing() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::new_plan(&fx, "pay", &repo);
     let lock = || fx.cpd(&["plan", "lock", "--plan", "pay"]);
@@ -2831,7 +2831,7 @@ fn lock_refusals_change_nothing() {
 
 #[test]
 fn rename_sets_the_title_and_appends_one_event() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::new_plan(&fx, "pay", &repo);
     let out = fx
@@ -2881,7 +2881,7 @@ fn pane_title(fx: &Fx, pane: &str) -> String {
 
 #[test]
 fn the_leads_pane_carries_its_key_and_plan_rename_leaves_it() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     let out = fx
         .cpd(&[
@@ -2945,7 +2945,7 @@ fn the_leads_pane_carries_its_key_and_plan_rename_leaves_it() {
 
 #[test]
 fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     let out = fx
         .cpd(&[
@@ -3014,7 +3014,7 @@ fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
 
 #[test]
 fn rename_refusals() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::new_plan(&fx, "pay", &repo);
     refused(
@@ -3037,7 +3037,7 @@ fn rename_refusals() {
 
 #[test]
 fn rename_works_on_an_archived_plan() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
     finish_plan(&fx, "pay");
@@ -3103,7 +3103,7 @@ fn event_count(env: &TestEnv) -> i64 {
 
 #[test]
 fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_event_each() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let (lead, fork) = plan_with_fork(&fx);
     finish_plan(&fx, "pay");
     let (lead_pane, fork_pane) = (
@@ -3188,7 +3188,7 @@ fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_
 
 #[test]
 fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let (lead, fork) = plan_with_fork(&fx);
     finish_plan(&fx, "pay");
     fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
@@ -3217,7 +3217,7 @@ fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
 
 #[test]
 fn unarchive_inside_an_archived_context_is_refused() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     inproc::new_plan(&fx, "pay", &repo);
     finish_plan(&fx, "pay");
@@ -3249,7 +3249,7 @@ fn unarchive_inside_an_archived_context_is_refused() {
 
 #[test]
 fn plan_new_in_an_archived_context_is_refused_before_any_write() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     fx.cpd(&["context", "archive", "ctx"]).ok();
     let events_before = event_count(&fx.env);
@@ -3301,7 +3301,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
         ("review", review),
         ("session", String::new()),
     ] {
-        let fx = Fx::with_ports();
+        let fx = Fx::with_ports_empty();
         let (_, fork) = plan_with_fork(&fx);
         finish_plan(&fx, "pay");
         let apply = if kind == "session" {
@@ -3329,7 +3329,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
 
 #[test]
 fn archive_lists_every_blocker() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     plan_with_fork(&fx);
     finish_plan(&fx, "pay");
     store(&fx.env)
@@ -3356,7 +3356,7 @@ fn archive_lists_every_blocker() {
 
 #[test]
 fn a_plan_in_phase_pr_with_no_live_job_archives() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let (lead, _) = plan_with_fork(&fx);
     fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     store(&fx.env)
@@ -3387,7 +3387,7 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
 
 #[test]
 fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let (lead, fork) = plan_with_fork(&fx);
     finish_plan(&fx, "pay");
     // The chat slot: the pane of window `main` running a Lead (the fork).
@@ -3447,7 +3447,7 @@ fn spec_file(env: &TestEnv, name: &str) -> String {
 /// longer waiting, every draft is under the review and the approval queues it.
 #[test]
 fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_approved_and_queued() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     inproc::approved(&fx, &repo);
     fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -3562,7 +3562,7 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
 
 #[test]
 fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     seed_tiers(&fx.env);
     inproc::approved(&fx, &repo);
@@ -3619,7 +3619,7 @@ fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
 
 #[test]
 fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::setup(&fx);
     seed_tiers(&fx.env);
     inproc::new_plan(&fx, "pay", &repo);
@@ -3710,7 +3710,7 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
 
 #[test]
 fn lock_and_review_leave_no_draft_open_job_and_lock_queues_the_started_workflows_open_job() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let repo = inproc::locking(&fx);
     let drafts = "SELECT count(*) FROM jobs WHERE kind = 'open' AND status = 'draft'";
     assert_eq!(fx.env.query::<i64>(drafts), 0, "before the review");

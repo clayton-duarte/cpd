@@ -107,14 +107,14 @@ fn new_plan(fx: &Fx) -> (String, String) {
 
 #[test]
 fn a_new_lead_pane_pill_is_its_key() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let (_, pane) = new_plan(&fx);
     assert_eq!(pane_title(&fx, &pane), "ctx:pay");
 }
 
 #[test]
 fn plan_rename_leaves_the_pill_at_the_key() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let (lead, pane) = new_plan(&fx);
     fx.cpd(&[
         "plan",

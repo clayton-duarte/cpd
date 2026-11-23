@@ -47,7 +47,7 @@ fn name_of(fx: &Fx, role: &str) -> String {
 
 #[test]
 fn agent_key_names_manager_is_named_by_its_context() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     let out = fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
     assert_eq!(out["manager"]["name"], json!("ctx"));
@@ -56,7 +56,7 @@ fn agent_key_names_manager_is_named_by_its_context() {
 
 #[test]
 fn agent_key_names_lead_is_named_context_colon_plan() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     let out = new_plan(&fx);
     assert_eq!(out["lead"]["name"], json!("ctx:pay"));
@@ -65,7 +65,7 @@ fn agent_key_names_lead_is_named_context_colon_plan() {
 
 #[test]
 fn agent_key_names_plan_new_has_no_name_flag() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     let run = fx.cpd(&[
         "plan",
@@ -85,7 +85,7 @@ fn agent_key_names_plan_new_has_no_name_flag() {
 
 #[test]
 fn agent_key_names_session_registered_event_carries_the_key() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
     new_plan(&fx);
@@ -114,7 +114,7 @@ fn fork_of_lead(fx: &Fx) -> String {
 
 #[test]
 fn agent_key_names_fork_keeps_the_source_name_plus_fork() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     new_plan(&fx);
     assert_eq!(fork_of_lead(&fx), "ctx:pay (fork)");
@@ -122,7 +122,7 @@ fn agent_key_names_fork_keeps_the_source_name_plus_fork() {
 
 #[test]
 fn agent_key_names_fork_name_is_cut_to_98_characters() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     new_plan(&fx);
     let long = format!("ctx:pay-{}", "x".repeat(98 - 8));

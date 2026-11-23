@@ -27,14 +27,14 @@ const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
 
 /// An `Fx` on fake ports whose `$CPD_HOME` has the config every command but `config` needs.
 fn fx() -> Fx {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     fx.env.write_config(CONFIG);
     fx
 }
 
 /// An `Fx` on fake ports whose config names the env's private tmux socket (`[tmux] socket`).
 fn tmux_fx() -> Fx {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     fx.env.write_tmux_config("");
     fx
 }

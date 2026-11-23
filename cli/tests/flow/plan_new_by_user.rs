@@ -44,7 +44,7 @@ fn plan_new(fx: &Fx, by_user: bool) -> (String, Launch, Pane) {
 
 #[test]
 fn plan_new_by_user_starts_pi_without_a_first_message() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     let (id, pi, _pane) = plan_new(&fx, true);
     let argv = &pi.args;
@@ -64,7 +64,7 @@ fn plan_new_by_user_starts_pi_without_a_first_message() {
 
 #[test]
 fn plan_new_without_by_user_keeps_the_first_message() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     let (id, pi, _pane) = plan_new(&fx, false);
     let argv = &pi.args;
