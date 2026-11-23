@@ -117,9 +117,9 @@ fn assert_pair(w: &World, plan: &str, phase: &str) {
 fn fresh_lead_defaults_to_durable() {
     for config in ["", "lead_runner = \"pi\""] {
         let w = World::new(config);
-        w.call(args("ordinary", None, false))
-            .expect("ordinary creation");
+        let result = w.call(args("ordinary", None, false));
         assert_pair(&w, "ordinary", "grounding");
+        result.expect("ordinary creation");
         // SAFETY: serialized and restored by World.
         unsafe { std::env::set_var("CPD_SESSION", "mgr") };
         w.call(args("shaping", None, true))
@@ -235,8 +235,8 @@ fn inbox_claim_refuses_pi_before_claim() {
     let out = Ports::scope(&w.fakes.ports, || {
         claim_in(&w.fakes.ports, w.env(), DismissArgs { id: 1 })
     });
-    out.expect("a configured Pi default must not cause a Pi Lead");
     assert_pair(&w, "r-pay-5", "grounding");
+    out.expect("a configured Pi default must not cause a Pi Lead");
     assert_eq!(
         w.query("SELECT count(*) FROM inbox_items WHERE id=1 AND claimed_at IS NOT NULL"),
         1
@@ -270,8 +270,9 @@ fn inbox_claim_refuses_pi_before_claim() {
 #[test]
 fn existing_plan_and_pairing_are_preserved() {
     let w = World::new("lead_runner = \"pi\"");
-    w.call(args("paired", None, false)).expect("create pair");
+    let created = w.call(args("paired", None, false));
     assert_pair(&w, "paired", "grounding");
+    created.expect("create pair");
     let events = w.query("SELECT count(*) FROM events");
     w.call(args("paired", None, false))
         .expect("idempotent reuse");
