@@ -915,3 +915,21 @@ fn janitor_pass_keeps_durable_while_an_attempt_of_an_archived_plan_is_active() {
         "no durable entry: {pruned:?}"
     );
 }
+
+#[test]
+fn janitor_retains_explicitly_abandoned_checkpoint_worktrees() {
+    let mut rig = Rig::new();
+    rig.workflow_with("abandoned", "cancelled", "merged", "merged");
+    rig.workflow_with("superseded", "cancelled", "merged", "merged");
+    rig.workflow("ordinary", "cancelled");
+    rig.sql("INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES
+        (cpd_txn(), 't', 'workflow-cancelled', 'ctx', 'pay', 'Workflow abandoned of Plan pay was explicitly abandoned: obsolete. Merged checkpoints are retained; this is neither success nor supersession. cpd removes nothing.', '{\"workflow\":\"abandoned\"}'),
+        (cpd_txn(), 't', 'workflow-cancelled', 'ctx', 'pay', 'Workflow superseded of Plan pay was cancelled: its work was superseded by Workflow other.', '{\"workflow\":\"superseded\",\"superseded_by\":\"other\"}');");
+    let results = outcomes(rig.pass());
+    assert_eq!(rig.left(&rig.workflows[0]), [true; 6]);
+    for workflow in &rig.workflows[1..] {
+        assert_eq!(rig.left(workflow), [false; 6]);
+        assert!(results.iter().any(|(key, _)| key == workflow.key));
+    }
+    assert!(!results.iter().any(|(key, _)| key == "abandoned"));
+}
