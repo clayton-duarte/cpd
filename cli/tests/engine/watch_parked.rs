@@ -242,7 +242,11 @@ fn archived_draft_retention_is_idempotent() {
         let mut stmt = conn.prepare("SELECT id, kind FROM events WHERE id > ?1 AND kind IN ('job-cancelled', 'session-message')")?;
         stmt.query_map([before], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()
     });
-    assert_eq!(after, [], "later ticks neither cancel drafts nor wake the Lead");
+    assert_eq!(
+        after,
+        [],
+        "later ticks neither cancel drafts nor wake the Lead"
+    );
     assert_eq!(statuses(&fx), expected_statuses("draft"));
 }
 
