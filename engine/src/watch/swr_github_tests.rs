@@ -158,7 +158,7 @@ fn gh_inbox_ci_state_does_not_flicker_across_a_poll_race() {
     .unwrap();
     seen.push(label(&mut fx));
 
-    // A poll that started after the rerun: the raw row is the truth, and only now does the item change.
+    // A poll that started after the rerun: the raw row is the truth, and after grace the failing item can return.
     fakes.clock.advance(Duration::from_secs(10));
     cache::commit(
         &mut fx.engine.store,
@@ -175,11 +175,7 @@ fn gh_inbox_ci_state_does_not_flicker_across_a_poll_race() {
 
     assert_eq!(
         seen,
-        [
-            vec!["pay#801 checks running".to_owned()],
-            vec!["pay#801 checks running".to_owned()],
-            vec!["pay#801 failing".to_owned()],
-        ],
-        "the colour changes at the overlay's start and at the fence, never in between"
+        [vec![], vec![], vec!["pay#801 failing".to_owned()]],
+        "the pending overlay keeps the stale failure out of the Inbox until a fresh poll and grace"
     );
 }
