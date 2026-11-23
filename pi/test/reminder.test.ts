@@ -154,7 +154,7 @@ test("a Manager and a Worker get none, and read no Plan for it", async (t) => {
 
 const job = (key: string, status: string, attempts: unknown[] = [], over: Record<string, unknown> = {}) => ({ key, status, attempts, ...over });
 const failedShow = (...jobs: unknown[]) => planShow({ jobs });
-const FAILED = "cpd reminder: failed Job(s) a, b still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason \"<why>\" when superseded, or ask_user_question when the choice is the User's. Never leave it failed while idle or defer the retry to a background sleep or timer.";
+const FAILED = "cpd reminder: failed Job(s) a, b still unaddressed. A failed Job is never final: dispose of it now, in this turn: cpd job retry <k> --tier <T>, a fix Job (cpd job add), cpd job cancel <k> --reason \"<why>\" when superseded, or ask_user_question when the choice is the User's. If the whole Workflow is superseded, consider cpd workflow cancel <workflow> --superseded-by <replacement> only if the Lead has verified that the replacement carries the original work; cpd does not verify that carryover. Never leave it failed while idle or defer the retry to a background sleep or timer.";
 const failedSent = (f: Fixture) => f.pi.sent.filter((s) => s.message.customType === "cpd-reminder");
 
 test("unaddressedFailedJobs lists every failed Job with its attempts count, in order", () => {
@@ -180,6 +180,13 @@ test("unaddressedFailedJobs throws bad_output on a bad shape", () => {
   bad({ jobs: [{ key: 1, status: "failed", attempts: [] }] });
   bad({ jobs: [{ key: "a", status: "failed" }] });
   bad({ jobs: [{ key: "a", status: "failed", attempts: 2 }] });
+});
+
+test("supersession guidance requires the Lead to verify the replacement carries the original work", () => {
+  const text = failedJobReminderText(["a", "b"]);
+  assert.match(text, /only if the Lead has verified that the replacement carries the original work/);
+  assert.match(text, /cpd workflow cancel <workflow> --superseded-by <replacement>/);
+  assert.doesNotMatch(text, /cpd verifies/i);
 });
 
 test("failedJobReminderText names the keys and the four ways to dispose", () => {
