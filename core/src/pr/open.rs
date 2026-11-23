@@ -1123,13 +1123,13 @@ mod tests {
         let plan = PlanId::parse("pay").unwrap();
         let key = WorkflowKey::parse("api").unwrap();
         store.write("fixture", |tx| {
-            tx.execute_batch("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, failed_cause) VALUES ('pay','api','failed-open','J','S2','g','c','[]','[]','[]','open','failed',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','crashed');
-                INSERT INTO attempts (plan,id,job,number,tier,origin,status,outcome,cause,branch,worktree,driver_pid,started_at,ended_at) VALUES ('pay','failed-open-a1','failed-open',1,'S2','ladder','ended','failed','crashed','b','/w',1,'t','t');
+            tx.execute_batch("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, failed_cause) VALUES ('pay','api','failed-open','J','S2','g','c','[\"a\"]','[\"b\"]','[]','open','failed',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','crashed');
+                INSERT INTO attempts (plan,id,job,number,tier,origin,status,outcome,cause,branch,worktree,driver_pid,started_at,ended_at) VALUES ('pay','failed-open-a1','failed-open',1,'S2','ladder','ended','failed','crashed','cpd/pay/test','/w',1,'t','t');
                 INSERT INTO events (txn,at,kind,context,plan,job,text,data) VALUES (cpd_txn(),'t','job-failed','ctx','pay','failed-open','x','{}');")?;
             Ok(())
         }).unwrap();
         store.write("fixture", |tx| {
-            tx.execute_batch("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, merged_sha) VALUES ('pay','api','fix','J','S2','g','c','[]','[]','[]','work','merged',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','abc');")?;
+            tx.execute_batch("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, merged_sha) VALUES ('pay','api','fix','J','S2','g','c','[\"a\"]','[\"b\"]','[]','work','merged',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','abc');")?;
             Ok(())
         }).unwrap();
         let pulled = Pulled {
