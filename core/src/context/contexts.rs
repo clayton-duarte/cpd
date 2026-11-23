@@ -309,7 +309,7 @@ impl<'a> Contexts<'a> {
                 }
                 let registered = if super::manager::live(tx, id)?.is_none() {
                     let prepared = prepared.as_ref().ok_or_else(|| CpdError::bad_row(format!("Manager of Context {id} disappeared during creation")))?;
-                    super::manager::insert(tx, id, prepared, by_user, self.config.manager_runner)?;
+                    super::manager::insert(tx, id, prepared, by_user)?;
                     true
                 } else {
                     let stored: bool = tx.query_row(
@@ -353,7 +353,7 @@ impl<'a> Contexts<'a> {
                 .context(id.clone()),
             )?;
             let prepared = prepared.as_ref().ok_or_else(|| CpdError::bad_row(format!("Manager exists without Context {id}")))?;
-            super::manager::insert(tx, id, prepared, by_user, self.config.manager_runner)?;
+            super::manager::insert(tx, id, prepared, by_user)?;
             Ok((ContextRow::require(tx, id)?, false, true))
         })?;
         let mut provision = || -> Result<Value, CpdError> {
