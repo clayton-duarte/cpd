@@ -20,7 +20,7 @@ import { codemodeNamespaces } from "./codemode.ts";
 import { createReload, type ReloadPort } from "./reload.ts";
 import { createRetier } from "./retier.ts";
 import { skillsCheck, skillsSection, type SkillsPort } from "./skills.ts";
-import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
+import { highestReview, REVIEW_LABEL, reviewsFromEntries } from "../lib/plan-review.ts";
 import type { Host } from "../lib/host.ts";
 import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, reportTrip, resetTurn, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
 import { policySection } from "../lib/policy.ts";
@@ -200,13 +200,18 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     };
     // §6.16 held deliveries: while the breaker is tripped an input that would start a turn is queued here, not submitted.
     const heldLoop: Input[] = [];
-    // §6.15 "The blocked state": a held request reports `blocked` with the label `dialog`; resolving to zero returns to
-    // `working` while a run is pending, else to `idle`, with the reply rule of §6.13 untouched. A loop-guard trip reports
-    // `blocked` with the label `φ: loop guard` by label, not by a held request (§6.16).
+    // §6.15 "The blocked state": review requests already have their own Inbox item. An independent held
+    // dialog still takes the generic label so it can appear separately; the loop guard keeps precedence.
     let hostState: "idle" | "working" = "idle";
     let reply = false;
-    const wanted = (): Wanted =>
-      loop.tripped ? { state: "blocked", label: LABEL } : held.heldCount() > 0 ? { state: "blocked", label: "dialog" } : hostState === "working" ? { state: "working" } : reply ? { state: "idle", reply: true } : { state: "idle" };
+    const wanted = (): Wanted => {
+      if (loop.tripped) return { state: "blocked", label: LABEL };
+      if (held.heldCount() > 0) {
+        const reviewOnly = held.heldList().every((request) => request.purpose === "plan_review");
+        return { state: "blocked", label: reviewOnly ? REVIEW_LABEL : "dialog" };
+      }
+      return hostState === "working" ? { state: "working" } : reply ? { state: "idle", reply: true } : { state: "idle" };
+    };
     const report = (): void => {
       server?.stateChanged();
       reporter.want(wanted());
