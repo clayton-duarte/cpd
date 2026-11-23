@@ -1013,6 +1013,14 @@ pub fn crashed_detail(
     detail
 }
 
+/// Read inside the end transaction so terminalization and retry cannot race.
+fn terminal_workflow(tx: &WriteTxn<'_>, attempt: &Attempt) -> Result<bool, CpdError> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status IN ('merged', 'cancelled'))",
+        params![attempt.plan.as_str(), attempt.workflow_str()], |r| r.get(0),
+    )?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1089,12 +1097,4 @@ mod tests {
             "each belongs in attempt/ledger.rs only: {twice:#?}"
         );
     }
-}
-
-/// Read inside the end transaction so terminalization and retry cannot race.
-fn terminal_workflow(tx: &WriteTxn<'_>, attempt: &Attempt) -> Result<bool, CpdError> {
-    Ok(tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status IN ('merged', 'cancelled'))",
-        params![attempt.plan.as_str(), attempt.workflow_str()], |r| r.get(0),
-    )?)
 }
