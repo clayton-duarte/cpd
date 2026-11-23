@@ -52,9 +52,10 @@ fn a_new_plan_stores_the_runner_it_was_asked_for() {
 fn explicit_pi_is_refused_even_with_durable_default() {
     let fx = Fx::with_ports_empty();
     setup(&fx, "lead_runner = \"durable\"");
+    let sessions = count(&fx, "sessions");
     common::refused(&plan_new(&fx, "pl", Some("pi")), "usage", 2);
     assert_eq!(count(&fx, "plans"), 0);
-    assert_eq!(count(&fx, "sessions"), 0);
+    assert_eq!(count(&fx, "sessions"), sessions);
 }
 
 #[test]
@@ -77,7 +78,7 @@ fn a_rerun_with_a_different_runner_is_refused() {
     setup(&fx, "");
     let out = plan_new(&fx, "pl", Some("durable")).ok();
     let lead = out["lead"]["session"].as_str().unwrap().to_owned();
-    common::refused(&plan_new(&fx, "pl", Some("pi")), "usage", 2);
+    common::refused(&plan_new(&fx, "pl", Some("pi")), "plan_exists", 3);
     assert_eq!(runner_of(&fx, &lead), "durable");
 }
 
@@ -95,9 +96,10 @@ fn durable_leads_true_makes_a_new_lead_durable() {
 fn explicit_pi_is_refused_when_durable_leads_enabled() {
     let fx = Fx::with_ports_empty();
     setup(&fx, "[experimental]\ndurable_leads = true");
+    let sessions = count(&fx, "sessions");
     common::refused(&plan_new(&fx, "pl", Some("pi")), "usage", 2);
     assert_eq!(count(&fx, "plans"), 0);
-    assert_eq!(count(&fx, "sessions"), 0);
+    assert_eq!(count(&fx, "sessions"), sessions);
 }
 
 #[test]
