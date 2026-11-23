@@ -72,6 +72,7 @@ pub(crate) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
         .read(|conn| crate::plan::shaping::guard(conn, &plan))?;
     if args.draft {
         match args.waiting_on.as_deref() {
+            None => {}
             Some(target) if validate_waiting_on(target) => {}
             _ => {
                 return Err(CpdError::new(
