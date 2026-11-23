@@ -6189,6 +6189,35 @@ fn a_preopen_push_lets_a_blocked_test_job_submit() {
 
 #[test]
 fn an_owned_stale_archived_pr_closed_unmerged_wakes_lead_once() {
+    use cpd_core::clock::Clock;
+    use cpd_core::swr::source::{Cx as SwrCx, github::GithubSource};
+
+    struct SwrGh(Arc<Gh>);
+    impl Handler for SwrGh {
+        fn handle(&self, call: &Call) -> Reply {
+            if call.args.iter().any(|arg| arg.contains("authored: search")) {
+                let mut pull: Value = serde_json::from_str(&pay("CLOSED", None, None)).unwrap();
+                pull["headRefOid"] = json!("head");
+                pull["headRefName"] = json!("cpd/pay");
+                pull["baseRefName"] = json!("main");
+                pull["author"] = json!({"login": "me"});
+                pull["repository"]["defaultBranchRef"] = json!({"name": "main"});
+                pull["labels"] = json!({"nodes": []});
+                pull["latestReviews"] = json!({"nodes": []});
+                pull["reviewThreads"]["pageInfo"] = json!({"hasNextPage": false});
+                pull["autoMergeRequest"] = Value::Null;
+                Reply::ok(&json!({"data": {
+                    "viewer": {"login": "me"},
+                    "rateLimit": {"remaining": 4900, "cost": 1, "resetAt": "2026-10-20T11:00:00Z"},
+                    "authored": {"issueCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false}},
+                    "reviews": {"issueCount": 0, "nodes": [], "pageInfo": {"hasNextPage": false}},
+                    "p0": {"pullRequest": pull}
+                }}).to_string())
+            } else {
+                self.0.handle(call)
+            }
+        }
+    }
     let kit = Kit::with_ports_empty();
     kit.env.write_config("version = 1\nmachine = \"t\"\n");
     let repo = kit.keyed_repo("pay");
@@ -6226,9 +6255,21 @@ fn an_owned_stale_archived_pr_closed_unmerged_wakes_lead_once() {
         &fx.merged_sha,
     );
     fx.env.sql("UPDATE sessions SET runner = 'durable' WHERE id = 'lead1'; UPDATE pull_requests SET archived = 1 WHERE number = 812; INSERT INTO swr_repos (repo, is_archived, fetched_at) VALUES ('acme/pay', 0, '2099-01-01T00:00:00Z');");
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("CLOSED", None, None))]);
-    fx.poll();
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(SwrGh(fx.gh.clone())));
+    let mut store = fx.store();
+    let config = Config::load(&fx.home).unwrap();
+    let mut cx = SwrCx {
+        store: &mut store,
+        ports: &fx.fakes.ports,
+        home: &fx.home,
+        config: &config,
+    };
+    cpd_core::ports::Ports::scope(&fx.fakes.ports, || {
+        GithubSource::default().pass_with_effects(&mut cx, fx.fakes.clock.utc())
+    })
+    .unwrap();
     assert_eq!(
         fx.pr_data().3,
         "closed",
@@ -6256,5 +6297,11 @@ fn an_owned_stale_archived_pr_closed_unmerged_wakes_lead_once() {
     assert_eq!(fx.plan_row().0, "deploy");
     assert!(fx.events("workflow-cancelled").is_empty());
     assert!(fx.events("pr-merged").is_empty());
-    assert_eq!(fx.gh_calls().iter().filter(|c| is_lookup(c)).count(), 1);
+    assert_eq!(
+        fx.gh_calls()
+            .iter()
+            .filter(|c| c.iter().any(|arg| arg.contains("p0: repository(")))
+            .count(),
+        1
+    );
 }
