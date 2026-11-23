@@ -3012,4 +3012,40 @@ Cockpit startup cancellation: stopping before the initial load completes cancels
 
 ## 35. WebUI handoff and candidate ownership (Plan `b101-webui-convergence`)
 
-A WebUI handoff transfers one production writer and its traffic ownership without losing persisted mutation receipts or client continuity. A staged candidate is not a production service. Production activation remains disabled in this workflow; this section documents the required handoff contract, not shipped activation or candidate reconciliation.
+A WebUI handoff transfers one production writer and its traffic ownership without losing persisted mutation receipts or client continuity. This section adds a handoff boundary; it does not supersede §34's outbox, deduplication, or client continuity contract.
+
+### 35.1 Ownership and staged candidates
+
+At any time there is at most one production writer and one owner of production traffic. The current owner retains both until a replacement is positively established as the next owner. A candidate is not an owner merely because it is alive, prepared, ready to take over, or associated with the production port. Ownership must be established from consistent, positive evidence of the serving identity and production service; an unknown, foreign, stale, or contradictory holder is never adopted or signalled as if it were the owner.
+
+A staged candidate must not eagerly construct production services, accept production mutations, publish itself as serving, or read/advance production mutation receipts. Staging and candidate inspection are non-owning operations. Until an explicit, valid ownership transfer, production traffic continues to the current owner.
+
+### 35.2 Receipt ordering and transfer boundary
+
+Mutation receipts are the durable evidence used to deduplicate and acknowledge mutations (including the receipts described in §34.2 and §34.8). They must remain available across owner replacement. The handoff ordering is:
+
+1. Stage and validate the candidate without activating production services or consuming production receipts.
+2. At the transfer boundary, fence mutation admission to the current owner and recheck for unsettled work and verify that the expected current owner still owns production traffic. Do not treat an earlier readiness observation as proof that this boundary is still safe. If this check refuses, remove the fence and resume the compatible current listener without discarding persisted writes.
+3. Once the boundary check passes, drain the old writer: stop admitting new mutations to it, allow already accepted work to settle, and persist its final receipt changes. Then dispose the old writer and release its production ownership/listener.
+4. Only after the old writer has drained and been disposed, the replacement freshly reads the existing persisted receipts, including writes persisted by the old owner since candidate staging. It must complete this read and establish receipt continuity before it is production-ready or receives production traffic.
+5. Establish the replacement as the sole production writer and traffic owner. Verify that it is serving before reporting a successful handoff.
+
+There is no overlapping production write authority. Readiness of a staged candidate is not production readiness and does not permit it to read receipts early or to receive traffic early.
+
+### 35.3 Refusal, timeout, and ownership change
+
+If the boundary recheck finds unsettled work, receipt state that cannot be safely reconciled, a timeout, or an ownership change, refuse the handoff. Do not discard, roll back, overwrite, or acknowledge away persisted newer writes or receipts. Do not signal or replace a process whose production ownership is unknown. Keep the compatible current listener and its client connections serving; leave the persisted writes available for a later safe attempt. A refusal is not permission to clear state, force clients to reload, or claim the candidate current.
+
+If the old owner has drained and disposed but the replacement cannot freshly read receipts or establish ownership, do not declare production ready or route traffic to it. Preserve durable receipts and surface the failed handoff; recovery must re-establish a known compatible owner before accepting mutations. Never fabricate success from a candidate's staged state.
+
+### 35.4 Candidate compatibility and reconciliation
+
+Candidate reconciliation must classify shared dependencies conservatively. A candidate may be considered current only when the relevant shared dependencies are positively compatible and reconciled. An engine, adapter, or schema change, and any pending migration, holds the candidate: it must not be marked current or activated on the assumption that compatibility is harmless. Unknown or contradictory evidence also holds rather than guesses.
+
+The compatibility/reconciliation gap for this workflow is explicit: production activation and candidate reconciliation are disabled/not shipped here. This contract does not assert that engine, adapter, schema, or migration compatibility has been implemented or verified. A held candidate remains staged and non-owning; it does not alter the production listener, receipts, or persisted newer writes.
+
+### 35.5 Client continuity and scope
+
+Preserve existing WebUI connections and their in-progress client continuity across a refused or timed-out handoff. Keep §34's outbox and deduplication behavior intact so retries retain their request identities and receipts. This handoff does not require a forced browser reload, deploy RPC, FYI Inbox notification, or state clearing.
+
+Production activation remains disabled in this workflow. This is the normative safety contract for a future handoff, not a claim that the handoff path, receipt reconciliation, or activation is shipped. No production activation, migration, or candidate promotion is authorized by this documentation.
