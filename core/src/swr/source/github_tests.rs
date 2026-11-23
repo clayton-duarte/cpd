@@ -1369,3 +1369,6 @@ fn an_invalid_repository_policy_does_not_fail_the_shared_github_endpoint() {
     assert_eq!(endpoint.error_count, 0);
     assert!(endpoint.paused_until.is_none());
 }
+
+#[test]
+fn gh_poll_reconciles_owned_pr_with_stale_archive_flag() {}

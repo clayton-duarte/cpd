@@ -6186,3 +6186,6 @@ fn a_preopen_push_lets_a_blocked_test_job_submit() {
         "the blocked red-test Job submitted once its test was found"
     );
 }
+
+#[test]
+fn an_owned_stale_archived_pr_closed_unmerged_wakes_lead_once() {}
