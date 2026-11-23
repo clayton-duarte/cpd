@@ -117,7 +117,10 @@ fn agent_key_names_fork_keeps_the_source_name_plus_fork() {
     let fx = Fx::with_ports_empty();
     setup(&fx);
     new_plan(&fx);
-    fixture(&fx.env, "UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
+    fixture(
+        &fx.env,
+        "UPDATE sessions SET runner = 'pi' WHERE role = 'lead';",
+    );
     assert_eq!(fork_of_lead(&fx), "ctx:pay (fork)");
 }
 
@@ -126,7 +129,10 @@ fn agent_key_names_fork_name_is_cut_to_98_characters() {
     let fx = Fx::with_ports_empty();
     setup(&fx);
     new_plan(&fx);
-    fixture(&fx.env, "UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
+    fixture(
+        &fx.env,
+        "UPDATE sessions SET runner = 'pi' WHERE role = 'lead';",
+    );
     let long = format!("ctx:pay-{}", "x".repeat(98 - 8));
     assert_eq!(long.len(), 98);
     fixture(

@@ -31,9 +31,15 @@ fn plan_new(fx: &Fx, by_user: bool) -> (String, Launch, Pane) {
     let out = fx.cpd(&args).ok();
     let id = out["lead"]["session"].as_str().unwrap().to_owned();
     assert!(out["lead"]["pane"].is_null());
-    fx.env.sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
+    fx.env
+        .sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
     fx.cpd(&["session", "open", &id]).ok();
-    let pane_id = fx.panes().into_iter().find(|p| p.session == id).unwrap().pane;
+    let pane_id = fx
+        .panes()
+        .into_iter()
+        .find(|p| p.session == id)
+        .unwrap()
+        .pane;
     let pane = Pane::at(fx, &pane_id, &installed_cpd(fx));
     let mut wrapper = pane.run(&["session", "run", &id]);
     wrapper.until("pi", || !pane.spawn.pis().is_empty());

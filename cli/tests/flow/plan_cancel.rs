@@ -82,7 +82,8 @@ fn world(fx: &Fx) -> (String, String) {
         .unwrap()
         .to_owned();
     // Model a pre-switch native Lead for the pane and fork cancellation cases.
-    fx.env.sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
+    fx.env
+        .sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
     fx.cpd(&["session", "open", &lead]).ok();
     fx.cpd(&["session", "park"]).ok();
     for key in ["api", "web", "ui"] {

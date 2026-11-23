@@ -521,30 +521,17 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
     );
 }
 
-/// G11: `set -p … @cpd_session` fails after `new-window`: the window is killed, the error returned.
+/// A Store fault after the Lead insert must roll back the paired registration.
 #[test]
-fn new_leaves_no_window_when_a_step_after_new_window_fails() {
+fn new_rolls_back_the_pair_when_plan_insertion_fails() {
     let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
-    inproc::new_plan_only(&fx, "first");
-    let windows = || {
-        String::from_utf8(
-            fx.tmux(&["list-windows", "-a", "-F", "#{window_name}"])
-                .stdout,
-        )
-        .unwrap()
-    };
-    let before = windows();
-    assert!(before.contains("park-first"), "{before}");
-
-    // The route answers every other call; this one rule refuses `set … @cpd_session` (it comes before the route).
-    let _ = (*fx.fakes.runner).clone().on(
-        "tmux",
-        |call| {
-            call.args.iter().any(|a| a == "set") && call.args.iter().any(|a| a == "@cpd_session")
-        },
-        Reply::exit(1, "", "refused\n"),
-    );
+    fx.env.sql("CREATE TRIGGER fail_plan BEFORE INSERT ON plans BEGIN SELECT RAISE(ABORT, 'injected plan insert failure'); END;");
+    let before_panes = fx.panes();
+    let before_launches = fx.fakes.spawn.launches().len();
+    let before_events: i64 = fx
+        .env
+        .query("SELECT count(*) FROM events WHERE kind IN ('plan-created', 'session-registered')");
     let run = fx.cpd(&[
         "plan",
         "new",
@@ -554,9 +541,25 @@ fn new_leaves_no_window_when_a_step_after_new_window_fails() {
         "--title",
         "Plan second",
     ]);
-
-    assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
-    assert_eq!(windows(), before, "plan new left a window");
+    assert_ne!(run.exit, 0, "{run:?}");
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM plans WHERE id = 'second'"),
+        0
+    );
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM sessions WHERE plan = 'second'"),
+        0
+    );
+    assert_eq!(
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM events WHERE kind IN ('plan-created', 'session-registered')"
+        ),
+        before_events
+    );
+    assert_eq!(fx.panes().len(), before_panes.len());
+    assert_eq!(fx.fakes.spawn.launches().len(), before_launches);
 }
 
 /// `plan new` with a brief file whose text is `text`.
