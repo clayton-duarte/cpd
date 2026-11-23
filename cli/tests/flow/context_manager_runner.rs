@@ -43,14 +43,15 @@ fn a_manager_is_created_with_the_runner_it_was_asked_for() {
 }
 
 #[test]
-fn a_runner_flag_overrides_the_config_default() {
+fn explicit_pi_is_refused_even_when_configured() {
     let fx = Fx::with_ports();
-    setup(&fx, "manager_runner = \"durable\"");
-    fx.cockpit();
-    let out = manager(&fx, Some("pi")).ok();
-    let id = out["manager"]["session"].as_str().unwrap().to_owned();
-    assert!(!out["manager"]["pane"].is_null(), "{out}");
-    assert_eq!(runner_of(&fx, &id), "pi");
+    setup(&fx, "manager_runner = \"pi\"");
+    common::refused(&manager(&fx, Some("pi")), "usage", 2);
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM sessions WHERE context='ctx'"),
+        0
+    );
 }
 
 #[test]
@@ -71,9 +72,8 @@ fn a_resumed_manager_keeps_its_stored_runner() {
 fn a_resume_with_a_different_runner_is_refused() {
     let fx = Fx::with_ports();
     setup(&fx, "");
-    fx.cockpit();
-    let first = manager(&fx, Some("pi")).ok();
+    let first = manager(&fx, Some("durable")).ok();
     let id = first["manager"]["session"].as_str().unwrap().to_owned();
-    common::refused(&manager(&fx, Some("durable")), "usage", 2);
-    assert_eq!(runner_of(&fx, &id), "pi");
+    common::refused(&manager(&fx, Some("pi")), "usage", 2);
+    assert_eq!(runner_of(&fx, &id), "durable");
 }

@@ -440,11 +440,12 @@ fn curation_refuses_a_limit_of_zero() {
 }
 
 #[test]
-fn context_creation_provisions_manager_through_mock_tmux() {
+fn context_creation_registers_durable_manager_without_tmux() {
     let fx = fx();
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions WHERE context='building-cpd' AND role='manager' AND runner='durable' AND tmux_pane IS NULL"), 1);
     assert!(
         fx.calls("tmux")
             .iter()
-            .any(|call| call.args.iter().any(|arg| arg == "has-session"))
+            .all(|call| !call.args.iter().any(|arg| arg == "ctx-building-cpd"))
     );
 }

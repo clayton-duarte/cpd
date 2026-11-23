@@ -1432,7 +1432,10 @@ fn archivable(fx: &Fx) {
          UPDATE plans SET phase = 'deploy' WHERE id IN ('pay', 'ship');
          UPDATE plans SET phase = 'done', done_at = 't' WHERE id IN ('pay', 'ship');",
     );
-    for id in ["lead-pay", "fork-pay"] {
+    fx.env.sql(
+        "UPDATE sessions SET runner = 'pi' WHERE context = 'building-cpd' AND role = 'manager'",
+    );
+    for id in ["lead-pay", "fork-pay", manager_id(fx).as_str()] {
         pane(fx, id);
     }
 }

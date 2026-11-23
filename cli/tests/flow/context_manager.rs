@@ -1,10 +1,4 @@
-//! `cpd context manager` (commands.md §3.10, contract §3.1 "The Context's
-//! Manager"; B3-A1, B3-A2) and `session open` of a Manager (§10.4), run in this process (`Fx::with_ports`) on the
-//! fake tmux: the Manager's window is the one `new-window` call that `context manager` makes, so the tests assert that
-//! command (`cpd session run <id>`, its directory and its `-e` variables) and what `context manager` writes itself
-//! (the Session row, the Events, the first-message file). What `session run` does with the Session row (pi's argv:
-//! `--model`, `--session-id`, `-n`, `-- @<path>`) is the session area's (`launch_pi`,
-//! `host/pi/launch.rs`), not asserted here.
+//! Manager creation and legacy Manager resumption using fake tmux.
 
 use crate::common;
 
@@ -58,17 +52,6 @@ fn new_windows(fx: &Fx) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// What the fake server started in `pane`: `(argv, cwd, the -e variables)`.
-fn started(fx: &Fx, pane: &str) -> (Vec<String>, String, Vec<(String, String)>) {
-    let state = fx.tmux_state().expect("a server");
-    let p = state
-        .panes()
-        .into_iter()
-        .find(|p| p.id == pane)
-        .unwrap_or_else(|| panic!("no pane {pane}"));
-    (p.argv, p.cwd, state.pane_env(pane))
-}
-
 fn manager_ids(fx: &Fx) -> Vec<String> {
     let out = fx.cpd(&["session", "list", "--role", "manager"]).ok();
     out["sessions"]
@@ -80,7 +63,7 @@ fn manager_ids(fx: &Fx) -> Vec<String> {
 }
 
 #[test]
-fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
+fn the_first_call_registers_a_durable_manager_without_a_window() {
     let fx = Fx::with_ports();
     setup(&fx);
     fx.cockpit();
@@ -120,16 +103,12 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
         fx.env.home().canonicalize().unwrap().display().to_string()
     );
     assert_eq!(row["tmux_pane"], manager["pane"]);
-    assert_eq!(row["place"], "parked");
+    assert_eq!(row["place"], "none");
 
-    // Its window, parked, with @cpd_session.
-    let pane = manager["pane"].as_str().unwrap();
-    let mine = fx.panes().into_iter().find(|p| p.pane == pane).unwrap();
-    assert_eq!(
-        (mine.window_name.as_str(), mine.session.as_str()),
-        ("ctx-ctx", id.as_str())
-    );
-    assert_eq!(window_names(&fx), ["ctx-ctx", "main"]);
+    assert_eq!(row["runner"], "durable");
+    assert!(manager["pane"].is_null());
+    assert_eq!(window_names(&fx), ["main"]);
+    assert!(new_windows(&fx).is_empty());
 
     // The Events.
     let registered = events(&fx, "session-registered");
@@ -139,31 +118,8 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
         registered[0]["data"],
         json!({"role": "manager", "name": "ctx", "forked_from": null, "tier": "O4"})
     );
-    let moved = events(&fx, "session-moved");
-    assert_eq!(moved.len(), 1);
-    assert_eq!(moved[0]["data"]["place"], "parked");
-    assert_eq!(moved[0]["data"]["pane"], json!(pane));
+    assert!(events(&fx, "session-moved").is_empty());
 
-    // The window's command: `cpd session run <id>` (which starts pi) in the Session's directory, with the Manager's
-    // environment: its Session and this env's home, and no Plan.
-    assert_eq!(new_windows(&fx).len(), 1, "one new-window");
-    let (argv, cwd, vars) = started(&fx, pane);
-    assert_eq!(argv, ["cpd", "session", "run", id.as_str()]);
-    assert_eq!(
-        cwd,
-        fx.env.home().canonicalize().unwrap().display().to_string()
-    );
-    assert_eq!(
-        vars,
-        [
-            (
-                "CPD_HOME".to_owned(),
-                fx.env.cpd_home().display().to_string()
-            ),
-            ("CPD_SESSION".to_owned(), id.clone())
-        ],
-        "the Manager's environment: a Session, a home and no CPD_PLAN"
-    );
     // The first message goes as its file, which `session run` hands to pi as `@<path>` (hs-n111), as a Lead's does.
     let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
     let first = fs::read_to_string(&path).unwrap();
@@ -221,70 +177,37 @@ fn a_second_call_changes_nothing() {
     );
     assert_eq!(fx.panes(), panes_before);
     assert_eq!(slot(&fx), slot_before);
-    assert_eq!(new_windows(&fx).len(), 1, "pi is started once");
+    assert!(
+        new_windows(&fx).is_empty(),
+        "durable creation opens no window"
+    );
 }
 
 #[test]
-fn a_stopped_manager_without_a_pane_is_started_again_on_its_file() {
+fn a_stopped_durable_manager_is_not_recreated_or_given_a_pane() {
     let fx = Fx::with_ports();
     setup(&fx);
     fx.cockpit();
     let first = fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
     let id = first["manager"]["session"].as_str().unwrap().to_owned();
-    // The first message is written once, at registration; a restart must not write it again.
     let message = fx.env.cpd_home().join("run/ctx/manager-message.md");
     assert!(message.exists());
     fs::remove_file(&message).unwrap();
-
-    // Close its pane: stopped, no pane.
-    fx.cpd(&["session", "close", &id]).ok();
-    let row = fx.cpd(&["session", "show", &id]).ok()["session"].clone();
-    assert_eq!(
-        (&row["state"], &row["tmux_pane"]),
-        (&json!("stopped"), &Value::Null)
-    );
-    assert_eq!(window_names(&fx), ["main"]);
-    let slot_before = slot(&fx);
-
+    let before = slot(&fx);
     let again = fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
-    assert_eq!(again["started"], true);
-    assert_eq!(again["manager"]["session"], json!(id));
-    assert_ne!(again["manager"]["pane"], first["manager"]["pane"]);
-    assert_eq!(
-        manager_ids(&fx),
-        std::slice::from_ref(&id),
-        "no second Manager"
-    );
+    assert_eq!(again["started"], false);
+    assert_eq!(again["manager"]["session"], id);
+    assert!(again["manager"]["pane"].is_null());
+    assert_eq!(manager_ids(&fx), [id]);
     assert_eq!(events(&fx, "session-registered").len(), 1);
-    // `session-moved` for: parked, its pane closed, parked again.
-    assert_eq!(events(&fx, "session-moved").len(), 3);
-    assert_eq!(window_names(&fx), ["ctx-ctx", "main"]);
-    assert_eq!(slot(&fx), slot_before);
-
-    // The window runs `cpd session run` of the same Session again: `session run` finds its file and resumes it on the
-    // row's Tier, with no first message (hs-d506, the session area's); here, no first message is written again.
-    assert_eq!(new_windows(&fx).len(), 2);
-    let (argv, _, vars) = started(&fx, again["manager"]["pane"].as_str().unwrap());
-    assert_eq!(argv, ["cpd", "session", "run", id.as_str()]);
-    assert!(
-        vars.contains(&("CPD_SESSION".to_owned(), id.clone())),
-        "{vars:?}"
-    );
-    assert!(
-        !message.exists(),
-        "no first message is written for a restart"
-    );
-
-    // And a third call changes nothing.
-    assert_eq!(
-        fx.cpd(&["context", "manager", "--context", "ctx"]).ok()["started"],
-        false
-    );
-    assert_eq!(new_windows(&fx).len(), 2);
+    assert!(events(&fx, "session-moved").is_empty());
+    assert!(new_windows(&fx).is_empty());
+    assert_eq!(slot(&fx), before);
+    assert!(!message.exists());
 }
 
 #[test]
-fn missing_cockpit_creates_manager_window() {
+fn missing_cockpit_does_not_prevent_durable_manager_creation() {
     let fx = Fx::with_ports();
     setup(&fx);
     let out = fx.cpd(&["context", "manager", "--context", "ctx"]).ok();
@@ -293,13 +216,9 @@ fn missing_cockpit_creates_manager_window() {
         manager_ids(&fx),
         [out["manager"]["session"].as_str().unwrap()]
     );
-    let calls = fx.calls("tmux");
-    assert!(
-        calls
-            .iter()
-            .any(|c| c.args.iter().any(|a| a == "new-session"))
-    );
-    assert!(fx.tmux_state().is_some());
+    assert!(out["manager"]["pane"].is_null());
+    assert!(fx.calls("tmux").is_empty());
+    assert!(fx.tmux_state().is_none());
 }
 
 #[test]
