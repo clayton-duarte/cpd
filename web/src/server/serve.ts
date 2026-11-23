@@ -222,6 +222,9 @@ export async function createPreviewServer(options?: PreviewServeOptions): Promis
 // If run directly as a script
 if (import.meta.url.startsWith('file:') && process.argv[1] === fileURLToPath(import.meta.url)) {
   const standby = process.env["CPD_WEBUI_PREPARE"] === "1";
+  if (standby) {
+    throw new Error("WebUI standby activation is disabled until ownership and receipt reconciliation are implemented.");
+  }
   const host = process.env["CPD_WEBUI_HOST"] ?? PROD_HOST;
   // Validate the eventual LAN binding before any standby work starts.
   webAccess(host);
