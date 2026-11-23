@@ -57,8 +57,6 @@ export function createDurableBackend(deps: {
   cpd: Cpd;
   git: GitBoundary;
   scheduler: Scheduler;
-  fs?: { write(path: string, data: Uint8Array): Promise<void> };
-  cpdHome?: string;
   windowSize?: number;
 }): SessionBackend {
   const windowSize = deps.windowSize ?? WINDOW_SIZE;
@@ -235,23 +233,6 @@ export function createDurableBackend(deps: {
         send({ type: "session.dialog", sessionId, dialog: result });
       };
 
-      const syncTranscriptDialog = (): void => {
-        const openReview = dialect.transcript.openDialog ?? null;
-        const hasUiPlanReview = [...dialogs.values()].some(
-          (d) => !d.dialog.id.startsWith("review:") && d.dialog.method === "cpd_plan_review",
-        );
-        for (const [id] of dialogs) {
-          if (id.startsWith("review:") && (hasUiPlanReview || openReview?.id !== id)) {
-            dialogs.delete(id);
-            send({ type: "session.dialogResolved", sessionId, dialogId: id, outcome: "answered" });
-          }
-        }
-        if (openReview !== null && !hasUiPlanReview && !dialogs.has(openReview.id)) {
-          dialogs.set(openReview.id, { dialog: openReview });
-          send({ type: "session.dialog", sessionId, dialog: openReview });
-        }
-      };
-
       // snapshot/events (protocol 1) and view/ops (protocol 2) frames are applied one at a time, in order: a gap fill awaits the host between two of them.
       let frames: Promise<void> = Promise.resolve();
       const onStream = async (frame: Extract<HostFrame, { type: "snapshot" | "events" | "view" | "ops" }>): Promise<void> => {
@@ -282,7 +263,6 @@ export function createDurableBackend(deps: {
           const ids = new Set(out.queued.map((q) => q.id));
           queued = queued.filter((q) => q.submissionId !== undefined && ids.has(q.submissionId));
         }
-        syncTranscriptDialog();
         emitFooter(false);
         emitStatus(false);
       };
@@ -399,9 +379,6 @@ export function createDurableBackend(deps: {
       emitStatus(true);
       ready = true;
       for (const frame of early.splice(0)) onLive(frame);
-      frames = frames.then(() => {
-        if (!disposed) syncTranscriptDialog();
-      }).catch(onStreamError);
 
       const guard = (): void => {
         if (gone !== null) throw gone;
@@ -503,33 +480,6 @@ export function createDurableBackend(deps: {
           const pending = dialogs.get(dialogId);
           if (pending === undefined) throw invalid(`no open dialog ${dialogId}`);
           if (pending.dialog.method !== response.method) throw invalid(`dialog ${dialogId} is ${pending.dialog.method}, not ${response.method}`);
-          if (dialogId.startsWith("review:")) {
-            if (response.outcome === "cancelled") {
-              dialogs.delete(dialogId);
-              send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "cancelled" });
-              return;
-            }
-            const review = dialogId.slice("review:".length);
-            const plan = session.ref.key.split(":")[1];
-            if (!review || !plan) throw invalid("no plan review in this session");
-            if (response.outcome === "approve") {
-              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "approve", planId: plan }));
-            } else if (response.outcome === "reject") {
-              await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
-            } else if (response.outcome === "changes") {
-              if (deps.fs !== undefined && deps.cpdHome !== undefined) {
-                const feedbackFile = `${deps.cpdHome}/run/${plan}/feedback-${review}.md`;
-                await deps.fs.write(feedbackFile, new TextEncoder().encode(response.feedback));
-                await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan, feedbackFile }));
-              } else {
-                await deps.cpd.json(toArgv({ kind: "plan.decide", review, decision: "reject", planId: plan }));
-                await client.submit({ text: response.feedback, whenBusy: "followUp", requestId: `feedback:${dialogId}` });
-              }
-            }
-            dialogs.delete(dialogId);
-            send({ type: "session.dialogResolved", sessionId, dialogId, outcome: "answered" });
-            return;
-          }
           if (pending.dialog.method === "ask_user_question" && approvals.has(dialogId)) {
             // fail closed: a cancelled approval is a denial
             const answer = response.outcome === "answered" && response.method === "ask_user_question" ? response.result.answers[0]?.answer : undefined;
