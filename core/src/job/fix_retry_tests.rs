@@ -446,3 +446,28 @@ fn fix_retry_an_attempt_ending_failed_or_cancelled_retries_nothing() {
     );
     assert_eq!(f.status("pay", "f"), "queued");
 }
+
+#[test]
+fn fix_retry_does_not_requeue_failed_open_or_update_jobs_after_workflow_merged() {
+    let mut f = fixture();
+    f.failed("pay", "api", "open-f", "open");
+    f.failed("pay", "api", "update-f", "update");
+    f.job("pay", "api", "fix", "work", "merged");
+    f.sql("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'api'");
+    assert!(f.retry("pay", "fix").is_empty());
+    assert_eq!(f.status("pay", "open-f"), "failed");
+    assert_eq!(f.status("pay", "update-f"), "failed");
+    assert!(f.retried().is_empty());
+}
+
+#[test]
+fn fix_retry_a_merge_ending_through_the_ledger_does_not_requeue_after_workflow_merged() {
+    let mut f = fixture();
+    f.failed("pay", "api", "f", "open");
+    f.running("pay", "api", "j", "merging", false);
+    f.sql("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'api'");
+    f.end("pay", "j", End::Merged { sha: "abc".to_owned() }, Stage::Merge);
+    assert_eq!(f.status("pay", "j"), "merged");
+    assert_eq!(f.status("pay", "f"), "failed");
+    assert!(f.retried().is_empty());
+}
