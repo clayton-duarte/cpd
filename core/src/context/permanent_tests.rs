@@ -194,7 +194,7 @@ fn ensure_creates_a_missing_context_owned_by_the_fallback_owner_with_a_stopped_m
             "stopped".to_owned(),
             false,
             fx.config.manager_tier.to_string(),
-            "durable".to_owned(),
+            fx.config.manager_runner.as_str().to_owned(),
             None
         )
     );
