@@ -1,6 +1,6 @@
 //! E20, Parked drafts (contract §3.7 E20, §2.2 "A parked draft"; hs-d731, hs-d733): after E7 and before E8, the Lead of a Plan
-//! with parked drafts is told once, by the message of a stuck Job (`from` null, `wake` true), and the drafts of an archived Plan
-//! are cancelled. The message is the record that it was sent: nothing more goes until an Event changes a draft's legality.
+//! with parked drafts is told once, by the message of a stuck Job (`from` null, `wake` true). Archived Plans are left alone.
+//! The message is the record that it was sent: nothing more goes until an Event changes a draft's legality.
 //! A quiet tick writes nothing.
 
 use rusqlite::Connection;
@@ -11,23 +11,9 @@ use super::report::{About, Step};
 use cpd_core::error::CpdError;
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::plan::parked_wake::{prefix, wake_state};
-use cpd_core::pr::{archived_with_drafts, cancel_archived_drafts};
 use cpd_core::session::tell;
 
 pub(super) fn run(engine: &mut Engine) {
-    match archived_plans(engine) {
-        Ok(plans) => {
-            for plan in plans {
-                match cancel(engine, &plan) {
-                    Ok(()) => engine.log.line(&format!(
-                        "parked-drafts: cancelled the drafts of archived Plan {plan}"
-                    )),
-                    Err(e) => engine.fail(Step::E20, About::Plan(plan), &e),
-                }
-            }
-        }
-        Err(e) => engine.fail(Step::E20, About::Machine, &e),
-    }
     match leads(engine) {
         Ok(leads) => {
             for (plan, lead) in leads {
@@ -46,17 +32,6 @@ pub(super) fn run(engine: &mut Engine) {
         }
         Err(e) => engine.fail(Step::E20, About::Machine, &e),
     }
-}
-
-fn archived_plans(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
-    engine.store.read(archived_with_drafts)
-}
-
-/// W2: one transaction per Plan, which writes nothing when the Plan has no draft left.
-fn cancel(engine: &mut Engine, plan: &PlanId) -> Result<(), CpdError> {
-    engine
-        .store
-        .write(SOURCE, |tx| cancel_archived_drafts(tx, plan))
 }
 
 /// The live Plans not held by an incident whose Lead is a live Lead in state `idle`.

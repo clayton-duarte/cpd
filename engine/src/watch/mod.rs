@@ -8,7 +8,7 @@
 //! - [`sleep`] E13: puts finished Lead and Manager Sessions to sleep;
 //! - [`archive_leads`] E14: archives the done Plan of a Lead asleep past `timeouts.archive_sleep_seconds`;
 //! - [`models`] E15: lists the models pi can offer into `run/models-<provider>.json` (7 days);
-//! - [`parked`] E20: wakes the Lead of a Plan with parked drafts once, and cancels the drafts of an archived Plan;
+//! - [`parked`] E20: wakes the Lead of a live Plan with parked drafts once;
 //! - [`janitor`] E16: starts `cpd janitor` detached every `watch.janitor_minutes`;
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
