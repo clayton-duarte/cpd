@@ -182,6 +182,13 @@ test("unaddressedFailedJobs throws bad_output on a bad shape", () => {
   bad({ jobs: [{ key: "a", status: "failed", attempts: 2 }] });
 });
 
+test("supersession guidance requires the Lead to verify the replacement carries the original work", () => {
+  const text = failedJobReminderText(["a", "b"]);
+  assert.match(text, /only if the Lead has verified that the replacement carries the original work/);
+  assert.match(text, /cpd workflow cancel <workflow> --superseded-by <replacement>/);
+  assert.doesNotMatch(text, /cpd verifies/i);
+});
+
 test("failedJobReminderText names the keys and the four ways to dispose", () => {
   assert.equal(failedJobReminderText(["a", "b"]), FAILED);
 });
