@@ -99,6 +99,14 @@ const QUESTION_REQ: HostFrame = {
   method: "questionnaire",
   questions: [{ header: "Pick", question: "Which?", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] }],
 };
+const REVIEW_REQ: HostFrame = {
+  type: "ui_request", id: "held-r1", purpose: "plan_review", created_at: 1,
+  method: "select", title: "Approve the plan review", options: ["Approve", "Change"],
+};
+const reviewEntries = (): Obj[] => [
+  { id: 1, conversationId: "root", kind: "cpd-plan-summary", data: { plan: "plan", review: "r1" }, model: [{ role: "user", content: "Review summary" }] },
+  { id: 2, conversationId: "root", kind: "cpd-plan-review", data: { plan: "plan", review: "r1", status: "pending" } },
+];
 
 const SESSION: ResolvedSession = {
   ref: { id: "s1", key: "ctx:plan:job", runner: "durable", role: "worker", state: "working", title: "My chat", tier: "S2", cwd: "/work" },
@@ -114,9 +122,7 @@ async function setup(initial: HostFrame[], opts: { windowSize?: number; show?: O
   const host = new FakeHost(initial);
   const { show, ...backendOpts } = opts;
   const cpd = { json: vi.fn(async (args: readonly string[]) => (show !== undefined && args.includes("show") ? { session: show } : {}) as Readonly<Record<string, unknown>>) };
-  const fs = { write: vi.fn(async (_path: string, _data: Uint8Array) => {}) };
   const backend = createDurableBackend({
-    fs, cpdHome: "/cpd",
     connect: async (path) => {
       expect(path).toBe("/run/host/s1.sock");
       return host.client();
@@ -129,7 +135,7 @@ async function setup(initial: HostFrame[], opts: { windowSize?: number; show?: O
   const messages: SessionServerMessage[] = [];
   const handle: SessionHandle = await backend.attach(SESSION, (m) => messages.push(m));
   await tick();
-  return { host, cpd, fs, handle, messages };
+  return { host, cpd, handle, messages };
 }
 
 function ofType<T extends SessionServerMessage["type"]>(messages: SessionServerMessage[], type: T) {
@@ -538,27 +544,58 @@ describe("durable backend", () => {
       expect(r.calls()).toBe(before);
       expect(r.scheduler.pending()).toBe(0);
     });
+  });
 
-    it("plan_review_changes_writes_feedback_file_and_passes_it_to_cpd_plan_decide_reject", async () => {
-      const reviewEntry = (id: number, n: string): Obj => ({
-        id,
-        conversationId: "root",
-        kind: "cpd-plan-review",
-        data: { review: n, status: "pending" },
-      });
-      const { cpd, fs, handle } = await setup([viewFrame([reviewEntry(1, "7")])]);
-      await handle.respond("review:7", { method: "cpd_plan_review", outcome: "changes", feedback: "rename the step" });
-      expect(fs.write).toHaveBeenCalledWith("/cpd/run/plan/feedback-7.md", new TextEncoder().encode("rename the step"));
-      expect(cpd.json).toHaveBeenCalledWith([
-        "plan",
-        "decide",
-        "7",
-        "--reject",
-        "--feedback-file",
-        expect.stringMatching(/feedback-7\.md$/),
-        "--plan",
-        "plan",
+  describe("durable review dialogs", () => {
+    it.each(["held-first", "transcript-first"] as const)("uses only the host-held review with %s delivery", async (order) => {
+      const { host, messages, cpd, handle } = await setup([viewFrame([])]);
+      const reviewIds = () => ofType(messages, "session.dialog").filter((m) => m.dialog.method === "cpd_plan_review").map((m) => m.dialog.id);
+      const transcript = opsFrame([["p", ["entries"], 0, 0, reviewEntries()]]);
+      host.deliver(order === "held-first" ? REVIEW_REQ : transcript);
+      await tick();
+      expect.soft(reviewIds()).toEqual(order === "held-first" ? ["held-r1"] : []);
+      host.deliver(order === "held-first" ? transcript : REVIEW_REQ);
+      host.deliver(QUESTION_REQ);
+      await tick();
+      expect(reviewIds()).toEqual(["held-r1"]);
+      expect(ofType(messages, "session.dialog").at(-1)?.dialog.id).toBe("q1");
+      expect(ofType(messages, "session.append").flatMap((m) => m.items)).toContainEqual(expect.objectContaining({ foldKind: "cpd-plan-summary" }));
+      await expect(handle.respond("review:r1", { method: "cpd_plan_review", outcome: "cancelled" })).rejects.toMatchObject({ code: "invalid_message" });
+      expect(cpd.json).not.toHaveBeenCalledWith(expect.arrayContaining(["plan", "decide"]));
+    });
+
+    it("reconnect does not recreate a review from the transcript while the host response is unacknowledged", async () => {
+      const first = await setup([viewFrame(reviewEntries()), REVIEW_REQ]);
+      let acknowledge!: () => void;
+      first.host.respond.mockImplementationOnce(() => new Promise<void>((done) => { acknowledge = done; }));
+      const result = first.handle.respond("held-r1", { method: "cpd_plan_review", outcome: "changes", feedback: "rename the step" });
+      await tick();
+      expect(first.host.respond).toHaveBeenCalledWith("held-r1", { value: "Change" });
+      await first.handle.dispose();
+      const reconnected = await setup([viewFrame(reviewEntries())]);
+      expect.soft(ofType(reconnected.messages, "session.dialog")).toEqual([]);
+      reconnected.host.deliver({ ...REVIEW_REQ, replayed: true });
+      await tick();
+      expect(ofType(reconnected.messages, "session.dialog").map((m) => m.dialog.id)).toEqual(["held-r1"]);
+      reconnected.host.deliver({ type: "ui_resolved", id: "held-r1", outcome: "answered", by: "client" });
+      reconnected.host.deliver(viewFrame(reviewEntries(), { seq: 2 }));
+      await tick();
+      expect(ofType(reconnected.messages, "session.dialog").map((m) => m.dialog.id)).toEqual(["held-r1"]);
+      expect(ofType(reconnected.messages, "session.dialogResolved").map((m) => m.dialogId)).toEqual(["held-r1"]);
+      acknowledge();
+      await result;
+    });
+
+    it("review feedback goes to the held editor, not a transcript decision", async () => {
+      const { cpd, host, handle } = await setup([viewFrame(reviewEntries()), REVIEW_REQ]);
+      await handle.respond("held-r1", { method: "cpd_plan_review", outcome: "changes", feedback: "rename the step" });
+      host.deliver({ type: "ui_request", id: "held-editor", method: "editor", purpose: "plan_review", created_at: 2, title: "What should change?" });
+      await tick();
+      expect(host.respond.mock.calls).toEqual([
+        ["held-r1", { value: "Change" }],
+        ["held-editor", { value: "rename the step" }],
       ]);
+      expect(cpd.json).not.toHaveBeenCalledWith(expect.arrayContaining(["plan", "decide"]));
     });
   });
 });
