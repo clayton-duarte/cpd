@@ -7,8 +7,7 @@ import type { HostClient, HostFrame } from "../durable/client.ts";
 import type { SessionHandle } from "../hub/connection.ts";
 import type { ResolvedSession } from "../hub/registry.ts";
 
-// CONTRACT 11.4 "durable plan review": the durable backend syncs a transcript `cpd-plan-review` entry
-// as the dialog `review:<n>` and answers it through `cpd plan decide` (and a follow-up submit).
+// CONTRACT 11.4 "durable plan review": only the host-held request can open an actionable review.
 
 type Obj = Record<string, unknown>;
 
@@ -63,6 +62,10 @@ const viewFrame = (entries: Obj[]): HostFrame => ({
   view: { conversation: "root", entries, docs: { "pi.agent": {}, "pi.live": {}, "pi.inbox": { items: [] }, "pi.provider": {}, "pi.usage": { models: {}, tools: {} } } },
 });
 const appendEntry = (at: number, entry: Obj, seq: number): HostFrame => ({ type: "ops", epoch: "e1", seq, ops: [["p", ["entries"], at, 0, [entry]]] });
+const reviewRequest = (id: string): HostFrame => ({
+  type: "ui_request", id, purpose: "plan_review", method: "select",
+  title: "Approve the plan review", options: ["Approve", "Change"], created_at: 1,
+});
 
 const SESSION: ResolvedSession = {
   ref: { id: "s1", key: "ctx:plan:job", runner: "durable", role: "worker", state: "working", title: "My chat", tier: "S2", cwd: "/work" },
@@ -86,38 +89,49 @@ async function setup(initial: HostFrame[]) {
 const dialogs = (messages: SessionServerMessage[]) => messages.filter((m): m is Extract<SessionServerMessage, { type: "session.dialog" }> => m.type === "session.dialog");
 const REVIEW = { method: "cpd_plan_review" } as const;
 
-describe("durable backend transcript plan reviews", () => {
-  it("pi backend syncs a transcript plan review as a review dialog", async () => {
-    const { messages } = await setup([viewFrame([userEntry(1), reviewEntry(2, "7")])]);
-    expect(dialogs(messages).map((m) => m.dialog)).toEqual([
-      { id: "review:7", method: "cpd_plan_review", title: "Plan review 7", summary: "", interactive: true },
-    ]);
-  });
-
-  it("pi backend approves a review dialog with cpd plan decide approve", async () => {
-    const { cpd, host, handle, messages } = await setup([viewFrame([reviewEntry(1, "7")])]);
-    await handle.respond("review:7", { ...REVIEW, outcome: "approve" });
-    expect(cpd.json).toHaveBeenCalledWith(["plan", "decide", "7", "--approve", "--plan", "plan"]);
-    expect(host.respond).not.toHaveBeenCalled();
-    expect(messages).toContainEqual({ type: "session.dialogResolved", sessionId: "s1", dialogId: "review:7", outcome: "answered" });
-  });
-
-  it("pi backend changes outcome rejects the review and follows up with the feedback", async () => {
-    const { cpd, host, handle } = await setup([viewFrame([reviewEntry(1, "7")])]);
-    await handle.respond("review:7", { ...REVIEW, outcome: "changes", feedback: "rename the step" });
-    expect(cpd.json).toHaveBeenCalledWith(["plan", "decide", "7", "--reject", "--plan", "plan"]);
-    expect(host.submit).toHaveBeenCalledWith({ text: "rename the step", whenBusy: "followUp", requestId: "feedback:review:7" });
+describe("durable backend plan reviews", () => {
+  it("does not open or decide a review from a transcript entry alone", async () => {
+    const { cpd, host, handle, messages } = await setup([viewFrame([userEntry(1), reviewEntry(2, "7")])]);
+    expect(dialogs(messages)).toEqual([]);
+    await expect(handle.respond("review:7", { ...REVIEW, outcome: "approve" })).rejects.toMatchObject({ code: "invalid_message" });
+    expect(cpd.json).not.toHaveBeenCalledWith(expect.arrayContaining(["plan", "decide"]));
     expect(host.respond).not.toHaveBeenCalled();
   });
 
-  it("pi backend ignores frames after dispose", async () => {
+  it("sends approval only to the held request and waits for host resolution", async () => {
+    const { cpd, host, handle, messages } = await setup([viewFrame([reviewEntry(1, "7")]), reviewRequest("held-7")]);
+    expect(dialogs(messages).map((m) => m.dialog.id)).toEqual(["held-7"]);
+    await handle.respond("held-7", { ...REVIEW, outcome: "approve" });
+    expect(host.respond.mock.calls).toEqual([["held-7", { value: "Approve" }]]);
+    expect(cpd.json).not.toHaveBeenCalledWith(expect.arrayContaining(["plan", "decide"]));
+    expect(messages.some((m) => m.type === "session.dialogResolved")).toBe(false);
+    host.deliver({ type: "ui_resolved", id: "held-7", outcome: "answered", by: "client" });
+    await tick();
+    expect(messages).toContainEqual({ type: "session.dialogResolved", sessionId: "s1", dialogId: "held-7", outcome: "answered" });
+    await expect(handle.respond("held-7", { ...REVIEW, outcome: "approve" })).rejects.toMatchObject({ code: "invalid_message" });
+    expect(host.respond).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the held feedback editor without sending a follow-up chat message", async () => {
+    const { cpd, host, handle } = await setup([viewFrame([reviewEntry(1, "7")]), reviewRequest("held-7")]);
+    await handle.respond("held-7", { ...REVIEW, outcome: "changes", feedback: "rename the step" });
+    host.deliver({ type: "ui_request", id: "held-editor", method: "editor", purpose: "plan_review", created_at: 2, title: "What should change?" });
+    await tick();
+    expect(host.respond.mock.calls).toEqual([["held-7", { value: "Change" }], ["held-editor", { value: "rename the step" }]]);
+    expect(cpd.json).not.toHaveBeenCalledWith(expect.arrayContaining(["plan", "decide"]));
+    expect(host.submit).not.toHaveBeenCalled();
+  });
+
+  it("ignores transcript and held review frames after dispose", async () => {
     const { host, handle, messages } = await setup([viewFrame([userEntry(1)])]);
     host.deliver(appendEntry(1, reviewEntry(2, "7"), 2));
+    host.deliver(reviewRequest("held-7"));
     await tick();
-    expect(dialogs(messages).map((m) => m.dialog.id)).toEqual(["review:7"]);
+    expect(dialogs(messages).map((m) => m.dialog.id)).toEqual(["held-7"]);
     await handle.dispose();
     const seen = messages.length;
     host.deliver(appendEntry(2, reviewEntry(3, "8"), 3));
+    host.deliver(reviewRequest("held-8"));
     await tick();
     expect(messages).toHaveLength(seen);
   });
