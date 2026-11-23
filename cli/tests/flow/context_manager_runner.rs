@@ -1,7 +1,4 @@
-//! `context manager --runner <pi|durable>` (commands.md §3.11, contract §6.19; hs-d820, hs-d754 Q10): the runner
-//! is chosen at creation, stored on `sessions.runner`, and never changed. With the flag omitted the config key
-//! `manager_runner` is the default (default `pi`). Run in this process (`Fx::with_ports`) on the fake tmux: a
-//! durable Manager starts no tmux and no pane; a pi Manager needs the cockpit.
+//! Fresh durable Manager selection and refusal of the pi runner, with fake tmux.
 
 use crate::common;
 

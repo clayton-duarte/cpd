@@ -1,7 +1,4 @@
-//! `context manager --by-user` (commands.md §3.10, §10.8 step 3, hs-d542), run in this process (`Fx::with_ports`) on the
-//! fake tmux. `context manager` writes the first-message file only without `--by-user`, and records the flag on the
-//! Session row, which `session run` reads to start pi with `-- @<path>` or without a first message (the session area's,
-//! `start` in `session/run.rs`): here the file, the row and the window's command are asserted.
+//! Durable Manager first-message and by-user registration, with fake tmux.
 
 use crate::common;
 
