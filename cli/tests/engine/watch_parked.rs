@@ -216,54 +216,34 @@ fn expected_statuses(drafts: &str) -> Vec<(String, String)> {
 }
 
 #[test]
-fn cancels_drafts_of_an_archived_plan() {
+fn retains_drafts_of_an_archived_plan() {
     let fx = fx();
     archived_plan(&fx);
     fx.watch_ticks(1).unwrap();
-    assert_eq!(statuses(&fx), expected_statuses("cancelled"));
-    let reasons: Vec<(String, String)> = fx.env.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT key, cancel_reason FROM jobs WHERE status = 'cancelled' ORDER BY key",
-        )?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()
-    });
-    let reason = "Plan archived with a draft (hs-d731)";
-    assert_eq!(
-        reasons,
-        [
-            ("d1".to_owned(), reason.to_owned()),
-            ("d2".to_owned(), reason.to_owned())
-        ]
-    );
-    let cancelled: Vec<String> = fx.env.read(|conn| {
-        let mut stmt =
-            conn.prepare("SELECT job FROM events WHERE kind = 'job-cancelled' ORDER BY job")?;
-        stmt.query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()
-    });
-    assert_eq!(cancelled, ["d1", "d2"], "one job-cancelled Event each");
+    assert_eq!(statuses(&fx), expected_statuses("draft"));
+    assert_eq!(count(&fx, "job-cancelled"), 0);
     assert_eq!(messages(&fx), [], "an archived Plan's Lead is not woken");
+    fx.watch_ticks(LATER_TICKS).unwrap();
+    assert_eq!(statuses(&fx), expected_statuses("draft"));
+    assert_eq!(count(&fx, "job-cancelled"), 0);
+    assert_eq!(messages(&fx), []);
 }
 
 #[test]
-fn archived_cancel_is_idempotent() {
+fn archived_draft_retention_is_idempotent() {
     let fx = fx();
     archived_plan(&fx);
     fx.watch_ticks(1).unwrap();
-    assert_eq!(
-        count(&fx, "job-cancelled"),
-        2,
-        "the first tick cancelled both drafts"
-    );
+    assert_eq!(statuses(&fx), expected_statuses("draft"));
+    assert_eq!(count(&fx, "job-cancelled"), 0);
     let before: i64 = fx.env.query("SELECT max(id) FROM events");
     fx.watch_ticks(LATER_TICKS).unwrap();
     let after: Vec<(i64, String)> = fx.env.read(|conn| {
         let mut stmt = conn.prepare("SELECT id, kind FROM events WHERE id > ?1 AND kind IN ('job-cancelled', 'session-message')")?;
         stmt.query_map([before], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()
     });
-    assert_eq!(after, [], "a later tick writes nothing more");
-    assert_eq!(statuses(&fx), expected_statuses("cancelled"));
+    assert_eq!(after, [], "later ticks neither cancel drafts nor wake the Lead");
+    assert_eq!(statuses(&fx), expected_statuses("draft"));
 }
 
 #[test]
