@@ -608,6 +608,15 @@ pub fn command(
     args: WebUiArgs,
 ) -> Result<cpd_core::output::Output, CpdError> {
     use cpd_core::output::Output;
+    // The legacy activation protocol cannot fence and drain the old writer or
+    // reconcile shared engine, adapter, schema and migration compatibility.
+    // Refuse before staging or retiring the current listener.
+    if args.prepare || args.activate {
+        return Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            "WebUI handoff is disabled until ownership and receipt reconciliation are implemented.",
+        ));
+    }
     let home = CpdHome::from_env()?;
     let run = home.run_dir();
     std::fs::create_dir_all(&run)
