@@ -719,7 +719,7 @@ pub(crate) fn claim_in(ports: &Ports, mut env: Env, args: DismissArgs) -> Result
     let (channel, ts_raw) = (channel.clone(), post.ts_raw.clone());
     let (lead_tier, lead_runner) = (
         env.config.lead_tier.to_string(),
-        env.config.new_lead_runner(),
+        crate::config::WorkerRunner::Durable,
     );
     let lead = SessionId::new_v4();
     let (item, plan, reused) = env.store.write("inbox claim", |tx| {

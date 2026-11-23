@@ -27,14 +27,14 @@ const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
 
 /// An `Fx` on fake ports whose `$CPD_HOME` has the config every command but `config` needs.
 fn fx() -> Fx {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     fx.env.write_config(CONFIG);
     fx
 }
 
 /// An `Fx` on fake ports whose config names the env's private tmux socket (`[tmux] socket`).
 fn tmux_fx() -> Fx {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     fx.env.write_tmux_config("");
     fx
 }
@@ -618,35 +618,31 @@ fn a_plan_new_window_shows_its_window_and_pane_options_in_the_state() {
         .ok();
 
     let lead = out["lead"]["session"].as_str().unwrap().to_owned();
-    let state = fx
-        .tmux_state()
-        .expect("plan new started the cockpit server");
-    assert_eq!(
-        state
-            .windows()
-            .iter()
-            .map(|w| w.name.as_str())
-            .collect::<Vec<_>>(),
-        ["park-pay"]
-    );
+    assert!(out["lead"]["pane"].is_null(), "{out}");
+    assert!(fx.tmux_state().is_none(), "durable Lead creates no pane");
+
+    // A historical native Lead still opens a pane with the session options.
+    fx.cockpit();
+    fx.env
+        .sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead'");
+    fx.cpd(&["session", "open", &lead]).ok();
+    let state = fx.tmux_state().expect("native Lead opens a pane");
     let panes = state.panes();
-    assert_eq!(panes.len(), 1, "{panes:?}");
-    assert!(
-        panes[0]
-            .options
-            .contains(&("@cpd_session".to_owned(), lead.clone())),
-        "{:?}",
-        panes[0].options
-    );
+    let pane = panes
+        .iter()
+        .find(|pane| {
+            pane.options
+                .contains(&("@cpd_session".to_owned(), lead.clone()))
+        })
+        .expect("native Lead pane");
     assert_eq!(
-        panes[0].argv[panes[0].argv.len() - 3..],
+        pane.argv[pane.argv.len() - 3..],
         ["session", "run", lead.as_str()]
     );
     assert!(
         state
-            .pane_env(&panes[0].id)
-            .contains(&("CPD_SESSION".to_owned(), lead)),
-        "the pane's environment is the one the product gave it"
+            .pane_env(&pane.id)
+            .contains(&("CPD_SESSION".to_owned(), lead))
     );
 }
 

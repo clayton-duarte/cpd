@@ -30,11 +30,17 @@ fn plan_new(fx: &Fx, by_user: bool) -> (String, Launch, Pane) {
     }
     let out = fx.cpd(&args).ok();
     let id = out["lead"]["session"].as_str().unwrap().to_owned();
-    let pane = Pane::at(
-        fx,
-        out["lead"]["pane"].as_str().unwrap(),
-        &installed_cpd(fx),
-    );
+    assert!(out["lead"]["pane"].is_null());
+    fx.env
+        .sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
+    fx.cpd(&["session", "open", &id]).ok();
+    let pane_id = fx
+        .panes()
+        .into_iter()
+        .find(|p| p.session == id)
+        .unwrap()
+        .pane;
+    let pane = Pane::at(fx, &pane_id, &installed_cpd(fx));
     let mut wrapper = pane.run(&["session", "run", &id]);
     wrapper.until("pi", || !pane.spawn.pis().is_empty());
     let pis = pane.spawn.pis();
@@ -44,7 +50,7 @@ fn plan_new(fx: &Fx, by_user: bool) -> (String, Launch, Pane) {
 
 #[test]
 fn plan_new_by_user_starts_pi_without_a_first_message() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     let (id, pi, _pane) = plan_new(&fx, true);
     let argv = &pi.args;
@@ -64,7 +70,7 @@ fn plan_new_by_user_starts_pi_without_a_first_message() {
 
 #[test]
 fn plan_new_without_by_user_keeps_the_first_message() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     let (id, pi, _pane) = plan_new(&fx, false);
     let argv = &pi.args;

@@ -6,7 +6,6 @@ use std::sync::{Mutex, MutexGuard};
 use clap::Parser;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::host::runner::Reply;
 use cpd_core::ids::PlanId;
 use cpd_core::output::Output;
 use cpd_core::ports::{Fakes, Ports};
@@ -153,54 +152,6 @@ fn shaping_message_failure_retries_same_pair() {
 }
 
 #[test]
-fn shaping_tmux_failure_retries_same_pair() {
-    let f = Fixture::new("pi");
-    (*f.fakes.runner)
-        .clone()
-        .on(
-            "tmux",
-            |c| c.args.iter().any(|a| a == "has-session"),
-            Reply::ok(""),
-        )
-        .once(
-            "tmux",
-            |c| c.args.iter().any(|a| a == "new-window"),
-            Reply::exit(1, "", "injected failure"),
-        )
-        .on(
-            "tmux",
-            |c| c.args.iter().any(|a| a == "new-window"),
-            Reply::ok("@1 %1\n"),
-        )
-        .on("tmux", |_| true, Reply::ok(""));
-    let error = f.plan(&[]).expect_err("tmux failure must be reported");
-    assert!(error.message().to_lowercase().contains("retry"));
-    let pair = f.pair();
-    assert_eq!(pair.len(), 1);
-    let registered = f.rows("SELECT * FROM events WHERE plan='fresh' AND kind IN ('plan-created','session-registered') ORDER BY id");
-    let Output::Success(out) = f.plan(&[]).unwrap() else {
-        panic!("expected success")
-    };
-    assert_eq!(out["already"], true);
-    assert_eq!(f.pair(), pair);
-    assert_eq!(f.rows("SELECT * FROM events WHERE plan='fresh' AND kind IN ('plan-created','session-registered') ORDER BY id"), registered);
-    assert_eq!(
-        f.rows("SELECT id FROM events WHERE plan='fresh' AND kind='session-moved'")
-            .len(),
-        1
-    );
-    assert_eq!(
-        f.fakes
-            .runner
-            .calls()
-            .iter()
-            .filter(|c| c.args.iter().any(|a| a == "new-window"))
-            .count(),
-        2
-    );
-}
-
-#[test]
 fn shaping_by_user_mode_is_stored_and_conflicts_are_refused() {
     let f = Fixture::new("durable");
     f.plan(&["--by-user"]).unwrap();
@@ -220,36 +171,8 @@ fn shaping_by_user_mode_is_stored_and_conflicts_are_refused() {
 
 #[test]
 fn concurrent_shaping_provisioning_serializes_same_id() {
-    use cpd_core::host::runner::{Call, Handler};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
-    use std::time::Duration;
+    use std::sync::{Arc, Barrier};
 
-    struct Gate {
-        entered: mpsc::SyncSender<()>,
-        release: Mutex<mpsc::Receiver<()>>,
-        first: AtomicBool,
-    }
-    impl Handler for Gate {
-        fn handle(&self, call: &Call) -> Reply {
-            if call.args.iter().any(|a| a == "new-window")
-                && call.args.iter().any(|a| a == "park-fresh")
-                && self.first.swap(false, Ordering::SeqCst)
-            {
-                let _ = self.entered.try_send(());
-                let _ = self
-                    .release
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(Duration::from_secs(5));
-                Reply::ok("@1 %1\n")
-            } else if call.args.iter().any(|a| a == "new-window") {
-                Reply::ok("@2 %2\n")
-            } else {
-                Reply::ok("")
-            }
-        }
-    }
     fn run(ports: &Ports, id: &str) -> Result<Output, CpdError> {
         let command = Cli::parse_from([
             "cpd",
@@ -264,47 +187,53 @@ fn concurrent_shaping_provisioning_serializes_same_id() {
         .command;
         Ports::scope(ports, || cpd_core::plan::run(command))
     }
-    let f = Fixture::new("pi");
-    let (entered_tx, entered_rx) = mpsc::sync_channel(1);
-    let (release_tx, release_rx) = mpsc::sync_channel(1);
-    (*f.fakes.runner).clone().route(
-        "tmux",
-        Arc::new(Gate {
-            entered: entered_tx,
-            release: Mutex::new(release_rx),
-            first: AtomicBool::new(true),
-        }),
-    );
+    let f = Fixture::new("durable");
+    // Simultaneous release exercises concurrency, but does not force an internal interleaving.
+    let barrier = Arc::new(Barrier::new(3));
     std::thread::scope(|scope| {
         let first_ports = f.fakes.ports.clone();
-        let first = scope.spawn(move || run(&first_ports, "fresh"));
-        entered_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("first provisioning reached tmux");
+        let first_barrier = barrier.clone();
+        let first = scope.spawn(move || {
+            first_barrier.wait();
+            run(&first_ports, "fresh")
+        });
         let waiter_ports = f.fakes.ports.clone();
-        let waiter = scope.spawn(move || run(&waiter_ports, "fresh"));
+        let waiter_barrier = barrier.clone();
+        let waiter = scope.spawn(move || {
+            waiter_barrier.wait();
+            run(&waiter_ports, "fresh")
+        });
+        barrier.wait();
         let other = run(&f.fakes.ports, "other");
-        release_tx.send(()).unwrap();
-        let first_result = first.join().unwrap();
-        let second_result = waiter.join().unwrap();
-        first_result.unwrap();
-        second_result.unwrap();
+        first.join().unwrap().unwrap();
+        waiter.join().unwrap().unwrap();
         other.unwrap();
     });
     assert_eq!(f.pair().len(), 1);
     assert_eq!(
-        f.rows("SELECT id FROM events WHERE plan='fresh' AND kind='plan-created'")
+        f.rows("SELECT id FROM sessions WHERE plan='fresh' AND role='lead'")
             .len(),
         1
     );
-    assert_eq!(
-        f.rows("SELECT id FROM events WHERE plan='fresh' AND kind='session-moved'")
+    for kind in ["plan-created", "session-registered"] {
+        assert_eq!(
+            f.rows(&format!(
+                "SELECT id FROM events WHERE plan='fresh' AND kind='{kind}'"
+            ))
             .len(),
-        1
-    );
+            1
+        );
+    }
     assert_eq!(
         f.rows("SELECT id FROM context_records WHERE kind='plan' AND plan_id='fresh'")
             .len(),
+        1
+    );
+    assert_eq!(
+        f.rows(
+            "SELECT p.id FROM plans p JOIN sessions s ON s.id=p.lead_session WHERE p.id='other'"
+        )
+        .len(),
         1
     );
 }

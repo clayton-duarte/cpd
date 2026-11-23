@@ -104,7 +104,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     refuse_archived(&context)?;
     let cwd = crate::session::agent_cwd()?;
     // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
-    let lead_runner = args.runner.unwrap_or(env.config.new_lead_runner());
+    let lead_runner = fresh_runner(args.runner)?;
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
@@ -199,6 +199,17 @@ fn refuse_id_taken(env: &mut Env, id: &PlanId) -> Result<(), CpdError> {
     Ok(())
 }
 
+/// Fresh Leads always use the durable runtime; explicit Pi is not supported.
+fn fresh_runner(runner: Option<WorkerRunner>) -> Result<WorkerRunner, CpdError> {
+    if runner == Some(WorkerRunner::Pi) {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "Fresh Plan Leads require the durable runner.",
+        ));
+    }
+    Ok(WorkerRunner::Durable)
+}
+
 /// A Plan and its Lead to create (`plan new`, `inbox claim`).
 pub(crate) struct Creation<'a> {
     pub id: &'a PlanId,
@@ -218,6 +229,7 @@ pub(crate) struct Creation<'a> {
 /// Step 1, inside the caller's transaction: inserts the Lead Session and the Plan, appends `plan-created` and
 /// `session-registered`.
 pub(crate) fn insert(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
+    fresh_runner(Some(c.runner))?;
     let Creation {
         id,
         context,
@@ -453,7 +465,7 @@ fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
     let cwd = crate::session::agent_cwd()?;
     let session = SessionId::new_v4();
     let tier = args.tier.unwrap_or(env.config.lead_tier).to_string();
-    let runner = args.runner.unwrap_or(env.config.new_lead_runner());
+    let runner = fresh_runner(args.runner)?;
     let creation = Creation {
         id: &id,
         context: &args.context,
@@ -501,6 +513,7 @@ fn provisioning_error(id: &PlanId, error: CpdError) -> CpdError {
 
 /// Insert both sides and their events in the caller's transaction.
 fn insert_shaping(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
+    fresh_runner(Some(c.runner))?;
     tx.execute(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
                                state, state_label, state_at, created_at, by_user, runner)
@@ -683,6 +696,55 @@ mod tests {
     use super::*;
     use crate::ids::ContextId;
     use crate::plan::Phase;
+
+    #[test]
+    fn shaping_insert_rolls_back_lead_when_plan_insert_fails() {
+        use crate::home::CpdHome;
+        use crate::store::Store;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        store.write("fixture", |tx| {
+            tx.execute_batch("INSERT INTO contexts (id,title,owner,created_at,created_on) VALUES ('ctx','Context','acme','t','m1')")?;
+            Ok(())
+        }).unwrap();
+        let id = PlanId::parse("fresh").unwrap();
+        let context = ContextId::parse("ctx").unwrap();
+        let session = SessionId::new_v4();
+        let creation = Creation {
+            id: &id,
+            context: &context,
+            title: "Fresh",
+            jira: None,
+            name: "ctx:fresh",
+            cwd: "/",
+            tier: "S4",
+            runner: WorkerRunner::Durable,
+            by_user: false,
+            session: &session,
+        };
+        let error = store.write("plan new", |tx| {
+            tx.execute_batch("CREATE TEMP TRIGGER fail_plan BEFORE INSERT ON main.plans BEGIN SELECT RAISE(ABORT, 'injected plan insert failure'); END;")?;
+            insert_shaping(tx, &creation)
+        }).unwrap_err();
+        assert!(
+            error.message().contains("injected plan insert failure"),
+            "{error:?}"
+        );
+        store
+            .read(|conn| {
+                for table in ["sessions", "plans", "events"] {
+                    let count: i64 =
+                        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                            row.get(0)
+                        })?;
+                    assert_eq!(count, 0, "{table}");
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
 
     #[test]
     fn the_header_names_plan_and_context() {

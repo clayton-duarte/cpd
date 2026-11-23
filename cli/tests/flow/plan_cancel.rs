@@ -81,6 +81,11 @@ fn world(fx: &Fx) -> (String, String) {
         .as_str()
         .unwrap()
         .to_owned();
+    // Model a pre-switch native Lead for the pane and fork cancellation cases.
+    fx.env
+        .sql("UPDATE sessions SET runner = 'pi' WHERE role = 'lead';");
+    fx.cpd(&["session", "open", &lead]).ok();
+    fx.cpd(&["session", "park"]).ok();
     for key in ["api", "web", "ui"] {
         let repo = fx.keyed_repo(key);
         fx.cpd(&[
@@ -238,7 +243,7 @@ fn gh_closes(fx: &Fx) -> Vec<Vec<String>> {
 
 #[test]
 fn cancels_jobs_closes_open_pull_requests_and_the_lead_and_archives_the_plan() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     let (lead, fork) = setup(&fx);
     let (lead_pane, fork_pane) = (pane_of(&fx, &lead), pane_of(&fx, &fork));
 
@@ -335,7 +340,7 @@ fn cancels_jobs_closes_open_pull_requests_and_the_lead_and_archives_the_plan() {
 
 #[test]
 fn reason_defaults_to_plan_cancelled() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     setup(&fx);
     cancel_with_engine(&mut fx, &[]).ok();
     assert_eq!(
@@ -347,7 +352,7 @@ fn reason_defaults_to_plan_cancelled() {
 
 #[test]
 fn a_rerun_writes_nothing_and_calls_nothing() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     setup(&fx);
     cancel_with_engine(&mut fx, &[]).ok();
     // The poller has read the closure since.
@@ -372,7 +377,7 @@ fn a_rerun_writes_nothing_and_calls_nothing() {
 
 #[test]
 fn a_rerun_finishes_what_a_failed_run_left() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     // gh fails (for `pr close`, and for the `pr view` that follows it), then works again.
     fx.fake_once("gh", Reply::exit(1, "", "HTTP 502\n"));
     fx.fake_once("gh", Reply::exit(1, "", "HTTP 502\n"));
@@ -406,7 +411,7 @@ fn a_rerun_finishes_what_a_failed_run_left() {
 
 #[test]
 fn a_failing_job_cancel_halfway_is_finished_by_a_rerun() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     setup(&fx);
     // Job `x` is running with no Attempt: a bad row, on which `job cancel` fails after the Jobs before it.
     fx.env.sql(
@@ -463,7 +468,7 @@ fn a_failing_job_cancel_halfway_is_finished_by_a_rerun() {
 
 #[test]
 fn a_plan_with_nothing_left_to_cancel_is_only_archived() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     setup(&fx);
     for key in ["d", "q", "f", "r"] {
         fx.cpd(&["job", "cancel", key, "--reason", "No.", "--plan", "pay"])
@@ -531,7 +536,7 @@ fn cancel_by_hand_is_refused_shape_incomplete(fx: &Fx) {
 
 #[test]
 fn a_tdd_pr_with_its_last_test_and_impl_jobs_does_not_stop_a_plan_cancel() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     setup(&fx);
     add_tdd_pr(&fx, "queued");
     cancel_by_hand_is_refused_shape_incomplete(&fx);
@@ -567,7 +572,7 @@ fn a_tdd_pr_with_its_last_test_and_impl_jobs_does_not_stop_a_plan_cancel() {
 
 #[test]
 fn a_plan_cancel_stops_a_running_last_impl_job_of_a_tdd_pr_without_the_shape_check() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     setup(&fx);
     add_tdd_pr(&fx, "running");
     cancel_by_hand_is_refused_shape_incomplete(&fx);
@@ -594,7 +599,7 @@ fn a_plan_cancel_stops_a_running_last_impl_job_of_a_tdd_pr_without_the_shape_che
 
 #[test]
 fn a_pending_plan_review_is_superseded_and_the_cancel_goes_on() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     setup(&fx);
     fx.env.sql(&format!(
         "INSERT INTO plan_reviews (plan, id, number, status, fingerprint, requested_at)
@@ -656,7 +661,7 @@ fn a_pending_plan_review_is_superseded_and_the_cancel_goes_on() {
 
 #[test]
 fn the_lead_in_the_chat_slot_blocks_and_nothing_is_written() {
-    let fx = Fx::with_ports();
+    let fx = Fx::with_ports_empty();
     let (lead, _) = setup(&fx);
     fx.cpd(&["session", "open", &lead]).ok();
     let before = fx.env.query::<i64>("SELECT count(*) FROM events");
@@ -673,7 +678,7 @@ fn the_lead_in_the_chat_slot_blocks_and_nothing_is_written() {
 
 #[test]
 fn a_gh_failure_for_a_pull_request_already_closed_is_not_a_failure() {
-    let mut fx = Fx::with_ports();
+    let mut fx = Fx::with_ports_empty();
     // `gh pr close` fails (a merged pull request cannot be closed); `gh pr view` says it is merged.
     let _ =
         (*fx.fakes.runner)
@@ -697,7 +702,7 @@ fn a_gh_failure_for_a_pull_request_already_closed_is_not_a_failure() {
 
 #[test]
 fn an_unknown_plan_is_plan_not_found() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports_empty();
     fx.env
         .write_config("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n");
     refused(
