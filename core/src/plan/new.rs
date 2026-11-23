@@ -104,7 +104,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     refuse_archived(&context)?;
     let cwd = crate::session::agent_cwd()?;
     // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
-    let lead_runner = args.runner.unwrap_or(env.config.new_lead_runner());
+    let lead_runner = fresh_runner(args.runner)?;
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
@@ -199,6 +199,17 @@ fn refuse_id_taken(env: &mut Env, id: &PlanId) -> Result<(), CpdError> {
     Ok(())
 }
 
+/// Fresh Leads always use the durable runtime; explicit Pi is not supported.
+fn fresh_runner(runner: Option<WorkerRunner>) -> Result<WorkerRunner, CpdError> {
+    if runner == Some(WorkerRunner::Pi) {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "Fresh Plan Leads require the durable runner.",
+        ));
+    }
+    Ok(WorkerRunner::Durable)
+}
+
 /// A Plan and its Lead to create (`plan new`, `inbox claim`).
 pub(crate) struct Creation<'a> {
     pub id: &'a PlanId,
@@ -218,6 +229,7 @@ pub(crate) struct Creation<'a> {
 /// Step 1, inside the caller's transaction: inserts the Lead Session and the Plan, appends `plan-created` and
 /// `session-registered`.
 pub(crate) fn insert(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
+    fresh_runner(Some(c.runner))?;
     let Creation {
         id,
         context,
@@ -453,7 +465,7 @@ fn shaping(env: &mut Env, args: NewArgs) -> Result<Output, CpdError> {
     let cwd = crate::session::agent_cwd()?;
     let session = SessionId::new_v4();
     let tier = args.tier.unwrap_or(env.config.lead_tier).to_string();
-    let runner = args.runner.unwrap_or(env.config.new_lead_runner());
+    let runner = fresh_runner(args.runner)?;
     let creation = Creation {
         id: &id,
         context: &args.context,
@@ -501,6 +513,7 @@ fn provisioning_error(id: &PlanId, error: CpdError) -> CpdError {
 
 /// Insert both sides and their events in the caller's transaction.
 fn insert_shaping(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
+    fresh_runner(Some(c.runner))?;
     tx.execute(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
                                state, state_label, state_at, created_at, by_user, runner)
