@@ -617,10 +617,10 @@ fn the_stubs_of_a_workflow_added_after_the_lock_are_appended_and_a_reopened_plan
 }
 
 #[test]
-fn a_shape_is_one_of_tdd_docs_and_config() {
+fn unknown_and_empty_shapes_are_refused() {
     let fx = crud("plan");
     let writes = fx.writes();
-    for shape in ["free", "other", ""] {
+    for shape in ["other", ""] {
         let run = fx.add_shape("api", Some(shape));
         assert_eq!(run.error()["code"], "usage", "{shape:?}");
     }
