@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { act } from "react";
 import { mount } from "../../testing/render.tsx";
 import { barStatus, StatusBar } from "./StatusBar.tsx";
 import type { StatusModel } from "./StatusBar.tsx";
@@ -20,7 +21,7 @@ interface PaneStatus {
 }
 const basePane: PaneStatus = { runner: null, preview: null, incident: null, workers: null, version: null, hostAlert: false, mode: "production", drift: null };
 let mounted: { unmount(): void } | null = null;
-afterEach(() => { mounted?.unmount(); mounted = null; });
+afterEach(() => { mounted?.unmount(); mounted = null; vi.unstubAllGlobals(); });
 
 function bar(status: Partial<StatusModel> = {}, opts: { costsOn?: boolean; onSettings?: () => void; onSelectSession?: (sessionId: string) => void } = {}): HTMLElement {
   const view = mount(
@@ -156,4 +157,68 @@ it("barStatus carries the mode and the drift of the wire status", () => {
   const c = bar(out);
   expect(part(c, "mode")?.textContent).toBe("preview");
   expect(part(c, "drift")?.textContent).toBe("drift 1");
+});
+
+it("copies the exact displayed version and confirms only after the write resolves", async () => {
+  let resolve!: () => void;
+  const writeText = vi.fn(() => new Promise<void>((done) => { resolve = done; }));
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  const c = bar({ version: "0.21.102 (abc1234)" });
+  const button = part(c, "version") as HTMLButtonElement;
+  expect(button.tagName).toBe("BUTTON");
+  await act(async () => { button.click(); });
+  expect(writeText).toHaveBeenCalledWith(button.textContent);
+  expect(c.querySelector('[role="status"]')).toBeNull();
+  await act(async () => { resolve(); });
+  expect(c.querySelector('[role="status"]')?.textContent).toBe("Version copied");
+  expect(fetch).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-part="inbox"]')).toBeNull();
+});
+
+it("does not confirm rejected or unavailable clipboard writes", async () => {
+  vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+  const c = bar({ version: "1+rev" });
+  await act(async () => { (part(c, "version") as HTMLButtonElement).click(); });
+  expect(c.querySelector('[role="status"]')).toBeNull();
+  vi.stubGlobal("navigator", {});
+  await act(async () => { (part(c, "version") as HTMLButtonElement).click(); });
+  expect(c.querySelector('[role="status"]')).toBeNull();
+});
+
+it("uses native button keyboard activation and hides a null version", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const c = bar({ version: "1+revision" });
+  const button = part(c, "version") as HTMLButtonElement;
+  button.focus();
+  expect(document.activeElement).toBe(button);
+  // jsdom does not implement native keyboard activation; assert native button semantics,
+  // then dispatch the clicks a browser generates for Enter and Space.
+  for (const key of ["Enter", " "]) {
+    await act(async () => {
+      button.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      button.click();
+      button.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true }));
+    });
+  }
+  expect(writeText).toHaveBeenCalledTimes(2);
+  mounted?.unmount();
+  expect(part(bar({ version: null }), "version")).toBeNull();
+});
+
+
+it("removes the local confirmation after a brief interval", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    const c = bar({ version: "1+rev" });
+    await act(async () => { (part(c, "version") as HTMLButtonElement).click(); });
+    expect(c.querySelector('[role="status"]')?.textContent).toBe("Version copied");
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(c.querySelector('[role="status"]')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -6,11 +6,13 @@ import { test } from "node:test";
 import type { Extension, ToolHooks } from "@earendil-works/pi-durable";
 import { CpdError } from "../../lib/cpd.ts";
 import { ENTRY_TYPE } from "../../lib/loop-guard.ts";
+import { REVIEW_LABEL } from "../../lib/plan-review.ts";
 import { POLICY_SECTION, policySection } from "../../lib/policy.ts";
 import { TIME_ZONE_SECTION, zoneLine } from "../../lib/time.ts";
 import type { Conversation, ViewCall } from "../../durable-host/run.ts";
 import type { Config } from "../../durable-host/config.ts";
 import { runHost, type Deps } from "../../durable-host/run.ts";
+import { resolveAll } from "../../durable-host/held.ts";
 import { policyShow, shown } from "../answers.ts";
 import { line, withHost } from "./rig.ts";
 
@@ -300,6 +302,50 @@ test("runHost logs the reason and the error message of a closed conversation", {
   assert.equal(await r.until("the host to end", () => r.ending.code), 1);
   assert.ok(r.logs.some((l) => l.includes("failed") && l.includes("disk I/O error")), r.logs.join("\n"));
   assert.ok(!r.logs.some((l) => l.includes("[object Object]")), r.logs.join("\n"));
+});
+
+test("a held plan review uses its own Inbox label without hiding independent questions", { timeout: 20_000 }, async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "durable-host-review-"));
+  t.after(async () => {
+    resolveAll("aborted");
+    // An interrupted feedback editor returns to the select.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    resolveAll("aborted");
+    rmSync(home, { recursive: true, force: true });
+  });
+  mkdirSync(join(home, "run", "p1"), { recursive: true });
+  writeFileSync(join(home, "run", "p1", "summary-r1.md"), "# Review summary");
+  await withHost({ answers: {}, config: { ...CONFIG, home } }, async (r) => {
+    const hooks = await r.up();
+    const client = await r.attach();
+    const heldRequest = (method: string) => r.until(() => client.received().find((m) => m.type === "ui_request" && m.method === method));
+    const blockedLabels = () => r.stateCalls().filter((a) => a[2] === "blocked").map((a) => a[4]);
+    hooks.onLine(line(300, "plan-review", { plan: "p1", data: { review: "r1", status: "pending" } }));
+    const review = await heldRequest("select");
+    await r.drain();
+    assert.deepEqual(blockedLabels(), [REVIEW_LABEL]);
+
+    const ask = r.extensions[0]?.tools?.find((tool) => tool.name === "ask_user_question");
+    assert.ok(ask);
+    const question = ask.execute({
+      questions: [{ header: "Library", question: "Which library?", options: [{ label: "a", description: "First" }, { label: "b", description: "Second" }] }],
+    }, {} as never, {} as never);
+    const request = await heldRequest("questionnaire");
+    await r.drain();
+    assert.deepEqual(blockedLabels(), [REVIEW_LABEL, "dialog"]);
+    client.send({ type: "ui_response", req: "answer-question", id: request.id, answer: { answers: [{ question: "Which library?", values: ["a"] }] } });
+    await question;
+    await r.drain();
+    assert.deepEqual(blockedLabels(), [REVIEW_LABEL, "dialog", REVIEW_LABEL]);
+
+    client.send({ type: "ui_response", req: "change-review", id: review.id, value: "Change" });
+    const editor = await heldRequest("editor");
+    await r.drain();
+    assert.equal(blockedLabels().at(-1), REVIEW_LABEL, "review feedback is not an independent question");
+    client.send({ type: "ui_response", req: "empty-feedback", id: editor.id, value: "" });
+    await r.until(() => client.received().find((m) => m.type === "ui_request" && m.method === "select" && m.id !== review.id));
+    assert.ok(!r.calls.some((a) => a[0] === "plan" && a[1] === "decide"));
+  });
 });
 
 // The loop gate at contract §6.16's single submit: a client `submit` and a follower Event alike are submissions the host makes.

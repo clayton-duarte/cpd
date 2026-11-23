@@ -70,6 +70,7 @@ test("open writes the summary and the pending entry then asks the select dialog"
 
 test("open for a pending review via start reuses the pending entry and asks again with a fresh id", async () => {
   const { written, broadcasted, port } = makePort([entryOf("r3", "pending")]);
+  port.cpd = async () => ({ review: { id: "r3", status: "pending", current: true } });
   const pr = createPlanReview(port);
   await pr.open("r3", "start");
   assert.equal(written.filter((e) => e.kind === "cpd-plan-review").length, 0);
@@ -80,6 +81,8 @@ test("open for a pending review via start reuses the pending entry and asks agai
 
 test("Change opens the editor and decide runs cpd plan decide with the feedback file", async () => {
   const { written, cpd, port } = makePort([entryOf("r3", "pending")]);
+  const call = port.cpd;
+  port.cpd = async (args) => ({ ...await call(args), review: { id: "r3", status: "rejected", current: true, feedback: "needs work" } });
   const decide = createPlanReview(port).decide;
   await decide({ plan: "p1", review: "r3", surface: "chat", status: "pending" }, false, "needs work");
   assert.equal(cpd.some((a) => a[0] === "plan" && a[1] === "decide"), true);
@@ -110,18 +113,60 @@ test("a newer review supersedes the older one closing its dialog and entry", asy
 
 test("decidedElsewhere settles the pending entry without cpd plan decide", async () => {
   const { cpd, written, port } = makePort([entryOf("r3", "pending")]);
+  const call = port.cpd;
+  port.cpd = async (args) => ({ ...await call(args), review: { id: "r3", status: "approved", current: true } });
   const pr = createPlanReview(port);
   await pr.decidedElsewhere({ plan: "p1", review: "r3", surface: "chat", status: "pending" }, { kind: "plan-review", data: { review: "r3", status: "approved" } } as never);
   assert.equal(cpd.some((a) => a[0] === "plan" && a[1] === "decide"), false);
-  const settled = written.find((e) => e.kind === "cpd-plan-review");
-  assert.equal((settled?.data.status as string), "approved");
-  assert.equal(written.some((e) => e.kind === "cpd-plan-decision"), true);
+  assert.deepEqual(written.map((e) => e.kind), ["cpd-plan-decision", "cpd-plan-review"]);
+  assert.equal(written[1]?.data.status, "approved");
+});
+
+test("a verdict event that disagrees with the exact current ledger verdict leaves the entry pending", async () => {
+  const { written, port } = makePort([entryOf("r3", "pending")]);
+  port.cpd = async () => ({ review: { id: "r3", status: "approved", current: true } });
+  await createPlanReview(port).decidedElsewhere({ plan: "p1", review: "r3", surface: "chat", status: "pending" },
+    { kind: "plan-review", data: { review: "r3", status: "rejected" } } as never);
+  assert.equal(written.length, 0);
+});
+
+for (const via of ["start", "event"] as const) {
+  for (const { shown, status } of [
+    { shown: { id: "r3", status: "rejected", current: false, feedback: "prior feedback" }, status: "rejected" },
+    { shown: { id: "r4", status: "approved", current: true }, status: "superseded" },
+    { shown: { id: "r3", status: "superseded", current: true }, status: "superseded" },
+  ]) {
+    test(`${via}: ${shown.id}/${shown.status}/${shown.current} never wakes the Lead for r3`, async () => {
+      const { written, broadcasted, port } = makePort([entryOf("r3", "pending")]);
+      port.cpd = async () => ({ review: shown });
+      const pr = createPlanReview(port);
+      if (via === "start") await pr.open("r3", via);
+      else await pr.decidedElsewhere({ plan: "p1", review: "r3", surface: "chat", status: "pending" },
+        { kind: "plan-review", data: { review: "r3", status: "rejected" } } as never);
+      assert.deepEqual(written.map((e) => [e.kind, e.data.status]), [["cpd-plan-review", status]]);
+      assert.equal(broadcasted.some((m) => m.type === "ui_request"), false);
+    });
+  }
+}
+
+test("a crash before decision admission leaves a current verdict recoverable at startup", async () => {
+  const { written, port } = makePort([entryOf("r3", "pending")]);
+  port.cpd = async () => ({ review: { id: "r3", status: "approved", current: true } });
+  port.notifyDecision = async () => { throw new Error("before admission"); };
+  await assert.rejects(createPlanReview(port).open("r3", "start"), /before admission/);
+  assert.equal(written.length, 0, "the pending marker must survive until admission succeeds");
+  const wakes: string[] = [];
+  port.notifyDecision = async (text) => { wakes.push(text); };
+  await createPlanReview(port).open("r3", "start");
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0]!, /Plan review r3 was APPROVED/);
+  assert.deepEqual(written.map((e) => e.data.status), ["approved"]);
 });
 
 test("closeSuperseded closes the reason and records the entry", async () => {
   const { written, port } = makePort([entryOf("r3", "pending")]);
   const pr = createPlanReview(port);
-  pr.closeSuperseded({ plan: "p1", review: "r3", surface: "chat", status: "pending" });
+  await pr.closeSuperseded({ plan: "p1", review: "r3", surface: "chat", status: "pending" });
   const settled = written.find((e) => e.kind === "cpd-plan-review");
   assert.equal(settled?.data.status, "superseded");
 });

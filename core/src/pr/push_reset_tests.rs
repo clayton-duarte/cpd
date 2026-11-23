@@ -1,5 +1,5 @@
 //! The reset after a push (pro-d384): `pulls::reset_after_push` makes the linked row `pending`/`unknown`/`unknown`, so a
-//! red -> push -> red raises `checks_failed` again and the Inbox says `checks running` right after a push.
+//! red -> push -> red raises `checks_failed` again, without a passive Inbox item right after a push.
 
 use time::macros::datetime;
 
@@ -9,7 +9,7 @@ use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecisio
 use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::ids::{PlanId, WorkflowKey};
-use crate::inbox::model::Kind;
+use crate::inbox::model::{Kind, reconcile};
 use crate::inbox::rules::conditions_with;
 use crate::policy::Checks;
 use crate::store::{Store, WriteTxn};
@@ -145,27 +145,28 @@ fn red_push_red_again_raises_second_checks_failed_feedback() {
 }
 
 #[test]
-fn inbox_shows_checks_running_right_after_a_push() {
+fn push_reset_closes_the_failing_inbox_item_without_a_pending_replacement() {
     let dir = tempfile::tempdir().unwrap();
     let (home, mut store) = store(&dir);
     store
         .write("test", |tx| {
             poll(tx, ChecksSummary::Failed);
-            workflow(tx)
+            workflow(tx)?;
+            tx.execute(
+                "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at)
+                 VALUES ('pr-ready', 'red', 'pr:acme/shop#7', 'shop#7 failing', ?1)",
+                [T],
+            )?;
+            Ok(())
         })
         .unwrap();
-    let label = |store: &mut Store| {
-        let all =
-            conditions_with(store, &home, datetime!(2026-01-02 00:00 UTC), 20, 1, None).unwrap();
-        let row: Vec<_> = all
-            .into_iter()
-            .filter(|c| c.kind == Kind::PrReady && c.subject == "pr:acme/shop#7")
-            .collect();
-        assert_eq!(row.len(), 1, "{row:?}");
-        row[0].label.split('\n').next().unwrap().to_owned()
-    };
 
     reset(&mut store);
-
-    assert_eq!(label(&mut store), "shop#7 checks running");
+    assert_eq!(stored(&mut store).0, "pending");
+    let now = datetime!(2026-01-02 00:00 UTC);
+    let conditions = conditions_with(&mut store, &home, now, 20, 1, None).unwrap();
+    assert!(!conditions.iter().any(|c| c.kind == Kind::PrReady));
+    let changes = reconcile(&mut store, &conditions, &crate::clock::timestamp(now)).unwrap();
+    assert_eq!(changes.closed.len(), 1);
+    assert!(changes.opened.is_empty());
 }

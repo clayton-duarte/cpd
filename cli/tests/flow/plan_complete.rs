@@ -79,16 +79,15 @@ fn create_plan(fx: &Fx, id: &str, phase: &str) {
         ));
 }
 
-/// (1) `cpd job add --draft` and `cpd job edit` without `--waiting-on <lead|user|explore:<job>>`
-/// are refused with `draft_dependency_required` (pro-d549).
+/// Explicit drafts may omit a wait; supplied waits are still validated.
 #[test]
-fn draft_without_waiting_on_is_refused() {
-    let fx = Fx::new();
+fn draft_without_waiting_on_is_accepted() {
+    let fx = Fx::with_ports();
     setup(&fx);
     create_plan(&fx, "p1", "plan");
     let spec = write_spec(&fx, "spec.json");
 
-    // job add --draft without --waiting-on is refused with draft_dependency_required
+    // A review-only draft needs no waiting marker.
     let out_add = fx.cpd(&[
         "job",
         "add",
@@ -105,13 +104,13 @@ fn draft_without_waiting_on_is_refused() {
         &spec,
         "--draft",
     ]);
-    refused(&out_add, "draft_dependency_required", 2);
+    assert_eq!(out_add.exit, 0, "{:?}", out_add.json());
 
     // Also test invalid --waiting-on value is rejected
     let out_invalid = fx.cpd(&[
         "job",
         "add",
-        "j1",
+        "j2",
         "--plan",
         "p1",
         "--workflow",
@@ -128,11 +127,30 @@ fn draft_without_waiting_on_is_refused() {
     ]);
     assert_eq!(out_invalid.exit, 2);
 
+    let queued_wait = fx.cpd(&[
+        "job",
+        "add",
+        "j3",
+        "--plan",
+        "p1",
+        "--workflow",
+        "w1",
+        "--title",
+        "Queued",
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--waiting-on",
+        "user",
+    ]);
+    refused(&queued_wait, "draft_dependency_required", 2);
+
     // Add a valid draft job with --waiting-on user
     let out_ok = fx.cpd(&[
         "job",
         "add",
-        "j1",
+        "j2",
         "--plan",
         "p1",
         "--workflow",
@@ -150,7 +168,7 @@ fn draft_without_waiting_on_is_refused() {
     assert_eq!(out_ok.exit, 0);
 
     // job edit on a draft clearing or omitting --waiting-on or editing without it
-    let out_edit = fx.cpd(&["job", "edit", "j1", "--plan", "p1", "--waiting-on", ""]);
+    let out_edit = fx.cpd(&["job", "edit", "j2", "--plan", "p1", "--waiting-on", ""]);
     refused(&out_edit, "draft_dependency_required", 2);
 }
 
@@ -556,5 +574,94 @@ fn plan_reopen_restores_dispatch_and_clears_terminal_state() {
     if out_send_after.exit != 0 {
         let val = out_send_after.json();
         assert_ne!(val["error"]["code"].as_str().unwrap_or(""), "plan_inactive");
+    }
+}
+
+#[test]
+fn review_only_draft_waits_for_explicit_lock_and_markers_stay_held() {
+    use cpd_core::host::runner::Reply;
+    let fx = Fx::with_ports();
+    setup(&fx);
+    create_plan(&fx, "p1", "plan");
+    let repo = fx.keyed_repo("pay");
+    fx.env.sql(&format!(
+        "UPDATE workflows SET repo = '{}' WHERE plan = 'p1'",
+        repo.display()
+    ));
+    fx.github_origin(&repo);
+    fx.drop_unreachable_origin(&repo);
+    let _ = (*fx.fakes.runner).clone().on(
+        "cpd",
+        |call| call.args == ["watch", "--ensure"],
+        Reply::ok(r#"{"ok":true,"started":true,"pane":"%9"}"#),
+    );
+    let spec = write_spec(&fx, "lock-spec.json");
+    let text = fs::read_to_string(&spec)
+        .unwrap()
+        .replace("src/lib.rs", "README.md");
+    fs::write(&spec, text).unwrap();
+    for (key, marker) in [
+        ("review", None),
+        ("user-wait", Some("user")),
+        ("historical-user", Some("user")),
+        ("lead-wait", Some("lead")),
+        ("explore-wait", Some("explore:answer")),
+    ] {
+        let mut args = vec![
+            "job",
+            "add",
+            key,
+            "--plan",
+            "p1",
+            "--workflow",
+            "w1",
+            "--title",
+            key,
+            "--tier",
+            "S2",
+            "--spec",
+            &spec,
+            "--draft",
+        ];
+        if let Some(marker) = marker {
+            args.extend(["--waiting-on", marker]);
+        }
+        fx.cpd(&args).ok();
+    }
+    fx.outline_for_review("p1");
+    assert_ne!(fx.cpd(&["plan", "lock", "--plan", "p1"]).exit, 0);
+    fx.cpd(&["plan", "review", "--plan", "p1", "--title", "Review"])
+        .ok();
+    assert_ne!(fx.cpd(&["plan", "lock", "--plan", "p1"]).exit, 0);
+    fx.cpd(&["plan", "decide", "r1", "--approve", "--plan", "p1"])
+        .ok();
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'review'"),
+        "draft"
+    );
+    fx.env
+        .sql("UPDATE jobs SET goal = 'Changed material' WHERE key = 'review'");
+    assert_ne!(fx.cpd(&["plan", "lock", "--plan", "p1"]).exit, 0);
+    fx.env
+        .sql("UPDATE jobs SET goal = 'Goal text' WHERE key = 'review'");
+    fx.cpd(&["plan", "lock", "--plan", "p1"]).ok();
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'review'"),
+        "queued"
+    );
+    for (key, marker) in [
+        ("user-wait", "user"),
+        ("historical-user", "user"),
+        ("lead-wait", "lead"),
+        ("explore-wait", "explore:answer"),
+    ] {
+        assert_eq!(
+            fx.env.query::<String>(&format!(
+                "SELECT status || ':' || waiting_on FROM jobs WHERE key = '{key}'"
+            )),
+            format!("draft:{marker}")
+        );
     }
 }

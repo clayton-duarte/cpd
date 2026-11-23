@@ -7,8 +7,7 @@
 //!     no mitigation (`unmitigated_past_bound`) or repeats an open bug's normalized symptom
 //!     (`recurring_symptom`), and, in the same transaction, one waking `session-message` whose text
 //!     begins `Bug <id> breached`;
-//!   - leaves the User's alert to the bug's `bug` Inbox item, which E8's rule keeps open while the bug
-//!     is unmitigated and closes when it is mitigated or closed (core/src/inbox/model.rs).
+//!   - leaves any explicit User escalation to E8; neither breach nor wake opens a user item.
 //!
 //! The owner is the Plan's Lead when the record names a Plan, else the live Manager of Context `cpd`
 //! (air-d104, pro-d204). The writes are their own records, as E21's are, so a quiet tick writes
@@ -23,8 +22,9 @@ use super::engine::Engine;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{PlanId, SessionId};
-use cpd_core::inbox::model::BUG_MITIGATION_WINDOW_SECS;
 use cpd_core::store::{Store, WriteTxn};
+
+const BUG_MITIGATION_WINDOW_SECS: i64 = 900;
 
 /// One open, unmitigated `bug_records` row, as E25 reads it.
 struct Bug {

@@ -1,8 +1,6 @@
 //! Unit tests for bug Inbox conditions and reconcile (Job `inbox-tests`, Plan `bug-inbox`).
 //!
-//! Verifies that bug reports open an Inbox item only when unmitigated past the protocol window
-//! (900 s) or explicitly requested, with urgency Yellow, and close on mitigation or close
-//! (pro-d578, contract §2.2 "Inbox item", "Bug record").
+//! Age alone does not open a bug item; explicit escalation still does.
 
 use super::model::{Kind, Urgency, reconcile};
 use crate::home::CpdHome;
@@ -12,7 +10,7 @@ const T0: &str = "2026-01-01T00:00:00.000Z";
 // 300 seconds (5 minutes) after T0: inside the 900s protocol window
 const T_INSIDE: &str = "2026-01-01T00:05:00.000Z";
 // 900 seconds (15 minutes) after T0: at the protocol window bound
-const _T_BOUND: &str = "2026-01-01T00:15:00.000Z";
+const T_BOUND: &str = "2026-01-01T00:15:00.000Z";
 // 1000 seconds after T0: past the protocol window bound
 const T_PAST: &str = "2026-01-01T00:16:40.000Z";
 
@@ -77,6 +75,13 @@ impl Fixture {
         reconcile(&mut self.store, &[], now).unwrap();
     }
 
+    fn escalate_bug(&mut self, id: &str) {
+        self.sql(&format!(
+            "UPDATE bug_records SET escalated_at = '{T_INSIDE}', escalated_by = 'l-pay',
+                    escalation_reason = 'Need the owner decision' WHERE id = '{id}'"
+        ));
+    }
+
     fn bug_items(&mut self) -> Vec<super::model::Item> {
         self.store
             .read(super::model::open_items)
@@ -110,28 +115,31 @@ fn report_mitigated_inside_window_opens_no_item() {
     );
 }
 
-/// (2) Report, no mitigation past the window (now >= reported_at + 900s) -> exactly one Inbox item opened with Urgency::Yellow.
 #[test]
-fn report_unmitigated_past_window_opens_yellow_item() {
+fn an_unmitigated_bug_never_opens_an_item_on_age_alone() {
     let mut f = fixture();
     f.report_bug("b1", T0);
-
-    // Past the window (T_PAST = T0 + 1000s >= 900s): should open exactly one Yellow item.
+    for now in [T_INSIDE, T_BOUND, T_PAST] {
+        f.reconcile(now);
+        assert!(f.bug_items().is_empty(), "{now}");
+    }
+    f.sql(&format!(
+        "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at)
+         VALUES ('bug', 'yellow', 'bug:b1', 'legacy age-only row', '{T_BOUND}')"
+    ));
     f.reconcile(T_PAST);
-    let items = f.bug_items();
-    assert_eq!(
-        items.len(),
-        1,
-        "past the window, exactly one bug Inbox item must open: {items:?}"
-    );
-    let item = &items[0];
-    assert_eq!(
-        item.urgency,
-        Urgency::Yellow,
-        "bug Inbox item must open with Yellow urgency, not Red"
-    );
-    assert_eq!(item.subject, "bug:b1");
-    assert_eq!(item.plan.as_ref().map(|p| p.as_str()), Some("pay"));
+    assert!(f.bug_items().is_empty(), "legacy age-only row closes");
+    let (status, mitigation): (String, Option<String>) = f
+        .store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT status, mitigation FROM bug_records WHERE id = 'b1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!((status.as_str(), mitigation), ("open", None));
 }
 
 /// (3) Mitigating an open item closes it.
@@ -140,9 +148,9 @@ fn mitigating_closes_open_item() {
     let mut f = fixture();
     f.report_bug("b1", T0);
 
-    // Past the window: item opens.
+    f.escalate_bug("b1");
     f.reconcile(T_PAST);
-    assert_eq!(f.bug_items().len(), 1, "bug item must be open past window");
+    assert_eq!(f.bug_items().len(), 1, "escalated item must be open");
 
     // Mitigating at T_PAST closes the open item at next reconcile.
     f.mitigate_bug("b1", T_PAST);
@@ -160,9 +168,9 @@ fn closing_closes_open_item() {
     let mut f = fixture();
     f.report_bug("b1", T0);
 
-    // Past the window: item opens.
+    f.escalate_bug("b1");
     f.reconcile(T_PAST);
-    assert_eq!(f.bug_items().len(), 1, "bug item must be open past window");
+    assert_eq!(f.bug_items().len(), 1, "escalated item must be open");
 
     // Closing at T_PAST closes the open item at next reconcile.
     f.close_bug("b1", T_PAST);
@@ -179,12 +187,13 @@ fn an_explicit_bug_escalation_opens_only_that_bug_inside_the_window() {
     let mut f = fixture();
     f.report_bug("b1", T0);
     f.report_bug("b2", T0);
-    f.sql(&format!("UPDATE bug_records SET escalated_at = '{T_INSIDE}', escalated_by = 'l-pay', escalation_reason = 'Need the owner decision' WHERE id = 'b1'"));
+    f.escalate_bug("b1");
     f.reconcile(T_INSIDE);
     let items = f.bug_items();
     assert_eq!(items.len(), 1);
-    assert!(items[0].subject.contains("b1"));
+    assert_eq!(items[0].subject, "bug:b1");
     assert_eq!(items[0].urgency, Urgency::Yellow);
+    assert_eq!(items[0].plan.as_ref().map(|p| p.as_str()), Some("pay"));
     f.mitigate_bug("b1", T_INSIDE);
     f.reconcile(T_INSIDE);
     assert!(f.bug_items().is_empty());

@@ -106,7 +106,7 @@ fn a_post_younger_than_24h_keeps_the_ready_for_review_label() {
 #[test]
 fn a_reviewed_draft_or_closed_pr_is_never_overdue() {
     for (what, set, label) in [
-        ("approved", "review_decision = 'approved'", None),
+        ("approved", "review_decision = 'approved'", Some(())),
         (
             "changes requested",
             "review_decision = 'changes_requested'",
@@ -117,7 +117,7 @@ fn a_reviewed_draft_or_closed_pr_is_never_overdue() {
     ] {
         let mut f = fixture(OLD, None, set);
         if label.is_some() {
-            // A closed pull request has no `pr-ready` row at all.
+            // A nonactionable state has no `pr-ready` row at all.
             let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, None).unwrap();
             assert!(all.iter().all(|c| c.kind != Kind::PrReady), "{what}");
         } else {
@@ -129,7 +129,8 @@ fn a_reviewed_draft_or_closed_pr_is_never_overdue() {
     let mut f = fixture(OLD, None, "title = title");
     assert_eq!(f.row().label, OVERDUE);
     f.sql("UPDATE pull_requests SET review_decision = 'approved' WHERE number = 1");
-    assert!(!f.row().label.contains("overdue"));
+    let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, None).unwrap();
+    assert!(all.iter().all(|c| c.kind != Kind::PrReady));
 }
 
 #[test]

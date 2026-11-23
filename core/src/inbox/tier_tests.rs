@@ -1,4 +1,4 @@
-//! pro-d401: unread is cyan; the notices `curate-retire` and `models-changed` are white.
+//! pro-d401: the notices `curate-retire` and `models-changed` are white.
 
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -43,7 +43,7 @@ fn only(found: Vec<Condition>) -> Condition {
 const CONTEXT: &str = "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '2026-01-01T00:00:00.000Z', 'm1');";
 
 #[test]
-fn an_unread_item_is_cyan_not_white() {
+fn a_reply_stays_in_the_event_log_but_a_legacy_unread_item_closes() {
     let (_dir, home, mut store) = open();
     sql(
         &mut store,
@@ -55,11 +55,28 @@ fn an_unread_item_is_cyan_not_white() {
                VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'l-pay', '{T}', '{T}', NULL);
              INSERT INTO events (txn, at, kind, context, plan, job, session, text, data)
                VALUES (cpd_txn(), '{T}', 'session-state', 'ctx', NULL, NULL, 'l-pay', 'x',
-                       '{{\"from\":\"working\",\"label\":null,\"to\":\"idle\",\"reply\":true}}');"
+                       '{{\"from\":\"working\",\"label\":null,\"to\":\"idle\",\"reply\":true}}');
+             INSERT INTO inbox_items (kind, urgency, subject, label, opened_at, session, event)
+               VALUES ('unread', 'cyan', 'session:l-pay', 'pay replied', '{T}', 'l-pay',
+                 (SELECT max(id) FROM events));"
         ),
     );
-    let c = only(of(&mut store, &home, Kind::Unread));
-    assert_eq!(c.urgency, Urgency::Cyan);
+    let wanted = conditions_with(&mut store, &home, NOW, 20, 1, None).unwrap();
+    let changes =
+        super::model::reconcile(&mut store, &wanted, &crate::clock::timestamp(NOW)).unwrap();
+    assert_eq!(changes.closed.len(), 1);
+    assert!(changes.opened.is_empty());
+    let replies: i64 = store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT count(*) FROM events WHERE kind = 'session-state' AND session = 'l-pay'
+                AND json_extract(data, '$.reply') = 1",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(replies, 1);
 }
 
 #[test]

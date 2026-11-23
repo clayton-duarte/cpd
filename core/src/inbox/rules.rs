@@ -22,7 +22,6 @@ use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;
 use crate::plan::Phase;
-use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
 use crate::session::LOOP_GUARD_LABEL;
 use crate::store::Store;
@@ -128,7 +127,6 @@ pub fn conditions_with(
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| loop_guards(conn, loop_guard_turns))?);
     all.extend(store.read(plan_reviews)?);
-    all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
     all.extend(store.read(|conn| super::pr::conditions(conn, home, now))?);
@@ -137,7 +135,8 @@ pub fn conditions_with(
     all.extend(review_requested(store, now, team)?);
     all.extend(models_changed(store, now)?);
     all.extend(deploys(store)?);
-    all.extend(store.read(drafts_parked)?);
+    // Reply Events and parked-draft wakes remain in the store, but do not ask the User to act.
+    // Any legacy Inbox rows for them close through normal reconciliation.
     Ok(all)
 }
 
@@ -197,54 +196,6 @@ fn deploys(store: &mut Store) -> Result<Vec<Condition>, CpdError> {
         }
         Ok(out)
     })
-}
-
-/// `drafts-parked` (contract §2.2 "Inbox item", hs-d731, hs-d733): a live Plan whose `parked_drafts` is not empty, whose Lead was
-/// woken (W, newer than T) and has finished a turn since. The Lead must be `idle` (pro-d197). Closes when S is empty or T moves past W.
-fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT p.id, p.context, p.lead_session FROM plans p JOIN sessions s ON s.id = p.lead_session
-          WHERE p.archived_at IS NULL AND p.deleted_at IS NULL AND s.role = 'lead' AND s.archived_at IS NULL AND s.state = 'idle'
-          ORDER BY p.id",
-    )?;
-    let plans = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut out = Vec::new();
-    for (plan, context, lead) in plans {
-        let plan = id("Plan id", &plan, PlanId::parse)?;
-        let wake = wake_state(conn, &plan, &lead)?;
-        let opened = !wake.parked.is_empty()
-            && wake.wake.is_some_and(|w| w > wake.t)
-            && wake.finished_turn_after_wake;
-        if !opened {
-            continue;
-        }
-        let n = wake.parked.len();
-        out.push(Condition {
-            kind: Kind::DraftsParked,
-            urgency: Urgency::Magenta,
-            subject: format!("drafts-parked:{plan}"),
-            label: format!("{plan}: {n} parked draft{}", if n == 1 { "" } else { "s" }),
-            url: None,
-            context: Some(id("Context id", &context, ContextId::parse)?),
-            plan: Some(plan),
-            job: None,
-            session: Some(id("Session id", &lead, SessionId::parse)?),
-            record: None,
-            event: None,
-            opened_at: None,
-            head_oid: None,
-            reviewed_oid: None,
-        });
-    }
-    Ok(out)
 }
 
 /// `refusal-alert` (contract §2.2 "Inbox item", §3.7 E25, Plan `agent-refusals`; air-d85, air-d105): a Session that is
@@ -333,25 +284,11 @@ pub(super) fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdErro
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| corrupt(what, value))
 }
 
-// ---- Sessions: dialog and unread ---------------------------------------------------------------------------------
+// ---- Sessions: dialog and loop guard -----------------------------------------------------------------------------
 
 /// The id of a Session's latest `session-state` Event.
 const LATEST_STATE: &str =
     "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state')";
-/// The id of its latest finished reply turn: its latest `session-state` Event from `working`, `waiting` or `blocked` to `idle`
-/// with `data.reply` true, a turn that answered the User (a start or reload, `stopped` to `idle`, is not one; a turn
-/// that answered an Event or another Session is not one either; hs-d242, hs-d278).
-const LATEST_IDLE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
-                                AND json_extract(e.data, '$.to') = 'idle'
-                                AND json_extract(e.data, '$.from') IN ('working', 'waiting', 'blocked')
-                                AND json_extract(e.data, '$.reply') = 1)";
-/// The id of its latest `session-moved` Event with `place: chat`.
-const LATEST_CHAT: &str =
-    "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
-                                AND json_extract(e.data, '$.place') = 'chat')";
-/// Where its pane is: the `place` of its latest `session-moved` Event.
-const PLACE: &str = "(SELECT json_extract(e.data, '$.place') FROM events e
-                       WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1)";
 
 /// A Session that can need the User, with what its condition links to.
 struct Seat {
@@ -363,8 +300,6 @@ struct Seat {
     who: String,
     /// The Session's `state_label`, empty when it has none.
     state_label: String,
-    /// Its Plan's title, else its own: `COALESCE(plans.title, sessions.title)`; `None` when both are NULL. Only `unread` reads it.
-    title: Option<String>,
     /// The url of the pull request its Plan reviews, when it stores one. Only a `dialog` carries it.
     reviewed_url: Option<String>,
     event: Option<i64>,
@@ -377,7 +312,7 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
         "SELECT s.id, s.context, s.plan, p.phase,
                 EXISTS (SELECT 1 FROM plans q WHERE q.lead_session = s.id),
                 s.role = 'manager',
-                {event}, COALESCE(s.state_label, ''), COALESCE(p.title, s.title),
+                {event}, COALESCE(s.state_label, ''),
                 p.reviewed_repo, p.reviewed_number
            FROM sessions s LEFT JOIN plans p ON p.id = s.plan
           WHERE s.role <> 'worker' AND s.archived_at IS NULL AND p.deleted_at IS NULL AND {filter}
@@ -408,10 +343,9 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
             who,
             event: row.get(6)?,
             state_label: row.get(7)?,
-            title: row.get(8)?,
             reviewed_url: match (
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
             ) {
                 (Some(repo), Some(number)) => {
                     Some(super::review_plan::pr_url(&repo, number as u64))
@@ -503,28 +437,6 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
             Ok(seat_condition(seat, Kind::LoopGuard, Urgency::Red, label))
         })
         .collect()
-}
-
-/// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
-/// latest finished reply turn (`working`, `waiting` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
-/// (never in the slot counts as older than everything). Label `<who> replied`, then `\n` and the title (the Plan's, else the
-/// Session's, as is) when there is one: Row 2. A reply turn already dismissed in a closed `unread` item never reopens
-/// (pro-d425): a reload or a non-reply turn returns the session to `idle` on the same reply Event, and only a newer reply turn opens a fresh item.
-fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let filter = format!(
-        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0) \
-         AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.kind = 'unread' AND i.session = s.id AND i.closed_at IS NOT NULL AND i.dismissed_at IS NOT NULL AND COALESCE(i.event, 0) >= {LATEST_IDLE})"
-    );
-    Ok(seats(conn, LATEST_IDLE, &filter)?
-        .into_iter()
-        .map(|seat| {
-            let label = match &seat.title {
-                Some(title) => format!("{} replied\n{title}", seat.who),
-                None => format!("{} replied", seat.who),
-            };
-            seat_condition(seat, Kind::Unread, Urgency::Cyan, label)
-        })
-        .collect())
 }
 
 // ---- Plans and Jobs: plan-review, and the stuck Jobs -------------------------------------------------------------
@@ -1041,16 +953,6 @@ mod tests {
             )
         }
 
-        fn moved(&mut self, session: &str, place: &str) -> i64 {
-            self.event(
-                "session-moved",
-                Some(session),
-                None,
-                T,
-                &format!(r#"{{"from":"none","place":"{place}"}}"#),
-            )
-        }
-
         fn session(&mut self, id: &str, role: &str, plan: Option<&str>) {
             let plan = plan.map_or("NULL".to_owned(), |p| format!("'{p}'"));
             let attempt = if role == "worker" { "'w-a1'" } else { "NULL" };
@@ -1209,216 +1111,6 @@ mod tests {
         assert!(f.of(Kind::Unread).is_empty());
         f.state("wk", "waiting", Some("φ: question to the Lead"));
         assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
-    }
-
-    // ---- unread ----
-
-    #[test]
-    fn an_idle_turn_outside_the_chat_slot_is_unread_until_the_chat_is_seen() {
-        let mut f = fixture("dispatch");
-        let idle = f.reply("l-pay");
-        let c = one(f.of(Kind::Unread));
-        assert_eq!(
-            (c.urgency, c.subject.as_str(), c.label.as_str()),
-            (Urgency::Cyan, "session:l-pay", "pay replied\nPay")
-        );
-        assert_eq!(c.event, Some(idle), "the idle Event");
-        assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
-
-        f.moved("l-pay", "parked");
-        assert_eq!(f.of(Kind::Unread).len(), 1, "parked is not seen");
-        f.moved("l-pay", "chat");
-        assert!(f.of(Kind::Unread).is_empty(), "in the slot: seen");
-        f.moved("l-pay", "parked");
-        assert!(
-            f.of(Kind::Unread).is_empty(),
-            "out of the slot again, but the turn is not newer than the sight"
-        );
-        f.state("l-pay", "working", None);
-        let idle = f.reply("l-pay");
-        assert_eq!(
-            one(f.of(Kind::Unread)).event,
-            Some(idle),
-            "a new idle turn after being seen"
-        );
-    }
-
-    #[test]
-    fn a_turn_that_did_not_answer_the_user_is_not_unread() {
-        let mut f = fixture("dispatch");
-        f.state("l-pay", "idle", None);
-        assert!(f.of(Kind::Unread).is_empty(), "a non-reply turn alone");
-        f.state("l-pay", "working", None);
-        f.state("l-pay", "idle", None);
-        assert!(
-            f.of(Kind::Unread).is_empty(),
-            "working -> idle without a reply"
-        );
-    }
-
-    #[test]
-    fn a_later_non_reply_turn_does_not_hide_an_unread_reply() {
-        let mut f = fixture("dispatch");
-        let reply = f.reply("l-pay");
-        f.state("l-pay", "working", None);
-        f.state("l-pay", "idle", None);
-        let c = one(f.of(Kind::Unread));
-        assert_eq!(c.event, Some(reply), "the reply Event, not the later turn");
-        f.moved("l-pay", "chat");
-        f.moved("l-pay", "parked");
-        f.state("l-pay", "working", None);
-        f.state("l-pay", "idle", None);
-        assert!(
-            f.of(Kind::Unread).is_empty(),
-            "seen, and the later turn was no reply"
-        );
-    }
-
-    #[test]
-    fn a_reload_is_not_a_finished_turn() {
-        let mut f = fixture("dispatch");
-        f.reply("l-pay");
-        f.moved("l-pay", "chat");
-        f.moved("l-pay", "parked");
-        assert!(f.of(Kind::Unread).is_empty(), "seen");
-        f.state("l-pay", "stopped", None);
-        f.state("l-pay", "idle", None);
-        assert!(
-            f.of(Kind::Unread).is_empty(),
-            "idle -> stopped -> idle is a reload, not a turn"
-        );
-        f.state("l-pay", "stopped", None);
-        f.reply("l-pay");
-        assert!(
-            f.of(Kind::Unread).is_empty(),
-            "stopped -> idle is a reload even when it says reply"
-        );
-    }
-
-    #[test]
-    fn a_dismissed_reply_turn_never_reopens_as_unread_across_a_reload_or_a_non_reply_turn() {
-        const AT: &str = "2026-01-01T01:00:00.000Z";
-        fn run(f: &mut Fixture) {
-            let found = conditions(&mut f.store, &f.home).unwrap();
-            reconcile(&mut f.store, &found, AT).unwrap();
-        }
-        fn rows(f: &mut Fixture, filter: &str) -> i64 {
-            f.store
-                .read(|c| {
-                    Ok(c.query_row(
-                        &format!("SELECT COUNT(*) FROM inbox_items WHERE kind = 'unread' {filter}"),
-                        [],
-                        |r| r.get(0),
-                    )?)
-                })
-                .unwrap()
-        }
-        let mut f = fixture("dispatch");
-        let first = f.reply("l-pay");
-        run(&mut f);
-        assert_eq!(rows(&mut f, "AND closed_at IS NULL"), 1, "one open unread");
-        // The WebUI read flow: `cpd inbox dismiss`, no session-moved to chat.
-        f.store
-            .write("dismiss", |tx| {
-                tx.execute(
-                    "UPDATE inbox_items SET dismissed_at = ?1 WHERE kind = 'unread'",
-                    [AT],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        run(&mut f);
-        assert_eq!(
-            rows(&mut f, "AND closed_at IS NULL AND dismissed_at IS NOT NULL"),
-            1,
-            "the row stays open and dismissed"
-        );
-        for (mid, why) in [("stopped", "a reload"), ("working", "a non-reply turn")] {
-            f.state("l-pay", mid, None);
-            run(&mut f);
-            f.state("l-pay", "idle", None);
-            run(&mut f);
-            assert_eq!(
-                rows(&mut f, "AND closed_at IS NULL"),
-                0,
-                "{why} opens no new unread"
-            );
-            assert!(
-                f.of(Kind::Unread).is_empty(),
-                "{why} leaves no unread condition"
-            );
-            assert_eq!(
-                rows(&mut f, ""),
-                1,
-                "{why}: still the one closed, dismissed row"
-            );
-        }
-        f.state("l-pay", "working", None);
-        let second = f.reply("l-pay");
-        run(&mut f);
-        assert_ne!(first, second);
-        let open = f
-            .store
-            .read(|c| {
-                Ok(c.query_row(
-                    "SELECT event, dismissed_at IS NULL FROM inbox_items \
-                     WHERE kind = 'unread' AND closed_at IS NULL",
-                    [],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?)),
-                )?)
-            })
-            .unwrap();
-        assert_eq!(
-            open,
-            (second, true),
-            "a new reply turn opens a fresh unread"
-        );
-    }
-
-    #[test]
-    fn a_working_waiting_or_blocked_session_going_idle_after_the_visit_is_unread() {
-        for before in ["working", "waiting", "blocked"] {
-            let mut f = fixture("dispatch");
-            f.reply("l-pay");
-            f.moved("l-pay", "chat");
-            f.moved("l-pay", "parked");
-            f.state("l-pay", before, (before != "working").then_some("Which?"));
-            let idle = f.reply("l-pay");
-            assert_eq!(
-                one(f.of(Kind::Unread)).event,
-                Some(idle),
-                "{before} -> idle"
-            );
-        }
-    }
-
-    #[test]
-    fn a_session_in_the_chat_slot_or_not_idle_is_not_unread() {
-        let mut f = fixture("dispatch");
-        f.reply("l-pay");
-        f.moved("l-pay", "chat");
-        assert!(f.of(Kind::Unread).is_empty());
-        f.state("mgr", "working", None);
-        f.state("mgr", "blocked", Some("Which?"));
-        assert!(
-            f.of(Kind::Unread).is_empty(),
-            "blocked is a dialog, not unread"
-        );
-        f.state("mgr", "waiting", Some("φ: Worker question"));
-        assert!(f.of(Kind::Unread).is_empty(), "waiting is not unread");
-        f.state("mgr", "stopped", None);
-        assert!(f.of(Kind::Unread).is_empty());
-    }
-
-    #[test]
-    fn a_manager_and_a_fork_can_be_unread() {
-        let mut f = fixture("dispatch");
-        f.session("fork-1234", "lead", Some("pay"));
-        f.reply("mgr");
-        f.reply("fork-1234");
-        let mut labels: Vec<_> = f.of(Kind::Unread).into_iter().map(|c| c.label).collect();
-        labels.sort();
-        assert_eq!(labels, ["ctx replied", "pay·fork replied\nPay"]);
     }
 
     // ---- plan-review ----
@@ -1748,7 +1440,7 @@ mod tests {
     fn an_unknown_mergeable_is_neither_failing_nor_ready() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 9, "passed", "unknown", "approved");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#9 waiting\nT");
+        assert!(f.of(Kind::PrReady).is_empty());
     }
 
     #[test]
@@ -1805,7 +1497,7 @@ mod tests {
             4,
             "review_decision = 'approved', checks = 'pending'",
         );
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 checks running\nT");
+        assert!(f.of(Kind::PrReady).is_empty());
     }
 
     /// The exact row of missionlane/cc-api-orc-apollo#2385 (hs-d481): everything looks ready but GitHub says BLOCKED.
@@ -1814,11 +1506,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "passed", "mergeable", "none");
         set(&mut f, 5, "merge_state = 'blocked'");
-        assert_eq!(
-            one(f.of(Kind::PrReady)).label,
-            "shop#5 waiting\nT",
-            "unowned"
-        );
+        assert!(f.of(Kind::PrReady).is_empty(), "unowned");
         own(&mut f, 5);
         assert_eq!(
             one(f.of(Kind::PrReady)).label,
@@ -1833,7 +1521,9 @@ mod tests {
             let mut f = fixture("dispatch");
             pull_request(&mut f, 1, "passed", "mergeable", review);
             set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
-            one(f.of(Kind::PrReady)).label == "shop#1 ready to merge\nT"
+            f.of(Kind::PrReady)
+                .iter()
+                .any(|c| c.label == "shop#1 ready to merge\nT")
         };
         // hs-d525: only clean is ready; unstable and has_hooks are not.
         for merge_state in ["clean"] {
@@ -1867,19 +1557,21 @@ mod tests {
     }
 
     #[test]
-    fn an_open_pr_ready_item_closes_when_its_pull_request_becomes_blocked_hs_d481() {
-        let mut f = fixture("dispatch");
-        pull_request(&mut f, 5, "passed", "mergeable", "none");
-        let found = conditions(&mut f.store, &f.home).unwrap();
-        assert_eq!(reconcile(&mut f.store, &found, T).unwrap().opened.len(), 1);
-        set(&mut f, 5, "merge_state = 'blocked'");
-        let found = conditions(&mut f.store, &f.home).unwrap();
-        let changes = reconcile(&mut f.store, &found, T).unwrap();
-        assert_eq!(
-            (changes.opened.len(), changes.closed.len()),
-            (1, 1),
-            "a colour change closes the yellow row and opens a cyan one"
-        );
+    fn a_pr_item_closes_without_replacement_when_it_starts_waiting() {
+        for state in ["merge_state = 'blocked'", "checks = 'pending'"] {
+            let mut f = fixture("dispatch");
+            pull_request(&mut f, 5, "passed", "mergeable", "none");
+            let found = conditions(&mut f.store, &f.home).unwrap();
+            assert_eq!(reconcile(&mut f.store, &found, T).unwrap().opened.len(), 1);
+            set(&mut f, 5, state);
+            let found = conditions(&mut f.store, &f.home).unwrap();
+            let changes = reconcile(&mut f.store, &found, T).unwrap();
+            assert_eq!(
+                (changes.opened.len(), changes.closed.len()),
+                (0, 1),
+                "{state}"
+            );
+        }
     }
 
     #[test]
@@ -2491,6 +2183,7 @@ mod tests {
         assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
         f.state("l-pay", "blocked", Some("Which?"));
         f.review("r1", "pending");
+        f.state("mgr", "working", None);
         f.reply("mgr");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
@@ -2501,8 +2194,8 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            [Kind::Dialog, Kind::PlanReview, Kind::Unread],
-            "the failed Job is no item"
+            [Kind::Dialog, Kind::PlanReview],
+            "neither the ordinary reply nor the failed Job needs a User action"
         );
         pull_request(&mut f, 1, "failed", "mergeable", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
@@ -2512,7 +2205,7 @@ mod tests {
             .unwrap()
             .into_iter()
             .map(|c| c.kind)
-            .skip(3)
+            .skip(2)
             .collect();
         assert_eq!(tail, [Kind::PrReady, Kind::PrReady]);
         write_cache(&mut f, &[post("acme/pay", 812)]);
@@ -2524,7 +2217,7 @@ mod tests {
             .map(|c| c.kind)
             .collect();
         assert_eq!(
-            kinds[3..],
+            kinds[2..],
             [Kind::PrReady, Kind::PrReady, Kind::ReviewRequested]
         );
     }

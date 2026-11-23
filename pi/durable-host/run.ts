@@ -9,7 +9,7 @@ import { ConversationBusy, GenerationTask, hook, section, type Extension } from 
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import type { FollowerHooks } from "../lib/follower.ts";
-import { parseLine, type EventOf } from "../lib/event.ts";
+import { parseLine } from "../lib/event.ts";
 import { readView, tag, WEB_CLIENT } from "../lib/origin.ts";
 import { cursorFrom } from "./cursor.ts";
 import { inputOf, type Input } from "./deliver.ts";
@@ -20,7 +20,7 @@ import { codemodeNamespaces } from "./codemode.ts";
 import { createReload, type ReloadPort } from "./reload.ts";
 import { createRetier } from "./retier.ts";
 import { skillsCheck, skillsSection, type SkillsPort } from "./skills.ts";
-import { highestReview, reviewsFromEntries } from "../lib/plan-review.ts";
+import { highestReview, REVIEW_LABEL, reviewsFromEntries } from "../lib/plan-review.ts";
 import type { Host } from "../lib/host.ts";
 import { clearTrip, ENTRY_TYPE, holdTrip, LABEL, reportTrip, resetTurn, trippedIn, WINDOW_MS } from "../lib/loop-guard.ts";
 import { policySection } from "../lib/policy.ts";
@@ -200,13 +200,18 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     };
     // §6.16 held deliveries: while the breaker is tripped an input that would start a turn is queued here, not submitted.
     const heldLoop: Input[] = [];
-    // §6.15 "The blocked state": a held request reports `blocked` with the label `dialog`; resolving to zero returns to
-    // `working` while a run is pending, else to `idle`, with the reply rule of §6.13 untouched. A loop-guard trip reports
-    // `blocked` with the label `φ: loop guard` by label, not by a held request (§6.16).
+    // §6.15 "The blocked state": review requests already have their own Inbox item. An independent held
+    // dialog still takes the generic label so it can appear separately; the loop guard keeps precedence.
     let hostState: "idle" | "working" = "idle";
     let reply = false;
-    const wanted = (): Wanted =>
-      loop.tripped ? { state: "blocked", label: LABEL } : held.heldCount() > 0 ? { state: "blocked", label: "dialog" } : hostState === "working" ? { state: "working" } : reply ? { state: "idle", reply: true } : { state: "idle" };
+    const wanted = (): Wanted => {
+      if (loop.tripped) return { state: "blocked", label: LABEL };
+      if (held.heldCount() > 0) {
+        const reviewOnly = held.heldList().every((request) => request.purpose === "plan_review");
+        return { state: "blocked", label: reviewOnly ? REVIEW_LABEL : "dialog" };
+      }
+      return hostState === "working" ? { state: "working" } : reply ? { state: "idle", reply: true } : { state: "idle" };
+    };
     const report = (): void => {
       server?.stateChanged();
       reporter.want(wanted());
@@ -337,6 +342,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       notifyDecision: async (content, data) => {
         await submit({
           content,
+          // If the host dies after admission but before writing the settled review, pi-durable reuses this submission.
           requestId: `plan-decision:${plan}:${String(data.review)}`,
           whenBusy: "followUp",
           entry: { kind: "cpd-plan-decision", data },
@@ -700,6 +706,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     }
     // §6.18: the skills check runs at start, after the host has its conversation.
     await runSkillsCheck();
+    let reviewEvents = Promise.resolve();
     follower = deps.follow?.({
       before: async () => {},
       onRunStart: () => {},
@@ -736,8 +743,10 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         // A `plan-review` Event feeds the flow of §plan-review.ts instead of a submission: pending opens the dialog,
         // approved or rejected settles the pending entry, superseded closes it (pi/lib/handle.ts `handleEvent`).
         if (event.kind === "plan-review") {
-          const ev = event as EventOf<"plan-review">;
-          void (async () => {
+          if (event.plan !== plan) return true;
+          const ev = event;
+          // Fold the pending/decided markers in event order, including during catch-up after a restart.
+          reviewEvents = reviewEvents.then(async () => {
             try {
               const review = ev.data.review;
               if (ev.data.status === "pending") {
@@ -748,11 +757,11 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
               const entry = reviews.get(review);
               if (entry?.status !== "pending") return;
               if (ev.data.status === "approved" || ev.data.status === "rejected") await planReview.decidedElsewhere(entry, ev);
-              else if (ev.data.status === "superseded") planReview.closeSuperseded(entry);
+              else if (ev.data.status === "superseded") await planReview.closeSuperseded(entry);
             } catch (e) {
               failed("a plan-review event", e);
             }
-          })();
+          });
           return true;
         }
         // §6.16 the clear: a `session-resumed` Event for this Session while tripped calls the lib's `clearTrip`; then the held

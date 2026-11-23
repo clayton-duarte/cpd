@@ -1,7 +1,48 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CpdError } from "../../lib/cpd.ts";
-import { CONFIG, entry, line, rig } from "./rig.ts";
+import type { Write } from "../../durable-host/turn.ts";
+import { CONFIG, entry, line, rig, withHost } from "./rig.ts";
+
+const reviewRecord = (status: string) => ({
+  kind: "cpd-plan-review",
+  data: { plan: "p1", review: "r1", surface: "chat", status },
+});
+const reviewEvent = (id: number, status: string, plan = "p1") =>
+  line(id, "plan-review", { plan, session: null, data: { review: "r1", status } });
+
+test("restart of a non-current rejected review records history without admitting a Lead turn", { timeout: 20_000 }, async () => {
+  await withHost({
+    stored: [reviewRecord("pending"), entry(200, "session-message")],
+    answers: { "plan-show": { review: { id: "r1", status: "rejected", current: false } } },
+  }, async (r) => {
+    const hooks = await r.up();
+    assert.equal(hooks.cursor(), 200, "the verdict can be behind the persisted follower cursor");
+    assert.deepEqual(r.submitted, []);
+    assert.ok((r.written as Write[]).some((w) => w.entry.kind === "cpd-plan-review" && w.entry.data.status === "rejected"));
+    assert.equal((await r.attach()).received().some((m) => m.type === "ui_request"), false);
+  });
+});
+
+test("restart admits one current verdict and ignores replay once the review is settled", { timeout: 20_000 }, async () => {
+  const answers = { "plan-show": { review: { id: "r1", status: "approved", current: true } } };
+  let settled: unknown;
+  await withHost({ stored: [reviewRecord("pending"), entry(200, "session-message")], answers }, async (r) => {
+    await r.up();
+    assert.deepEqual(r.submitted.map((i) => i.requestId), ["plan-decision:p1:r1"]);
+    assert.ok(r.order.indexOf("submit:plan-decision:p1:r1") < r.order.indexOf("write:cpd-plan-review"));
+    settled = (r.written as Write[]).find((w) => w.entry.kind === "cpd-plan-review" && w.entry.data.status === "approved")?.entry;
+    assert.deepEqual(settled, { ...reviewRecord("approved"), model: [] });
+  });
+  await withHost({ stored: [reviewRecord("pending"), settled], answers }, async (r) => {
+    const hooks = await r.up();
+    hooks.onLine(reviewEvent(201, "pending"));
+    hooks.onLine(reviewEvent(202, "approved"));
+    await r.drain();
+    assert.deepEqual(r.submitted, []);
+    assert.ok((r.written as Write[]).every((w) => !w.entry.kind.startsWith("cpd-plan-")));
+  });
+});
 
 test("a Plan completion with no session starts its durable Lead exactly once", { timeout: 20_000 }, async () => {
   const r = rig();

@@ -1,5 +1,5 @@
 import { BookOpenIcon, DollarSignIcon, LayoutDashboardIcon, ListTreeIcon, ScrollTextIcon, SettingsIcon } from "lucide-react";
-import type { ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import type { StatusModel as WireStatus } from "../../protocol/cockpit.ts";
 import type { Runner, SessionState, Stat } from "../../protocol/domain.ts";
 import { cn } from "../../lib/utils.ts";
@@ -68,6 +68,16 @@ const PILL = "font-mono text-meta";
 function Pills({ status, onSettings, onSelectSession }: { status: StatusModel; onSettings?: () => void; onSelectSession?: (sessionId: string) => void }): ReactElement {
   const w = status.workers;
   const incident = status.incident;
+  const [copied, setCopied] = useState(0);
+  useEffect(() => {
+    if (copied === 0) return;
+    const timer = setTimeout(() => setCopied(0), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copyVersion = (version: string): void => {
+    if (!navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(version).then(() => setCopied((n) => n + 1)).catch(() => {});
+  };
   return (
     <>
       {status.runner === null ? null : <span data-part="runner" className={cn(PILL, "text-fg-strong")}>{status.runner}</span>}
@@ -100,11 +110,14 @@ function Pills({ status, onSettings, onSelectSession }: { status: StatusModel; o
       {status.version === null ? null : (
         <Badge
           data-part="version"
+          render={<button type="button" />}
+          onClick={() => copyVersion(status.version as string)}
           variant="ghost"
           {...(status.hostAlert || status.versionMismatch ? { "data-alert": "true" } : {})}
           className={cn(PILL, (status.hostAlert || status.versionMismatch) ? "text-status-blocked" : "text-fg-dim")}
         >{status.version}</Badge>
       )}
+      {copied > 0 ? <div role="status" className="fixed right-4 bottom-8 z-50 rounded-lg border bg-card px-4 py-3 shadow-lg">Version copied</div> : null}
       {status.mode === "preview" ? <Badge data-part="mode" variant="outline" className={cn(PILL, "border-sakura text-sakura")}>preview</Badge> : null}
     </>
   );

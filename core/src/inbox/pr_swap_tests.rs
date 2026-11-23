@@ -40,10 +40,10 @@ fn yellow_and_red_pr_statuses_and_the_tier_rank_order_are_unchanged() {
 }
 
 #[test]
-fn a_classified_draft_pr_opens_a_cyan_row_and_a_checks_running_one_a_white_row() {
+fn a_classified_draft_remains_cyan_but_pending_checks_do_not_open_a_row() {
     let mut f = fixture();
     f.workflow(1, "draft = 1, merge_state = 'draft'");
     f.workflow(2, "checks = 'pending'");
     is(&mut f, 1, Urgency::Cyan, "draft");
-    is(&mut f, 2, Urgency::White, "checks running");
+    f.assert_no_row(2);
 }

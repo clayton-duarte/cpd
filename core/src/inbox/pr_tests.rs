@@ -121,6 +121,15 @@ impl Fx {
         self.rows_at(NOW)
     }
 
+    pub(super) fn assert_no_row(&mut self, n: i64) {
+        let subject = format!("pr:acme/shop#{n}");
+        let rows = self.rows();
+        assert!(
+            rows.iter().all(|c| c.subject != subject),
+            "{subject}: {rows:?}"
+        );
+    }
+
     fn rows_at(&mut self, now: OffsetDateTime) -> Vec<Condition> {
         let all = conditions_with(&mut self.store, &self.home, now, 20, 1, None).unwrap();
         all.into_iter()
@@ -192,7 +201,7 @@ fn an_authored_stacked_pr_is_a_cyan_stacked_row() {
     );
     f.workflow(2, "base_ref = NULL, default_branch = NULL");
     is(&mut f, 1, Cyan, "stacked pr pending base merge");
-    is(&mut f, 2, White, "waiting");
+    f.assert_no_row(2);
 }
 
 #[test]
@@ -304,11 +313,11 @@ fn an_owned_broken_pr_is_white_while_its_lead_waits() {
 }
 
 #[test]
-fn a_pr_with_pending_checks_is_a_white_checks_running_row() {
+fn pending_checks_do_not_open_an_item_but_a_mergeable_pr_does() {
     let mut f = fixture();
     f.workflow(1, "checks = 'pending'");
     f.workflow(2, "checks = 'none'");
-    is(&mut f, 1, White, "checks running");
+    f.assert_no_row(1);
     is(&mut f, 2, Yellow, "ready to merge");
 }
 
@@ -371,7 +380,7 @@ fn ready_for_review_needs_every_condition() {
         f.workflow(1, "checks = 'passed'");
         f.sql(&format!("UPDATE pull_requests SET {set} WHERE number = 1"));
         f.own("pay", 1);
-        is(&mut f, 1, White, "waiting");
+        f.assert_no_row(1);
     }
 }
 
@@ -381,7 +390,7 @@ fn ready_to_merge_for_a_post_owner_needs_a_post_or_an_approval() {
     f.policy(POST);
     f.workflow(1, "feedback = NULL");
     f.own("pay", 1);
-    is(&mut f, 1, White, "waiting");
+    f.assert_no_row(1);
 
     f.workflow(2, "feedback = NULL, review_decision = 'approved'");
     f.own("pay", 2);
@@ -419,7 +428,7 @@ fn a_posted_pr_that_is_not_ready_to_merge_is_a_white_in_review_row() {
 }
 
 #[test]
-fn a_posted_approved_pr_that_is_not_clean_is_a_white_waiting_row() {
+fn a_posted_approved_pr_that_is_not_clean_opens_no_waiting_item() {
     let mut f = fixture();
     f.policy(POST);
     f.workflow(
@@ -428,15 +437,15 @@ fn a_posted_approved_pr_that_is_not_clean_is_a_white_waiting_row() {
     );
     f.own("pay", 1);
     f.posted(1);
-    is(&mut f, 1, White, "waiting");
+    f.assert_no_row(1);
 }
 
 #[test]
-fn an_authored_pr_that_matches_no_other_state_is_a_white_waiting_row() {
+fn an_authored_pr_that_matches_no_actionable_state_opens_no_waiting_item() {
     let mut f = fixture();
     for (n, state) in [(1, "blocked"), (2, "behind"), (3, "unknown")] {
         f.workflow(n, &format!("checks = 'passed', merge_state = '{state}'"));
-        is(&mut f, n, White, "waiting");
+        f.assert_no_row(n);
     }
 }
 
@@ -458,8 +467,8 @@ fn the_states_take_the_documented_precedence() {
     f.own("pay", 5);
     is(&mut f, 1, Cyan, "draft");
     is(&mut f, 2, Red, "conflict");
-    is(&mut f, 3, White, "checks running");
-    is(&mut f, 4, White, "checks running");
+    f.assert_no_row(3);
+    f.assert_no_row(4);
     is(&mut f, 5, Yellow, "ready for user review");
 }
 
@@ -473,7 +482,7 @@ fn an_unresolved_owner_policy_counts_as_post_disabled_and_fails_nothing() {
     f.own("pay", 1);
     f.own("pay", 2);
     is(&mut f, 1, Yellow, "ready to merge");
-    is(&mut f, 2, White, "waiting");
+    f.assert_no_row(2);
     // policy_invalid
     let mut f = fixture();
     f.policy("[pr.post\nenabled = ");
@@ -482,7 +491,7 @@ fn an_unresolved_owner_policy_counts_as_post_disabled_and_fails_nothing() {
     f.own("pay", 1);
     f.own("pay", 2);
     is(&mut f, 1, Yellow, "ready to merge");
-    is(&mut f, 2, White, "waiting");
+    f.assert_no_row(2);
 }
 
 #[test]
@@ -567,10 +576,10 @@ fn a_clean_approved_unowned_pr_is_a_yellow_ready_to_merge_row() {
 const STACKED: &str = "base_ref = 'feature', default_branch = 'main'";
 
 #[test]
-fn stack_review_a_stacked_pr_with_pending_checks_is_checks_running() {
+fn stack_review_a_stacked_pr_with_pending_checks_has_no_item() {
     let mut f = fixture();
     f.workflow(1, &format!("{STACKED}, checks = 'pending'"));
-    is(&mut f, 1, White, "checks running");
+    f.assert_no_row(1);
 }
 
 #[test]
@@ -607,7 +616,7 @@ fn stack_review_a_stacked_pr_walks_checks_running_ready_for_review_in_review_sta
     f.policy(POST);
     f.workflow(1, &format!("{STACKED}, checks = 'pending'"));
     f.own("pay", 1);
-    is(&mut f, 1, White, "checks running");
+    f.assert_no_row(1);
     f.sql("UPDATE pull_requests SET checks = 'passed' WHERE number = 1");
     is(&mut f, 1, Yellow, "ready for user review");
     f.posted(1);

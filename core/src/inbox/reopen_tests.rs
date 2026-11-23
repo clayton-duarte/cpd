@@ -12,6 +12,12 @@ use crate::workflow::reopen_tests::{cancelled, gh, publish, rig, run, stored_pul
 
 /// The `pr-ready` item of `acme/pay#801`.
 fn ready(rig: &Rig) -> Condition {
+    // Give the reopened PR a genuine action so the test checks owner links on a produced row.
+    rig.sql(
+        "UPDATE pull_requests SET merge_state = 'clean', checks = 'passed',
+             base_ref = 'main', default_branch = 'main', head_oid = 'h1',
+             open_threads = '[]', review_threads_complete = 1 WHERE number = 801",
+    );
     let mut store = Store::open(&rig.home, 5000).unwrap();
     let found = conditions_with(
         &mut store,
