@@ -134,7 +134,7 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
             await decide(entry, true, undefined);
             return;
           }
-          const note = await port.dialogs.editor("What should change?");
+          const note = await port.dialogs.editor("What should change?", undefined, { purpose: "plan_review" });
           if (controller.signal.aborted) return; // decided elsewhere while the editor was open: the late note is ignored (review-chat.ts)
           if (note === undefined || note.trim() === "") continue; // an empty note returns to the select
           await decide(entry, false, note);
