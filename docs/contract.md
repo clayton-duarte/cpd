@@ -5296,7 +5296,7 @@ export function createPlanReview(port: PlanReviewPort): {
   open(review: string, via: "event" | "tool" | "start", summary?: string): Promise<void>;
   decide(entry: ReviewEntry, approved: boolean, feedback?: string): Promise<void>;
   decidedElsewhere(entry: ReviewEntry, ev: EventOf<"plan-review">): Promise<void>;
-  closeSuperseded(entry: ReviewEntry): void;
+  closeSuperseded(entry: ReviewEntry): Promise<void>;
 };
 ```
 
@@ -5310,9 +5310,9 @@ export function createPlanReview(port: PlanReviewPort): {
   - then the dialog: `select('Approve the plan review', ['Approve', 'Change'])` with `purpose: 'plan_review'` and **no timeout** (per pi); a `Change` value opens `editor('What should change?', prefill?)` (pi passes no prefill).
   - a newer review SUCCEEDS the older pending one: `open` of a review by a higher `reviewNumber` closes the older dialog (`AbortSignal`, `superseded`) and settles its entry as `superseded` (4.4 rule 4; pi's review-chat.ts `closeOlderDialogs`, read).
   - a cancelled select leaves the entry pending and sends a `notice` (pi's review-chat `notify` with `stillWaiting`, read).
-- **`decide(entry, approved, feedback?)`** (review.ts's `decide`): runs `cpd plan decide <review> --approve | --reject` (with `--feedback-file feedback-<review>.md` and the feedback written to `$CPD_HOME/run/<plan>/feedback-<review>.md` when there is any); a `review_decided` failure is handled by re-reading the review (`cpd plan show`) and continuing with that decision — **nothing else is retried**. Then the settled entry `cpd-plan-review { status: 'approved' | 'rejected' }` is written and the Lead is told with one entry of kind `cpd-plan-decision` carrying `decisionText` of `pi/lib/plan-review.ts` (imported), its `details { plan, review, approved, current, feedback?, decided_elsewhere? }`.
-- **`decidedElsewhere(entry, ev)`** and **`closeSuperseded(entry)`** port review.ts's same flows: a `plan-review` Event of status `approved` or `rejected` for a pending entry settles it with that verdict and no `plan decide` (a failure leaves the entry pending); a `superseded` Event closes the reason and the dialog of a pending entry and records it. Nothing is sent for a supersede.
-- **The start hook**: at host start, `open` the highest pending review with `via: 'start'` — a fresh id (4.4 rule 6: the pending entry survives a restart and the dialog is recreated).
+- **`decide(entry, approved, feedback?)`** (review.ts's `decide`): runs `cpd plan decide <review> --approve | --reject` (with `--feedback-file feedback-<review>.md` and the feedback written to `$CPD_HOME/run/<plan>/feedback-<review>.md` when there is any). On success or `review_decided`, it reads `cpd plan show` — **nothing is retried**. Only the exact latest review with `current: true` and a terminal verdict wakes the Lead, with one entry of kind `cpd-plan-decision` carrying `decisionText` of `pi/lib/plan-review.ts` and `details { plan, review, approved, current, feedback?, decided_elsewhere? }`. The host admits the decision before writing the settled `cpd-plan-review` entry; the stable per-Plan/review request id makes admission safe to replay after a crash. A non-current verdict for the exact review is recorded locally without waking the Lead.
+- **`decidedElsewhere(entry, ev)`** and **`closeSuperseded(entry)`**: a same-Plan `plan-review` Event of status `approved` or `rejected` for a pending entry re-reads `cpd plan show` and uses the same eligibility check, also requiring that the stored verdict matches the Event. It does not run `plan decide`. Superseded reviews close silently and record the local resolution.
+- **The start hook**: at host start, reconcile the highest persisted pending review with `cpd plan show`, even when the follower cursor is past the verdict. Recreate the dialog with a fresh id (4.4 rule 6) only for the exact, still-current pending review; a verdict uses the same eligibility check as above.
 - **The tool returns at once**: `cpd_plan_review` returns immediately and the dialog opens only from the `plan-review` Event or the start hook, so a second call of the tool while a dialog is pending re-uses it (review.ts: `openReview` is a no-op for a review it already holds, read).
 
 #### The blocked state

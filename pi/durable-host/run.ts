@@ -9,7 +9,7 @@ import { ConversationBusy, GenerationTask, hook, section, type Extension } from 
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import type { FollowerHooks } from "../lib/follower.ts";
-import { parseLine, type EventOf } from "../lib/event.ts";
+import { parseLine } from "../lib/event.ts";
 import { readView, tag, WEB_CLIENT } from "../lib/origin.ts";
 import { cursorFrom } from "./cursor.ts";
 import { inputOf, type Input } from "./deliver.ts";
@@ -337,6 +337,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       notifyDecision: async (content, data) => {
         await submit({
           content,
+          // If the host dies after admission but before writing the settled review, pi-durable reuses this submission.
           requestId: `plan-decision:${plan}:${String(data.review)}`,
           whenBusy: "followUp",
           entry: { kind: "cpd-plan-decision", data },
@@ -700,6 +701,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     }
     // §6.18: the skills check runs at start, after the host has its conversation.
     await runSkillsCheck();
+    let reviewEvents = Promise.resolve();
     follower = deps.follow?.({
       before: async () => {},
       onRunStart: () => {},
@@ -736,8 +738,10 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
         // A `plan-review` Event feeds the flow of §plan-review.ts instead of a submission: pending opens the dialog,
         // approved or rejected settles the pending entry, superseded closes it (pi/lib/handle.ts `handleEvent`).
         if (event.kind === "plan-review") {
-          const ev = event as EventOf<"plan-review">;
-          void (async () => {
+          if (event.plan !== plan) return true;
+          const ev = event;
+          // Fold the pending/decided markers in event order, including during catch-up after a restart.
+          reviewEvents = reviewEvents.then(async () => {
             try {
               const review = ev.data.review;
               if (ev.data.status === "pending") {
@@ -748,11 +752,11 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
               const entry = reviews.get(review);
               if (entry?.status !== "pending") return;
               if (ev.data.status === "approved" || ev.data.status === "rejected") await planReview.decidedElsewhere(entry, ev);
-              else if (ev.data.status === "superseded") planReview.closeSuperseded(entry);
+              else if (ev.data.status === "superseded") await planReview.closeSuperseded(entry);
             } catch (e) {
               failed("a plan-review event", e);
             }
-          })();
+          });
           return true;
         }
         // §6.16 the clear: a `session-resumed` Event for this Session while tripped calls the lib's `clearTrip`; then the held

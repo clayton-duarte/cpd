@@ -31,7 +31,7 @@ export type PlanReview = {
   open(review: string, via: "event" | "tool" | "start", summary?: string): Promise<void>;
   decide(entry: ReviewEntry, approved: boolean, feedback?: string): Promise<void>;
   decidedElsewhere(entry: ReviewEntry, ev: EventOf<"plan-review">): Promise<void>;
-  closeSuperseded(entry: ReviewEntry): void;
+  closeSuperseded(entry: ReviewEntry): Promise<void>;
 };
 
 const APPROVE = "Approve";
@@ -68,50 +68,54 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
   const decide = async (entry: ReviewEntry, approved: boolean, feedback?: string): Promise<void> => {
     if (entry.status !== "pending" || deciding.has(entry.review)) return;
     deciding.add(entry.review);
-    let verdict = approved;
-    let text = feedback;
-    let current = true;
     try {
       const args = ["plan", "decide", entry.review, approved ? "--approve" : "--reject"];
       if (feedback !== undefined && feedback !== "") args.push("--feedback-file", FEEDBACK_FILE(entry.review));
       args.push("--plan", port.plan);
       try {
-        const out = await port.cpd(args);
-        current = out.current !== false;
+        await port.cpd(args);
       } catch (e) {
         if (toCpdError(e).code !== "review_decided") throw e;
-        // Another caller decided it: re-read the review and continue with that decision; nothing else is retried.
-        const shown = (await port.cpd(["plan", "show", "--plan", port.plan])).review;
-        if (isObject(shown) && shown.id === entry.review && (shown.status === "approved" || shown.status === "rejected")) {
-          verdict = shown.status === "approved";
-          text = typeof shown.feedback === "string" ? shown.feedback : undefined;
-          current = shown.current !== false;
-        } else {
-          current = false; // a newer review exists: this decision no longer counts
-        }
       }
-      await settle(entry, verdict, text, current, false);
+      // `plan decide` can idempotently return an older verdict. Only the exact latest review may wake the Lead.
+      await reconcile(entry, false);
     } finally {
       deciding.delete(entry.review);
     }
   };
 
-  /** §15.5 "Deciding": the settled entry, the dialog closed, the Lead told (review.ts `settle`). */
+  /** Tell the Lead only for a current verdict. Keep the pending marker until the durable submission is admitted. */
   async function settle(entry: ReviewEntry, verdict: boolean, text: string | undefined, current: boolean, elsewhere: boolean): Promise<void> {
     const done: ReviewEntry = { ...entry, status: verdict ? "approved" : "rejected" };
     abortDialog(entry.review);
+    if (current) {
+      const data = {
+        plan: entry.plan,
+        review: entry.review,
+        approved: verdict,
+        current,
+        ...(text !== undefined ? { feedback: text } : {}),
+        ...(elsewhere ? { decided_elsewhere: true } : {}),
+      };
+      const content = decisionText(entry.review, verdict, text, current, elsewhere ? ELSEWHERE_CHAT_NOTE : undefined);
+      if (port.notifyDecision) await port.notifyDecision(content, data);
+      else await port.write({ kind: DECISION_TYPE, data, model: [{ role: "user", content }] });
+    }
     await port.write({ kind: ENTRY_TYPE, data: entryData(done), model: [] });
-    const data = {
-      plan: entry.plan,
-      review: entry.review,
-      approved: verdict,
-      current,
-      ...(text !== undefined ? { feedback: text } : {}),
-      ...(elsewhere ? { decided_elsewhere: true } : {}),
-    };
-    const content = decisionText(entry.review, verdict, text, current, elsewhere ? ELSEWHERE_CHAT_NOTE : undefined);
-    if (port.notifyDecision) await port.notifyDecision(content, data);
-    else await port.write({ kind: DECISION_TYPE, data, model: [{ role: "user", content }] });
+  }
+
+  /** The ledger, not the event payload or the session entry, decides whether this exact review may wake the Lead. */
+  async function reconcile(entry: ReviewEntry, elsewhere: boolean, eventStatus?: string): Promise<"pending" | undefined> {
+    const shown = (await port.cpd(["plan", "show", "--plan", port.plan])).review;
+    if (!isObject(shown) || shown.id !== entry.review || shown.status === "superseded") {
+      await closeSuperseded(entry);
+    } else if (shown.status === "pending") {
+      if (shown.current === true) return "pending";
+      await closeSuperseded(entry);
+    } else if ((shown.status === "approved" || shown.status === "rejected") &&
+               (eventStatus === undefined || shown.status === eventStatus)) {
+      await settle(entry, shown.status === "approved", typeof shown.feedback === "string" ? shown.feedback : undefined, shown.current === true, elsewhere);
+    }
   }
 
   /** The dialog of a pending chat review, detached (review.ts `showDialog`): select; Approve decides, Change opens the editor and decides with the note. A decline leaves the entry pending and sends the `stillWaiting` notice. */
@@ -147,10 +151,10 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
   };
 
   /** §15.5 "Latest only": a newer review closes this session's older pending ones (`closeSuperseded`); a reopen of the same review closes the previous select and says it still waits. */
-  const supersede = (review: string, reviews: ReadonlyMap<string, ReviewEntry>): void => {
+  const supersede = async (review: string, reviews: ReadonlyMap<string, ReviewEntry>): Promise<void> => {
     for (const known of reviews.values()) {
       if (known.status === "pending" && known.review !== review && isFinite(reviewNumber(known.review)) && isFinite(reviewNumber(review)) && reviewNumber(known.review) < reviewNumber(review)) {
-        closeSuperseded(known);
+        await closeSuperseded(known);
       }
     }
     const same = openDialogs.get(review);
@@ -163,11 +167,11 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
   };
 
   /** §5.5 "Latest only": a `plan-review` Event with status `superseded` closes the reason and the dialog of a pending entry and records it. Nothing is sent. */
-  const closeSuperseded = (entry: ReviewEntry): void => {
+  const closeSuperseded = async (entry: ReviewEntry): Promise<void> => {
     if (entry.status !== "pending") return;
     const done: ReviewEntry = { ...entry, status: "superseded" };
     abortDialog(entry.review);
-    void port.write({ kind: ENTRY_TYPE, data: entryData(done), model: [] }).catch(() => {});
+    await port.write({ kind: ENTRY_TYPE, data: entryData(done), model: [] });
   };
 
   return {
@@ -177,22 +181,12 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
       const pending = reviews.get(review);
       // The follower cursor may already be past a decision made while this host was down.
       // Reconcile the persisted pending record before recreating a blocking dialog.
-      if (via === "start" && pending?.status === "pending") {
-        const shown = (await port.cpd(["plan", "show", "--plan", port.plan])).review;
-        if (isObject(shown) && shown.id === review && (shown.status === "approved" || shown.status === "rejected")) {
-          await settle(pending, shown.status === "approved", typeof shown.feedback === "string" ? shown.feedback : undefined, shown.current !== false, true);
-          return;
-        }
-        if (isObject(shown) && typeof shown.id === "string" && (
-          (shown.id === review && shown.status === "superseded") || reviewNumber(shown.id) > reviewNumber(review)
-        )) {
-          closeSuperseded(pending);
-          return;
-        }
-      }
+      if (via === "start" && (pending?.status !== "pending" || await reconcile(pending, true) !== "pending")) return;
+      // A replayed request must not overwrite a review already settled in this conversation.
+      if (via === "event" && pending !== undefined && pending.status !== "pending") return;
       const content = summary ?? (await port.readText(SUMMARY_FILE(review)));
       if (content.trim() === "") throw new Error(`plan review ${review} has an empty summary`);
-      supersede(review, reviews);
+      await supersede(review, reviews);
       // A review that is already pending is reopened (its earlier select was cancelled/Esc'd, or the host restarted):
       // the entry stays pending and the User is told it still waits (review-chat.ts `stillWaiting`).
       const reuse = via === "start" && pending?.status === "pending";
@@ -210,11 +204,7 @@ export function createPlanReview(port: PlanReviewPort): PlanReview {
       if (entry.status !== "pending" || deciding.has(entry.review)) return;
       deciding.add(entry.review);
       try {
-        const verdict = ev.data.status === "approved";
-        const shown = (await port.cpd(["plan", "show", "--plan", port.plan])).review;
-        const current = isObject(shown) && shown.id === entry.review ? shown.current !== false : false;
-        const feedback = typeof ev.data.feedback === "string" ? ev.data.feedback : isObject(shown) && shown.id === entry.review && typeof shown.feedback === "string" ? shown.feedback : undefined;
-        await settle(entry, verdict, feedback, current, true);
+        await reconcile(entry, true, ev.data.status);
       } finally {
         deciding.delete(entry.review);
       }
