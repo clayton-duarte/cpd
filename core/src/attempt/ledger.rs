@@ -675,6 +675,13 @@ pub fn end_opened(
             };
             ("cancelled", None, NewEvent::job_cancelled(text, &reason))
         }
+        End::Interrupted if terminal_workflow(tx, attempt)? => {
+            let reason = "workflow ended";
+            let text = format!(
+                "Job {job} cancelled: {reason}; interrupted Attempt {id} will not retry. Next: cpd plan show --plan {plan}"
+            );
+            ("cancelled", None, NewEvent::job_cancelled(text, reason))
+        }
         End::Interrupted => {
             // The Job has no `cancel_requested_at` (the caller decided that): the stop is incident mode's, and the Job
             // returns to `queued` at the same Tier with an `attempt-retry` Event naming incident mode (contract §3.7).
@@ -696,7 +703,8 @@ pub fn end_opened(
                 End::GateFailed { triage, .. } => triage.as_ref(),
                 _ => None,
             };
-            let next = if triage.is_some_and(Triage::skips_retry) {
+            let next = if terminal_workflow(tx, attempt)? || triage.is_some_and(Triage::skips_retry)
+            {
                 None
             } else {
                 next_tier(tx, attempt, *cause, ladder)?
@@ -802,8 +810,9 @@ pub fn end_opened(
         crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;
     }
     // The transaction that makes the Job `cancelled` also fails or cancels its dependents (contract §3.2 "Cancel", hs-d647).
-    if matches!(end, End::Cancelled) {
-        let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.unwrap_or_default();
+    if status == "cancelled" {
+        let reason = cancel_request(tx, &attempt.plan, &attempt.job)?
+            .unwrap_or_else(|| "workflow ended".to_owned());
         crate::job::cancel::fail_dependents(tx, &attempt.plan, &attempt.job, &reason)?;
     }
     // A Job that reached a final state may be the last one holding its Plan in `deploy`.
@@ -1002,6 +1011,14 @@ pub fn crashed_detail(
     }
     detail.push_str(&format!(" Driver log: {}", driver_log.display()));
     detail
+}
+
+/// Read inside the end transaction so terminalization and retry cannot race.
+fn terminal_workflow(tx: &WriteTxn<'_>, attempt: &Attempt) -> Result<bool, CpdError> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status IN ('merged', 'cancelled'))",
+        params![attempt.plan.as_str(), attempt.workflow_str()], |r| r.get(0),
+    )?)
 }
 
 #[cfg(test)]

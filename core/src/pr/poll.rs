@@ -1533,7 +1533,7 @@ pub(super) fn merge(
     if moved == 0 {
         return Err(cas_lost(id, key));
     }
-    super::cancel::cancel_jobs_with(tx, id, key, &["draft"], "pr merged", "was merged")?;
+    settle_merged_jobs(tx, id, key)?;
     crate::swr::source::slack::react_merge_in(tx, id.as_str(), key.as_str())?;
     crate::swr::source::jira::enqueue_for_workflow(tx, id.as_str(), key.as_str(), "done")?;
     let text = format!("Workflow {key} (#{}) of Plan {id} is merged.", pull.number);
@@ -1928,4 +1928,34 @@ mod metadata_tests {
             })
             .unwrap();
     }
+}
+
+/// Cancel unstarted jobs and settle their dependents in the merge transaction.
+pub(crate) fn settle_merged_jobs(
+    tx: &crate::store::WriteTxn<'_>,
+    plan: &crate::ids::PlanId,
+    workflow: &crate::ids::WorkflowKey,
+) -> Result<(), crate::error::CpdError> {
+    let keys: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1 AND workflow = ?2 AND status IN ('draft', 'queued') ORDER BY seq")?;
+        let rows = stmt.query_map([plan.as_str(), workflow.as_str()], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    super::cancel::cancel_jobs_with(
+        tx,
+        plan,
+        workflow,
+        &["draft", "queued"],
+        "pr merged",
+        "was merged",
+    )?;
+    for key in keys {
+        crate::job::cancel::fail_dependents(
+            tx,
+            plan,
+            &crate::ids::JobKey::parse(&key)?,
+            "pr merged",
+        )?;
+    }
+    Ok(())
 }

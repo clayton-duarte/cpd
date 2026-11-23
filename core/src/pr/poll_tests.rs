@@ -1263,3 +1263,31 @@ text = \"\"
 [instructions]
 text = \"\"
 ";
+
+#[test]
+fn a_merged_workflow_poll_does_not_requeue_its_failed_open_or_update_jobs() {
+    let rig = open_rig(&["api"]);
+    rig.sql("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, failed_cause) VALUES ('pay','api','failed-update','J','S2','g','c','[\"a\"]','[\"b\"]','[]','update','failed',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','crashed'); INSERT INTO attempts (plan,id,job,number,tier,origin,status,outcome,cause,branch,worktree,driver_pid,started_at,ended_at) VALUES ('pay','failed-update-a1','failed-update',1,'S2','ladder','ended','failed','crashed','cpd/pay/test','/w',1,'t','t'); INSERT INTO events (txn,at,kind,context,plan,job,text,data) VALUES (cpd_txn(),'t','job-failed','ctx','pay','failed-update','x','{}');");
+    rig.sql("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at, merged_sha) VALUES ('pay','api','fix','J','S2','g','c','[\"a\"]','[\"b\"]','[]','work','merged',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',cpd_txn(),'t','abc');");
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(Gh { merged: vec![801] }));
+    run_poll(&rig);
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    let plan = PlanId::parse("pay").unwrap();
+    store
+        .write("test", |tx| {
+            crate::job::fix_retry::retry_after_fix(
+                tx,
+                &plan,
+                &crate::ids::JobKey::parse("fix").unwrap(),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let state: (String, String, String, i64) = store.read(|c| Ok(c.query_row("SELECT (SELECT status FROM workflows WHERE key='api'), (SELECT status FROM jobs WHERE key='failed-update'), (SELECT outcome FROM attempts WHERE id='failed-update-a1'), (SELECT count(*) FROM events WHERE kind='job-retried')", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?)).unwrap();
+    assert_eq!(
+        state,
+        ("merged".into(), "failed".into(), "failed".into(), 0)
+    );
+}

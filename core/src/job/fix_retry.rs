@@ -16,7 +16,9 @@ pub(crate) fn retry_after_fix(
     let sql = format!(
         "SELECT j.key, (SELECT a.tier FROM attempts a WHERE a.plan = j.plan AND a.job = j.key ORDER BY a.number DESC LIMIT 1)
            FROM jobs j JOIN jobs m ON m.plan = j.plan AND m.workflow = j.workflow
+           JOIN workflows w ON w.plan = j.plan AND w.key = j.workflow
           WHERE m.plan = ?1 AND m.key = ?2 AND m.kind NOT IN ('open', 'update')
+            AND w.status NOT IN ('merged', 'cancelled')
             AND j.kind IN ('open', 'update') AND j.status = 'failed'
             AND {} AND NOT {}
           ORDER BY j.created_txn",
