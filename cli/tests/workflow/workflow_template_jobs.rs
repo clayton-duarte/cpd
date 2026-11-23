@@ -120,6 +120,77 @@ fn config_after_lock_without_jobs_is_refused() {
 }
 
 #[test]
+fn free_workflow_registers_one_work_job_and_still_requires_approval() {
+    let fx = crud("plan");
+    let out = fx.add_k("free", &[]).ok();
+    assert_eq!(out["workflow"]["shape"], "free");
+    assert_eq!(out["workflow"]["jobs"], json!(["k-work"]));
+    assert_eq!(
+        fx.rows_of_k(),
+        json!([[
+            "k-work",
+            "work",
+            "Work: Add retries",
+            "draft",
+            0,
+            false,
+            false,
+            ""
+        ]])
+    );
+    fx.install_catalog();
+    let mut scoped = spec();
+    scoped["touches"] = json!(["README.md"]);
+    let spec = fx.jobs_file("work.json", &scoped);
+    fx.cpd(&[
+        "job", "edit", "k-work", "--tier", "S2", "--spec", &spec, "--plan", "pay-1",
+    ])
+    .ok();
+    fx.outline_for_review("pay-1");
+    let review = fx
+        .cpd(&[
+            "plan",
+            "review",
+            "--title",
+            "Review work",
+            "--plan",
+            "pay-1",
+        ])
+        .ok();
+    assert_eq!(review["review"]["status"], "pending");
+    refused(
+        &fx.cpd(&["plan", "lock", "--plan", "pay-1"]),
+        "plan_not_approved",
+        3,
+    );
+}
+
+#[test]
+fn free_workflow_after_lock_requires_one_scoped_work_job() {
+    assert_parked("free", &["k-work"]);
+    let fx = crud("dispatch");
+    let file = fx.jobs_file(
+        "jobs.json",
+        &json!({"work": {"tier": "S2", "spec": spec()}}),
+    );
+    let out = fx.add_k("free", &["--no-needs", "--jobs", &file]).ok();
+    assert_eq!(out["workflow"]["jobs"], json!(["k-work"]));
+    assert_eq!(
+        fx.rows_of_k(),
+        json!([[
+            "k-work",
+            "work",
+            "Work: Add retries",
+            "queued",
+            1,
+            true,
+            true,
+            ""
+        ]])
+    );
+}
+
+#[test]
 fn refusal_writes_nothing() {
     for phase in ["dispatch", "deploy", "done"] {
         let fx = crud(phase);

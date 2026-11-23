@@ -41,8 +41,7 @@ pub struct WorkflowRow {
     pub title: Option<String>,
     /// The Workflow's own Jira ticket (`prs.jira`): null until set.
     pub jira: Option<String>,
-    /// The Workflow's stored shape (`prs.shape`, hs-d497): `tdd`, `docs`, `config`, or `free` for a Workflow that existed before
-    /// migration `job-kinds`.
+    /// The Workflow's stored shape (`workflows.shape`, hs-d497), also `free` for Workflows from before migration `job-kinds`.
     pub shape: String,
     /// The head branch of the pull request cpd adopted (`prs.head_ref`, pro-n8); null for a cpd Workflow.
     pub head_ref: Option<String>,

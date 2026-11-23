@@ -501,7 +501,7 @@ fn check_kind_not_reserved(kind: &str) -> Result<(), CpdError> {
 }
 
 /// The kinds a Workflow of `shape` may have while it is `waiting` or `dispatch` (§2.2 "Job kinds"): `tdd` the steps of the
-/// template, `docs` and `config` their one, `free` (a Workflow before migration `job-kinds`) every kind the Lead adds.
+/// template, `docs` and `config` their one, `free` every kind the Lead adds.
 fn kinds_allowed(shape: &str) -> &'static [&'static str] {
     match shape {
         "tdd" => &["docs", "test", "impl", "verify"],

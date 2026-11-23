@@ -33,13 +33,13 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "workflow add";
 
-/// The shapes `workflow add` writes (contract §2.2 "Job kinds"); `free` is only what the migration gave an older Workflow.
-pub(crate) const SHAPES: [&str; 5] = ["tdd", "docs", "config", "coverage", "refactor"];
+/// The shapes `workflow add` writes (contract §2.2 "Job kinds").
+pub(crate) const SHAPES: [&str; 6] = ["tdd", "docs", "config", "coverage", "refactor", "free"];
 
 /// One stub draft of a shape's template.
 struct Stub {
     key: String,
-    /// The template suffix (`docs`, `tests`, `impl`, `config`; `open` for the opener).
+    /// The template suffix, also the key in `--jobs`.
     suffix: &'static str,
     kind: &'static str,
     title: String,
@@ -48,7 +48,7 @@ struct Stub {
 }
 
 /// The stub drafts a Workflow of `shape` starts with (commands.md §9.4): `tdd` docs, red tests (needs docs) and
-/// implementation (needs the tests); `docs` its docs; `config` one `work` Job. The opener is no stub: `workflow start` creates the
+/// implementation (needs the tests); `docs` its docs; `config` and `free` one `work` Job. The opener is no stub: `workflow start` creates the
 /// `open` Job queued, so a waiting Workflow has none.
 fn template(shape: &str, local_docs: bool, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
     let stub = |suffix: &'static str, kind: &'static str, prefix: &str, needs: Option<&str>| Stub {
@@ -71,6 +71,7 @@ fn template(shape: &str, local_docs: bool, workflow: &WorkflowKey, title: &str) 
         "docs" => vec![stub("docs", "docs", "Docs", None)],
         "coverage" => vec![stub("cov", "work", "Coverage", None)],
         "refactor" => vec![stub("impl", "impl", "Refactor", None)],
+        "free" => vec![stub("work", "work", "Work", None)],
         _ => vec![stub("config", "work", "Config", None)],
     }
 }
@@ -1234,7 +1235,7 @@ fn tests_unconfigured(repo: &str, file: &Path) -> CpdError {
     CpdError::new(
         ErrorCode::TestsUnconfigured,
         format!(
-            "{repo} has no [test-commands] in its policy file {}, and a tdd Workflow needs it to check its test and impl Jobs. Add --shape docs or --shape config for a Workflow with no behaviour, or ask the Lead to add the table (contract §7.7).",
+            "{repo} has no [test-commands] in its policy file {}, and a tdd Workflow needs it to check its test and impl Jobs. Use --shape free for one cohesive work Job, --shape docs or --shape config for a Workflow with no behaviour, or ask the Lead to add the table (contract §7.7).",
             file.display()
         ),
     )

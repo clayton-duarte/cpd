@@ -73,7 +73,7 @@ pub struct AddArgs {
     /// No needs, even on a reopened Plan (default there: every merged Workflow of the Plan)
     #[arg(long = "no-needs")]
     no_needs: bool,
-    /// The template of stub drafts the Workflow starts with, and the kinds its Jobs may have: tdd (docs, red tests, implementation), docs or config (§9.4)
+    /// The Workflow's starting Job template: use free for one cohesive work Job or tdd for separate red-test and implementation Jobs (§9.4)
     #[arg(long, value_name = "shape", value_parser = clap::builder::PossibleValuesParser::new(add::SHAPES), default_value = "tdd")]
     shape: String,
     /// After the lock: the template's Jobs as decided work, a JSON object keyed by the template suffix, each `{"tier", "spec"}` (§9.4)
