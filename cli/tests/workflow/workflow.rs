@@ -6188,4 +6188,73 @@ fn a_preopen_push_lets_a_blocked_test_job_submit() {
 }
 
 #[test]
-fn an_owned_stale_archived_pr_closed_unmerged_wakes_lead_once() {}
+fn an_owned_stale_archived_pr_closed_unmerged_wakes_lead_once() {
+    let kit = Kit::with_ports_empty();
+    kit.env.write_config("version = 1\nmachine = \"t\"\n");
+    let repo = kit.keyed_repo("pay");
+    let lead = repo.clone();
+    let home = CpdHome::resolve(Some(kit.env.cpd_home().into()), None).unwrap();
+    let gh = Arc::new(Gh {
+        search: Slot::new(Reply::ok(EMPTY_SEARCH)),
+        lookup: Slot::new(Reply::ok("{\"data\":{}}")),
+        list: Seq::new(Reply::ok("[]")),
+        create: Seq::new(Reply::ok(URL)),
+        update: Seq::new(Reply::ok("")),
+        root: kit.env.root().to_path_buf(),
+        fail: Mutex::new(None),
+        comments: Mutex::new(None),
+    });
+    let _ = (*kit.fakes.runner).clone().route("gh", gh.clone());
+    let fx = Poll {
+        fx: kit,
+        home,
+        repo: repo.clone(),
+        origin: repo.clone(),
+        lead: lead.clone(),
+        merged_sha: "a".repeat(40),
+        lock_pushed: "a".repeat(40),
+        branch: "cpd/pay".into(),
+        gh,
+    };
+    seed_pay(
+        fx.store(),
+        "deploy",
+        "merged",
+        "cpd/pay",
+        &repo,
+        &lead,
+        &fx.merged_sha,
+    );
+    fx.env.sql("UPDATE sessions SET runner = 'durable' WHERE id = 'lead1'; UPDATE pull_requests SET archived = 1 WHERE number = 812; INSERT INTO swr_repos (repo, is_archived, fetched_at) VALUES ('acme/pay', 0, '2099-01-01T00:00:00Z');");
+    fx.search(&[]);
+    fx.lookup(&[Some(pay("CLOSED", None, None))]);
+    fx.poll();
+    assert_eq!(
+        fx.pr_data().3,
+        "closed",
+        "stale archive must not hide the closed owned PR"
+    );
+    fx.scoped(|| fx.watch_ticks(2)).unwrap();
+    fx.scoped(|| fx.watch_ticks(2)).unwrap();
+    let messages = fx.events("session-message");
+    let wakes: Vec<_> = messages
+        .iter()
+        .filter(|(_, data)| {
+            data["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("closed without a merge"))
+                && data["wake"] == true
+                && data["from"].is_null()
+        })
+        .collect();
+    assert_eq!(
+        wakes.len(),
+        1,
+        "the owning Lead is woken once: {messages:?}"
+    );
+    assert_eq!(fx.workflow_status("repo"), "open");
+    assert_eq!(fx.plan_row().0, "deploy");
+    assert!(fx.events("workflow-cancelled").is_empty());
+    assert!(fx.events("pr-merged").is_empty());
+    assert_eq!(fx.gh_calls().iter().filter(|c| is_lookup(c)).count(), 1);
+}

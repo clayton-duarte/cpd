@@ -1370,5 +1370,82 @@ fn an_invalid_repository_policy_does_not_fail_the_shared_github_endpoint() {
     assert!(endpoint.paused_until.is_none());
 }
 
+fn stale_archive_fixture() -> Rig {
+    let mut rig = Rig::new();
+    rig.seed(&pr(7), false);
+    rig.sql("UPDATE pull_requests SET archived = 1 WHERE number = 7");
+    rig.sql("INSERT INTO swr_repos (repo, is_archived, fetched_at) VALUES ('acme/pay', 0, '2099-01-01T00:00:00Z')");
+    rig.store.write("fixture", |tx| {
+        tx.execute_batch("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm');
+        INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+        INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', 't', 't');
+        INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request) VALUES ('pay', 'repo', '/r', 'main', 'open', 'cpd/pay/repo', '/w', cpd_txn(), 't', 't', 7, 'u', 't', (SELECT id FROM pull_requests WHERE number = 7));")?;
+        Ok(())
+    }).unwrap();
+    let mut closed = pr(7);
+    closed.state = "CLOSED";
+    rig.state().world.insert(("acme/pay".into(), 7), closed);
+    rig
+}
+
 #[test]
-fn gh_poll_reconciles_owned_pr_with_stale_archive_flag() {}
+fn gh_poll_reconciles_owned_pr_with_stale_archive_flag() {
+    for change in [
+        "UPDATE swr_repos SET is_archived = 1",
+        "UPDATE swr_repos SET inactive_at = 't'",
+        "DELETE FROM swr_repos",
+        "UPDATE swr_repos SET is_archived = NULL",
+        "UPDATE pull_requests SET state = 'closed' WHERE number = 7",
+        "UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE number = 7",
+    ] {
+        let mut boundary = stale_archive_fixture();
+        boundary.sql(change);
+        boundary.pass(0).unwrap();
+        assert!(
+            !mentions(&boundary.graphql()[0], 7),
+            "excluded boundary: {change}"
+        );
+    }
+    // A stale bit alone cannot make an unrelated, unowned row eligible.
+    let mut unowned = stale_archive_fixture();
+    unowned.seed(&pr(8), true);
+    unowned.sql("UPDATE pull_requests SET archived = 1 WHERE number = 8");
+    unowned.pass(0).unwrap();
+    assert!(!mentions(&unowned.graphql()[0], 8));
+
+    let mut capped = stale_archive_fixture();
+    for n in 10..25 {
+        capped.seed(&pr(n), true);
+        capped.state().world.insert(("acme/pay".into(), n), pr(n));
+    }
+    capped.pass(0).unwrap();
+    assert!(
+        pr_aliases(&capped.graphql()[0]).len() <= 10,
+        "the shared direct-read cap still applies"
+    );
+
+    let mut retry = stale_archive_fixture();
+    retry.state().fail = Some(Reply::exit(1, "", "HTTP 502: Bad Gateway"));
+    assert!(retry.pass(0).is_err());
+    assert_eq!(retry.pr_state(7).as_deref(), Some("open"));
+    retry.state().fail = None;
+    retry.pass(600).unwrap();
+    assert_eq!(
+        retry.pr_state(7).as_deref(),
+        Some("closed"),
+        "failed read is retried"
+    );
+
+    let mut rig = stale_archive_fixture();
+    rig.pass(0).unwrap();
+    assert!(
+        mentions(&rig.graphql()[0], 7),
+        "owned stale archive must be directly read"
+    );
+    assert_eq!(rig.pr_state(7).as_deref(), Some("closed"));
+    rig.pass(600).unwrap();
+    assert!(
+        !mentions(&rig.graphql()[1], 7),
+        "terminal PR must not be reread"
+    );
+}
