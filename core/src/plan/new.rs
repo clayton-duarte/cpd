@@ -698,6 +698,55 @@ mod tests {
     use crate::plan::Phase;
 
     #[test]
+    fn shaping_insert_rolls_back_lead_when_plan_insert_fails() {
+        use crate::home::CpdHome;
+        use crate::store::Store;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        store.write("fixture", |tx| {
+            tx.execute_batch("INSERT INTO contexts (id,title,owner,created_at,created_on) VALUES ('ctx','Context','acme','t','m1')")?;
+            Ok(())
+        }).unwrap();
+        let id = PlanId::parse("fresh").unwrap();
+        let context = ContextId::parse("ctx").unwrap();
+        let session = SessionId::new_v4();
+        let creation = Creation {
+            id: &id,
+            context: &context,
+            title: "Fresh",
+            jira: None,
+            name: "ctx:fresh",
+            cwd: "/",
+            tier: "S4",
+            runner: WorkerRunner::Durable,
+            by_user: false,
+            session: &session,
+        };
+        let error = store.write("plan new", |tx| {
+            tx.execute_batch("CREATE TEMP TRIGGER fail_plan BEFORE INSERT ON main.plans BEGIN SELECT RAISE(ABORT, 'injected plan insert failure'); END;")?;
+            insert_shaping(tx, &creation)
+        }).unwrap_err();
+        assert!(
+            error.message().contains("injected plan insert failure"),
+            "{error:?}"
+        );
+        store
+            .read(|conn| {
+                for table in ["sessions", "plans", "events"] {
+                    let count: i64 =
+                        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                            row.get(0)
+                        })?;
+                    assert_eq!(count, 0, "{table}");
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn the_header_names_plan_and_context() {
         let plan = PlanRow {
             id: PlanId::parse("pay-4521").unwrap(),
