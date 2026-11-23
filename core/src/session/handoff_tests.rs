@@ -44,9 +44,10 @@ impl Fixture {
         let mut store = Store::open(&home, 5000).unwrap();
         store.write("fixture", |tx| {
             tx.execute_batch("INSERT INTO contexts (id,title,created_at,created_on) VALUES ('ctx','Ctx','t','m');
-                INSERT INTO sessions (id,role,context,name,cwd,tier,state,state_at,created_at)
-                VALUES ('ancestor','lead','ctx','Ancestor','/work','O3','stopped','t','t'),
-                       ('child','lead','ctx','Child','/work','O3','stopped','t','t');")?;
+                INSERT INTO sessions (id,role,context,plan,name,cwd,tier,state,state_at,created_at)
+                VALUES ('ancestor','lead','ctx','pp','Ancestor','/work','O3','stopped','t','t'),
+                       ('child','lead','ctx','qq','Child','/work','O3','stopped','t','t');
+                INSERT INTO plans (id,context,title,phase,lead_session,created_at) VALUES ('pp','ctx','P','plan','ancestor','t'), ('qq','ctx','Q','plan','child','t');")?;
             Ok(())
         }).unwrap();
         let source = dir.path().join("native.jsonl");
