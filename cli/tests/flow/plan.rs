@@ -477,9 +477,12 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
     );
 }
 
-/// A Store fault after the Lead insert must roll back the paired registration.
+/// A persistent trigger tampers with the schema, so reopening the Store refuses the write before
+/// the injected Plan insertion fault. This does not exercise rollback after the Lead insert:
+/// core's `plan::new::tests::shaping_insert_rolls_back_lead_when_plan_insert_fails` exercises
+/// that boundary with a TEMP trigger on the same connection as the transaction.
 #[test]
-fn new_rolls_back_the_pair_when_plan_insertion_fails() {
+fn new_refuses_a_tampered_schema_before_plan_insertion() {
     let fx = Fx::with_ports_empty();
     inproc::setup(&fx);
     fx.env.sql("CREATE TRIGGER fail_plan BEFORE INSERT ON plans BEGIN SELECT RAISE(ABORT, 'injected plan insert failure'); END;");
@@ -497,7 +500,7 @@ fn new_rolls_back_the_pair_when_plan_insertion_fails() {
         "--title",
         "Plan second",
     ]);
-    assert_ne!(run.exit, 0, "{run:?}");
+    refused(&run, "store_tampered", 1);
     assert_eq!(
         fx.env
             .query::<i64>("SELECT count(*) FROM plans WHERE id = 'second'"),
