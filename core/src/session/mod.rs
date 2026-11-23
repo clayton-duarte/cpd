@@ -29,6 +29,9 @@ mod durable_moves_tests;
 mod durable_send_tests;
 mod first_message;
 mod fork_wait;
+mod handoff;
+#[cfg(test)]
+mod handoff_tests;
 mod history;
 mod moves;
 #[cfg(test)]
