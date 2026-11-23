@@ -2937,8 +2937,10 @@ Idempotent: yes. `add` of a declaration the Workflow already has returns `"alrea
 ### 9.6 `workflow cancel`
 
 ```
-cpd workflow cancel <key> [--superseded-by <plan>/<key>] [--plan <id>]
+cpd workflow cancel <key> [--superseded-by <plan>/<key> | --abandon <reason>] [--plan <id>]
 ```
+
+`--abandon <reason>` explicitly abandons obsolete work: only a locked `dispatch` Workflow with at least one merged Job, no pull request, no running Job or active Attempt, and no dependent or stacked Workflow is eligible. Supply a nonblank reason. Remaining draft, queued and failed Jobs are cancelled atomically; merged checkpoints and evidence are retained. This is cancellation, not success or a claim that another Workflow carried the work. Repeating the command is idempotent. It does not remove branches, worktrees or other evidence.
 
 `--superseded-by <ref>`: the Workflow is `dispatch` and its work was carried by another Workflow, `<ref>` (`<plan>/<key>`, or a bare `<key>` of the Plan); its `merged` Jobs no longer hold it (hs-d301, contract §3.8 "Ending a `dispatch` Workflow whose work was superseded").
 
@@ -2951,7 +2953,7 @@ Three uses (contract §3.8) and a fourth with `--superseded-by`. Before the lock
 | `--superseded-by` names a Workflow that is not in any Plan (`details.plan`, `details.workflow`) | `workflow_not_found` | 4 |
 | `--superseded-by` names a Workflow that is not of a Plan of this Context | `workflow_not_found` | 4 |
 | `--superseded-by` names the Workflow itself | `usage` | 2 |
-| **`waiting`, `dispatch`**: no Job of the Workflow is `running` and none is `merged` unless `--superseded-by` is given (with it `merged` Jobs are work another Workflow carried and do not hold it); a `draft`, `queued` or `failed` Job, of any kind, never holds it: this command cancels it (below, hs-d573). And no Workflow that is not `cancelled`, of any Plan, needs it or is stacked on it (contract §3.8 "Stacked Workflows"); `details.jobs` lists the holding Jobs and `details.workflows` the Workflows, as references (`<plan>/<key>` for another Plan's) | `workflow_in_use` | 3 |
+| **`waiting`, `dispatch`**: no Job of the Workflow is `running` and none is `merged` unless `--superseded-by` or eligible `--abandon` is given (with it `merged` Jobs are work another Workflow carried and do not hold it); a `draft`, `queued` or `failed` Job, of any kind, never holds it: this command cancels it (below, hs-d573). And no Workflow that is not `cancelled`, of any Plan, needs it or is stacked on it (contract §3.8 "Stacked Workflows"); `details.jobs` lists the holding Jobs and `details.workflows` the Workflows, as references (`<plan>/<key>` for another Plan's) | `workflow_in_use` | 3 |
 | **`open`**: the Workflow's `pull_requests` row is `state = closed`, as the last poll stored it (no `gh` call: run `pr poll` first); `details` is `{workflow, number, url, state}` | `pr_not_closed` | 3 |
 | **`open`**: no Workflow of the Plan that is not `cancelled` needs it or is stacked on it (its Jobs are not checked: a `draft`, `queued` or `failed` Job never holds it and it is cancelled by this command, below; hs-d573); `details.workflows` lists the Workflows as references | `workflow_in_use` | 3 |
 | **`open`**: the Workflow is still `open` at the transaction | `cas_lost` | 3 |

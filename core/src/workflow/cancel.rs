@@ -52,6 +52,13 @@ pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
 fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
+    let abandon = args.abandon.as_deref();
+    if abandon.is_some_and(|r| r.trim().is_empty()) {
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "An abandonment reason must not be empty.",
+        ));
+    }
     // The superseding Workflow as a reference of the Plan (§2.2): the bare key in the Plan itself, else `<plan>/<key>`.
     let superseded = args
         .superseded_by
@@ -60,9 +67,9 @@ fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
     let superseded = superseded.as_deref();
     let mut moved_to = None;
     let mut released = None;
-    let already = match env.store.read(|conn| decide(conn, &plan, &key, superseded))? {
+    let already = match env.store.read(|conn| decide(conn, &plan, &key, superseded, abandon))? {
         Decision::Already => true,
-        Decision::Cancel { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, superseded)? {
+        Decision::Cancel { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, superseded, abandon)? {
             Decision::Already => Ok(true),
             Decision::Cancel { from, released: gave, superseded_by } => {
                 // `workflows` ties the Lead worktree and the start time to the status: a `cancelled` Workflow has none (the worktree
@@ -77,8 +84,13 @@ fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
                         .with("plan", plan.as_str())
                         .with("workflow", key.as_str()));
                 }
-                cancel_jobs(tx, &plan, &key)?;
+                if let Some(reason) = abandon {
+                    cancel_jobs_with(tx, &plan, &key, &["draft", "queued", "failed"], &format!("workflow abandoned: {reason}"), "was explicitly abandoned")?;
+                } else {
+                    cancel_jobs(tx, &plan, &key)?;
+                }
                 let text = match (&gave, &superseded_by) {
+                    (None, None) if abandon.is_some() => format!("Workflow {key} of Plan {plan} was explicitly abandoned: {}. Merged checkpoints are retained; this is neither success nor supersession. cpd removes nothing.", abandon.unwrap_or_default()),
                     (None, Some(by)) => format!(
                         "Workflow {key} of Plan {plan} was cancelled: its work was superseded by Workflow {by}. cpd removes nothing; remove its Lead worktree \
                          and Lead Branch by hand. Next: cpd plan show --plan {plan}"
@@ -95,7 +107,7 @@ fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
                     None => NewEvent::workflow_cancelled(text, &key),
                 };
                 append(tx, event.plan(plan.clone()))?;
-                moved_to = if gave.is_some() { finish(tx, &plan)? } else { advance(tx, &plan, &key)? };
+                moved_to = if abandon.is_some() { None } else if gave.is_some() { finish(tx, &plan)? } else { advance(tx, &plan, &key)? };
                 crate::session::working_pr::name(tx, &plan, &key)?;
                 released = gave;
                 Ok(false)
@@ -150,7 +162,7 @@ pub(crate) fn cancel_jobs_with(
             .collect::<rusqlite::Result<_>>()?
     };
     for job in own {
-        tx.execute(
+        let changed = tx.execute(
             &format!(
                 "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = ?3,
                         cancel_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
@@ -158,6 +170,14 @@ pub(crate) fn cancel_jobs_with(
             ),
             [plan.as_str(), job.as_str(), reason],
         )?;
+        if changed != 1 {
+            return Err(CpdError::new(
+                ErrorCode::CasLost,
+                format!("Job {job} changed while Workflow {key} was cancelled: rerun the command."),
+            )
+            .with("plan", plan.as_str())
+            .with("workflow", key.as_str()));
+        }
         let text = format!(
             "Job {job} of Plan {plan} was cancelled: {reason}: Workflow {key} {what}. Next: cpd plan show --plan {plan}"
         );
@@ -260,6 +280,7 @@ fn decide(
     plan: &PlanId,
     key: &WorkflowKey,
     superseded: Option<&str>,
+    abandon: Option<&str>,
 ) -> Result<Decision, CpdError> {
     let workflows = load_workflows(conn, plan)?;
     let workflow = find_workflow(&workflows, plan, key)?;
@@ -287,10 +308,12 @@ fn decide(
     };
     let from = match (workflow.status.as_str(), locked) {
         ("cancelled", _) => return Ok(Decision::Already),
-        (status, _) if superseded.is_some() && !(status == "dispatch" && locked) => {
+        (status, _)
+            if (superseded.is_some() || abandon.is_some()) && !(status == "dispatch" && locked) =>
+        {
             return Err(CpdError::new(
                 ErrorCode::IllegalTransition,
-                format!("Workflow {key} is {status}: --superseded-by cancels only a dispatch Workflow, after the lock."),
+                format!("Workflow {key} is {status}: supersession or abandonment requires a dispatch Workflow after the lock."),
             )
             .with("plan", plan.as_str())
             .with("workflow", key.as_str())
@@ -320,8 +343,9 @@ fn decide(
     };
     // Only a `running` Job holds the Workflow, and a `merged` one unless superseded (its work another Workflow carried): `draft`, `queued` and `failed` Jobs
     // go with the Workflow (`cancel_jobs`).
-    let holds =
-        |j: &jobs::Job| j.status == "running" || (j.status == "merged" && superseded.is_none());
+    let holds = |j: &jobs::Job| {
+        j.status == "running" || (j.status == "merged" && superseded.is_none() && abandon.is_none())
+    };
     let live_jobs: Vec<String> = jobs::load(conn, plan)?
         .into_iter()
         .filter(|j| j.workflow_str() == key.as_str() && holds(j))
@@ -329,6 +353,17 @@ fn decide(
         .collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(in_use(live_jobs));
+    }
+    if abandon.is_some() {
+        let (merged, active, pr): (i64, i64, i64) = conn.query_row(
+            "SELECT (SELECT count(*) FROM jobs WHERE plan = ?1 AND workflow = ?2 AND status = 'merged'),
+                    (SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job WHERE j.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended'),
+                    (SELECT count(*) FROM workflows WHERE plan = ?1 AND key = ?2 AND (pr_number IS NOT NULL OR pr_url IS NOT NULL OR pr_opened_at IS NOT NULL OR pull_request IS NOT NULL))",
+            [plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        if merged == 0 || active != 0 || pr != 0 {
+            return Err(CpdError::new(ErrorCode::WorkflowInUse, format!("Workflow {key} cannot be abandoned: it must have merged checkpoints, no pull request and no active Attempt."))
+                .with("plan", plan.as_str()).with("workflow", key.as_str()));
+        }
     }
     if let Some(by) = superseded {
         check_superseding(conn, plan, key, by)?;
@@ -504,7 +539,9 @@ mod tests {
             WorkflowKey::parse("api").unwrap(),
         );
         assert!(matches!(
-            store.read(|conn| decide(conn, &plan, &key, None)).unwrap(),
+            store
+                .read(|conn| decide(conn, &plan, &key, None, None))
+                .unwrap(),
             Decision::Cancel {
                 from: "dispatch",
                 ..
@@ -552,7 +589,7 @@ mod tests {
             })
             .unwrap();
         let held = store
-            .read(|conn| decide(conn, &plan, &key, None))
+            .read(|conn| decide(conn, &plan, &key, None, None))
             .map(|_| ())
             .unwrap_err();
         assert_eq!(held.code(), ErrorCode::WorkflowInUse);
