@@ -109,6 +109,40 @@ fn wakes_the_idle_lead_once() {
 }
 
 #[test]
+fn parked_draft_wake_does_not_open_an_inbox_item_after_the_lead_turn() {
+    let fx = fx();
+    draft(&fx, "d1");
+    fx.watch_ticks(1).unwrap();
+    assert_eq!(messages(&fx).len(), 1);
+    fx.cpd(&["session", "state", "working", "--session", "lead1"])
+        .ok();
+    fx.cpd(&["session", "state", "idle", "--session", "lead1"])
+        .ok();
+    fx.env.sql(
+        "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at, context, plan, session)
+         VALUES ('drafts-parked', 'magenta', 'drafts-parked:pay', 'pay: 1 parked draft', '2026-01-01T00:00:00.000Z', 'ctx', 'pay', 'lead1');",
+    );
+    fx.watch_ticks(1).unwrap();
+    assert_eq!(
+        messages(&fx).len(),
+        1,
+        "owner wake is retained and not repeated"
+    );
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM jobs WHERE key = 'd1' AND status = 'draft'"),
+        1
+    );
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE kind = 'drafts-parked' AND closed_at IS NOT NULL"), 1);
+    assert_eq!(
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM inbox_items WHERE kind = 'drafts-parked' AND closed_at IS NULL"
+        ),
+        0
+    );
+}
+
+#[test]
 fn lists_the_parked_keys_sorted() {
     let fx = fx();
     for key in ["zeta", "alpha", "mid"] {

@@ -1,5 +1,4 @@
-//! The authored pull request rule (contract §2.2 "The authored pull request rule", pro-d130, pro-d131): one `pr-ready`
-//! condition per open authored pull request, its urgency and label by the STATUS table.
+//! The authored pull request rule (contract §2.2 "The authored pull request rule", pro-d130, pro-d131).
 
 use std::time::Duration;
 
@@ -178,7 +177,7 @@ fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     }
 }
 
-/// The `pr-ready` conditions: one per open authored pull request, linking its owner (the newest Plan with a `prs` row
+/// The `pr-ready` conditions for open authored pull requests, linking their owner (the newest Plan with a `prs` row
 /// that points to it). A policy that does not resolve counts as post disabled.
 pub fn conditions(
     conn: &Connection,
@@ -367,6 +366,10 @@ pub fn conditions(
                 let db_path = conn.path().unwrap_or("");
                 pulls::clear_detection(db_path, &pull.repo, pull.number);
             }
+        }
+        // Passive check and wait states belong to the PR, not to the user's Inbox.
+        if matches!(status, Status::ChecksRunning | Status::Waiting) {
+            continue;
         }
         let (urgency, text) = self::row(status, overdue);
         let name = pull
