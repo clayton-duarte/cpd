@@ -22,7 +22,6 @@ mod watch_inbox_overdue;
 mod watch_models;
 mod watch_own_post;
 mod watch_parked;
-mod watch_parked_inbox;
 mod watch_permanent;
 mod watch_resources;
 mod watch_review_archive;

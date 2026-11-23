@@ -1865,7 +1865,7 @@ cpd job add <key> --title <text> --spec <file> [--draft [--waiting-on <lead|user
 1. A review-only draft may omit `--waiting-on`; supplied markers retain their existing named-wait behavior.
 2. After the lock, `cpd workflow add` requires `--jobs <file.json>` for every Workflow it adds that is not adopted (`--adopt`), a Workflow that waits for another Workflow included (§9.4). Without `--jobs` it is refused `draft_parked` (exit 3) and writes no row.
 3. In the described implementation, after the lock `draft_parked` (exit 3) refuses any draft, by `job add --draft` or `job edit`, whose Workflow waits for another Workflow or whose needs chain, through drafts, to a `queued`, `running` or `failed` Job (the row below).
-4. The documented `parked_drafts` implementation counts every uncovered non-open draft, incomplete template drafts before the lock included, so the turn-end `cpd reminder` (§15.8) and the `drafts-parked` Inbox item (§21) name it. This is not a counting rule for pro-d602's target meaning. Work that waits on a Job or a Workflow is documented as queued with `--needs`; work that needs codebase or external information depends on a `scout` or `research` Job; work that needs clarification blocks on `ask_user_question` or `cpd_plan_review`.
+4. The documented `parked_drafts` implementation counts every uncovered non-open draft, incomplete template drafts before the lock included, so the turn-end `cpd reminder` (§15.8) names it. This is not a counting rule for pro-d602's target meaning. Work that waits on a Job or a Workflow is documented as queued with `--needs`; work that needs codebase or external information depends on a `scout` or `research` Job; work that needs clarification blocks on `ask_user_question` or `cpd_plan_review`.
 Before adding a Job, resolve its model and effort under [contract §9](contract.md#9-model-selection).
 
 | Flag | Meaning |
@@ -3551,7 +3551,7 @@ How the pi adapter reports its agent state (§3.6, D4). `--session <id>` takes a
 | the transition is in §3.6's table | `illegal_transition` | 3 |
 | `blocked` with the label `φ: Worker question` or `φ: question to the Lead` (both are agent waits, `waiting` only: contract §3.6, pro-d427) | `usage` | 2 |
 
-Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. For a Session in Context `codereview` whose Plan is in phase `done`, the Event records `reply` false even with `--reply` (pro-d391, contract §3.6), so it opens no `replied` Item. No tmux.
+Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. For a Session in Context `codereview` whose Plan is in phase `done`, the Event records `reply` false even with `--reply` (pro-d391, contract §3.6). A reply flag does not open an Inbox item. No tmux.
 
 A pane whose tmux session is gone reads as stopped: `session show` and the engine liveness check report a Session whose tmux session is gone as `stopped`, never `working`.
 
@@ -5750,7 +5750,7 @@ This publication contract specifies the required concurrent behavior; it makes n
 
 ## 21. `inbox`
 
-Contract §2.2 "Inbox item", §3.7 `inbox`, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (`inbox`) from its cause, never by a command. The commands read the items and hide them, except `inbox approve` (§21.13), which approves a `deploy` item's run and closes the item. A PR state the owning Lead can address on its own (conflicting, failing checks, changes requested, behind main) is not an item during the grace period of contract §2.2 (pro-d518). Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `loop-guard`, `refusal-alert` (red, label `<who>: <N> refusals in <M> min`, one item per Session whose `guard` Events of the last `watch.refusal_alert_minutes` reach `watch.refusal_alert_threshold`, opened and closed by `inbox` from that count; Plan `agent-refusals`, contract §2.2, §3.7 `refusal-threshold`, and the same crossing wakes the Context's Manager as a message by `refusal-threshold`), `drafts-parked` (magenta, label `<plan>: <N> parked drafts`, links the Plan and its Lead, opened from engine `parked-drafts`'s wake, contract §2.2, §3.7 "Parked drafts"; hs-d731, hs-d733), `unread` and `engine-down`, which is not stored; `engine-error` is no longer opened, hs-d314 and nor is `job-stuck`, hs-d318: a stuck Job is a message to the Context's Manager, contract §3.7 "A stuck Job") and the PR poll's (`pr-ready` and `pr-failing`, `pr-changes`, which are no longer opened, hs-d470) `pr-closed` (red: a closed-unmerged PR; contract §2.2, §3.8), and the team review poll's (`review-requested`, §21.5; and the PR poll's deploy read's, `deploy`, one item per deploy run that waits for the User's approval, from `run/deploy-runs.json`, contract §2.2 "The deploy rule", §7.6 step 8: it links no Plan, Context, Job or Session and its `url` is the run's page;  contract §2.2 gives their conditions, urgency and labels and their `url` is the pull request's page).
+Contract §2.2 "Inbox item", §3.7 `inbox`, §4.4, §5.2. The Inbox is the single source of "needs you": the engine opens and closes items from their causes. The commands read the items and hide them, except `inbox approve` (§21.13), which approves a `deploy` item's run and closes the item. The contract lists each kind's condition, label and urgency. `engine-down` is not stored. Ordinary replies, parked-draft counts, bug age alone, and PRs whose status is `checks running` or generic `waiting` do not open items. Their underlying events and owner wakes are unaffected. Reconciliation closes legacy items whose conditions no longer hold.
 
 An item as printed:
 
@@ -7242,7 +7242,7 @@ Idempotent: `ok` yes; `error` no, each call counts one failure.
 
 ## 33. `protocol`
 
-The bug record (air-d104; contract §2.2 "Bug record"): the bug report protocol (pro-d204) as commands, not prose. One row per bug in the `bug_records` table. The commands append no Event and add no Event kind: the engine tick's breach check (contract §3.7 E25) owns the protocol's events — the owner wake, the `protocol-breach` Event (contract §5.2; its `protocol` is `bug report`, its `source` `E25`) and the User's Inbox item (contract §2.2 "Inbox item", kind `bug`) — the adapter ignores the kind (§15.3), and the kind raises the protocol number to 26 (contract §5.2: the guards' Ledger leg runs `session report` with new flags, §10.18). **Callers:** `report`, `mitigate` and `close` are the Lead's and the Manager's; a Worker that finds or is handed a bug reports it to its Lead, and the commands refuse it `not_a_lead` (exit 3, nothing written) when `CPD_ATTEMPT` is set and non-empty, as `job addendum` is. `list` and `show` are every agent's, read-only. **'Mitigation'** (air-d103): an agent-applied stopgap that removes or contains the User's symptom now; handing the User manual steps is not a mitigation unless the User chooses it. **Ownership** (air-d104): the Manager owns a cross-Plan bug (`plan` null), a Plan's Lead owns a bug of its Plan. The bug id is `b<k>`, the highest `<k>` in the table plus one, starting at 1, never reused.
+The bug record (air-d104; contract §2.2 "Bug record"): the bug report protocol (pro-d204) as commands, not prose. One row per bug in `bug_records`. The commands append no Event. The engine's breach check (E25) owns the owner wake and the `protocol-breach` Event (`protocol: bug report`, `source: E25`); only explicit escalation (§33.7) produces a User Inbox item via E8. **Callers:** `report`, `mitigate` and `close` are the Lead's and the Manager's; a Worker reports a bug to its Lead, and the commands refuse `not_a_lead` (exit 3, nothing written) when `CPD_ATTEMPT` is set and non-empty. `list` and `show` are every agent's, read-only. **Mitigation** (air-d103) is an agent-applied stopgap that removes or contains the User's symptom now; handing the User manual steps is not a mitigation unless the User chooses it. **Ownership** (air-d104): the Manager owns a cross-Plan bug (`plan` null), a Plan's Lead owns a bug of its Plan. The bug id is `b<k>`, the highest `<k>` in the table plus one, starting at 1, never reused.
 
 ### 33.1 `protocol bug report`
 
@@ -7258,7 +7258,7 @@ Records a bug and opens its protocol state. `--title` is the one-line name (1 to
 | `--plan`, if present, names a Plan that exists and is not deleted | `plan_not_found` | 4 |
 | the caller is not a Worker (`CPD_ATTEMPT` unset or empty) | `not_a_lead` | 3 |
 
-**Effects:** one transaction, one insert into `bug_records` (contract §2.2 "Bug record"): `id` the next `b<k>`, `status` `open`, `reported_by` the caller's Session id (`CPD_SESSION`; null when unset), `reported_at` the transaction's time, `cause` from `--cause`, every other field null. **No Event is appended.** **The wake** (air-n120; contract §3.7 E25, §2.2 "Bug record", "The wake and the breach check"): at the first tick that sees the new record the engine wakes its owner — the bug's `bug` Inbox item (contract §2.2 "Inbox item") and one waking `session-message` to the owner (the Plan's Lead when `--plan` names one, else the live Manager of Context `cpd`), with a session resume when the owner is asleep or idle — so the 15-minute bound (air-d105) can be met; the command itself writes nothing beyond the row.
+**Effects:** one transaction, one insert into `bug_records` (contract §2.2 "Bug record"): `id` the next `b<k>`, `status` `open`, `reported_by` the caller's Session id (`CPD_SESSION`; null when unset), `reported_at` the transaction's time, `cause` from `--cause`, every other field null. **No Event is appended.** At the first tick that sees the new record, E25 sends one waking `session-message` to the owner (the Plan's Lead when `--plan` names one, else the live Manager of Context `cpd`) so the 15-minute bound can be met. No Inbox item opens without explicit escalation.
 
 **Output:**
 
@@ -7375,9 +7375,10 @@ One bug record, every field (contract §2.2 "Bug record"), so **mitigation appli
 for User input (`escalated_at`, `escalated_by`, `escalation_reason`). Only the
 bug's owning Lead, the live CPD Manager for a cross-Plan bug, or the User can
 request it. Workers are refused. Closed or mitigated bugs cannot be escalated.
-The bug opens its Yellow Inbox item immediately, including within the 900-second
-mitigation window. Other bugs keep their own deadline. Mitigation or closure
-closes the item as before. `list` and `show` expose the escalation fields.
+The next Inbox reconciliation opens the Yellow item, regardless of the
+900-second mitigation window. That deadline is only for the owner's wake and
+audit; it does not open Inbox items. Mitigation or closure closes the item.
+`list` and `show` expose the escalation fields.
 
 ## 34. Refactor and coverage Workflows
 

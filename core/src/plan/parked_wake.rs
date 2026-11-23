@@ -1,5 +1,4 @@
-//! The wake state of a Plan's parked drafts (contract §3.7 E20, hs-d731, hs-d733): from the store only, one definition for the
-//! engine step that wakes the Lead and the Inbox kind `drafts-parked`.
+//! The wake state of a Plan's parked drafts, for the engine step that wakes the Lead (contract §3.7 E20).
 
 use rusqlite::{Connection, params};
 

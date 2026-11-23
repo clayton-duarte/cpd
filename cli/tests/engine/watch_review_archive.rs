@@ -217,15 +217,17 @@ fn review_done_plan_that_is_not_finished_is_kept() {
                VALUES ('{plan}', 'repo', '/nowhere', 'main', 'cancelled', 'cpd/{plan}', NULL, cpd_txn(), 't', NULL);"
         )
     };
-    // An open visible Inbox item of its Lead: an `unread` item, its condition (the Lead replied, `working` to `idle`,
-    // and its chat was never in the slot) held by an Event, so the engine's reconcile keeps it open.
+    // An explicit bug escalation keeps a visible Inbox item without another archive blocker.
+    // Record the already-delivered E25 wake so it cannot independently disturb the Lead's sleep.
     let inbox = fx.plan("codereview", "inbox", "done", "idle");
-    fx.fixture(
-        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
-           VALUES (cpd_txn(), 't', 'session-state', 'codereview', 'inbox', 'inbox-lead', 'x', '{\"from\":\"working\",\"to\":\"idle\",\"reply\":true}');
-         INSERT INTO inbox_items (kind, urgency, subject, context, plan, session, label, opened_at)
-           VALUES ('unread', 'white', 'inbox-lead', 'codereview', 'inbox', 'inbox-lead', 'inbox replied', 't');",
-    );
+    let now = fx.env.stamp_ago(0);
+    fx.fixture(&format!(
+        "INSERT INTO bug_records (id, plan, title, symptom, status, reported_at, escalated_at, escalated_by, escalation_reason)
+           VALUES ('b1', 'inbox', 'Needs a decision', 'Example', 'open', '{now}', '{now}', 'inbox-lead', 'Which option?');
+         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+           VALUES (cpd_txn(), '{now}', 'session-message', 'codereview', 'inbox', 'inbox-lead',
+                   'Bug b1 is open', '{{\"from\":\"cpd\",\"text\":\"Bug b1 is open\",\"wake\":true}}');"
+    ));
     // A running Job.
     let running = fx.plan("codereview", "running", "done", "idle");
     fx.fixture(&workflow("running"));
@@ -239,7 +241,7 @@ fn review_done_plan_that_is_not_finished_is_kept() {
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
            VALUES ('escalated', 'j-a1', 'j', 1, 'S2', 'ladder', 'ended', 'failed', 'crashed', 'cpd/escalated--j-a1', '/w', 't', 't');
          INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
-           VALUES ('escalated', 'j-a1-q1', 'j-a1', 1, 'Why?', 'open', {pid}, 't');",
+           VALUES ('escalated', 'j-a1-q1', 'j-a1', 1, 'Why?', 'open', {pid}, '{now}');",
         workflow("escalated"),
         pid = fx.env.live_pid()
     ));
@@ -267,6 +269,16 @@ fn review_done_plan_that_is_not_finished_is_kept() {
     }
 
     fx.run(LATER_TICKS);
+    assert_eq!(
+        fx.count("SELECT count(*) FROM inbox_items WHERE subject = 'bug:b1' AND closed_at IS NULL AND dismissed_at IS NULL"),
+        1,
+        "the acknowledged owner wake still leaves an actionable Inbox blocker"
+    );
+    assert_eq!(
+        fx.count("SELECT count(*) FROM sessions WHERE id = 'inbox-lead' AND asleep_at IS NOT NULL"),
+        1,
+        "the Inbox blocker, not a fresh owner wake, keeps the sleeping Plan"
+    );
     assert!(
         fx.archived("plans", "control"),
         "control: the finished Plan is archived"

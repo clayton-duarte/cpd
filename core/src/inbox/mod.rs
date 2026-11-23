@@ -63,8 +63,6 @@ pub(crate) mod swr_fixture;
 mod team_tests;
 #[cfg(test)]
 mod tier_tests;
-#[cfg(test)]
-mod unread_rows_tests;
 
 #[cfg(test)]
 mod review_autoarchive_tests;

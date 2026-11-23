@@ -7,8 +7,7 @@
 //!     (`unmitigated_past_bound`) or when a new open bug's normalized symptom equals an open bug's
 //!     (`recurring_symptom`), and, in the same transaction, one waking `session-message` whose text
 //!     begins `Bug <id> breached`;
-//!   - the User's alert is the bug's `bug` Inbox item, which E8's `conditions` rule keeps open while
-//!     the bug is unmitigated and closes when it is mitigated.
+//!   - a breach alone opens no Inbox item; an explicit escalation still does.
 //!
 //! The notification layer is mocked: the testkit's tmux runs no program, `tell` writes the
 //! `session-message` Event to the temporary store, and the `bug` Inbox item is E8's row in that
@@ -118,11 +117,20 @@ fn alerts_when_a_bug_has_no_mitigation_past_the_bound() {
     );
     assert!(sent[0].2, "the alert wakes the owner");
 
-    // The User's alert: the bug's Inbox item, opened by E8's rule.
+    // E25's audit and owner wake are independent of E8's user escalation.
+    inbox::run(&mut fx.engine);
+    assert!(
+        bug_item(&mut fx).is_none(),
+        "age alone does not ask the User"
+    );
+    fx.fixture(
+        "UPDATE bug_records SET escalated_at = reported_at, escalated_by = 'lead1', \
+                escalation_reason = 'Need a decision' WHERE id = 'b1';",
+    );
     inbox::run(&mut fx.engine);
     assert_eq!(
-        bug_item(&mut fx).as_ref().map(|i| i.0.as_str()),
-        Some("bug:b1")
+        bug_item(&mut fx),
+        Some(("bug:b1".to_owned(), Some("lead1".to_owned())))
     );
 }
 
@@ -175,8 +183,7 @@ fn stays_silent_below_the_bound() {
 }
 
 /// A new bug record wakes its sleeping owner: one waking `session-message` whose text begins
-/// `Bug <id> is open`. Under pro-d578 (b40), reporting opens NO Inbox item; the item opens only
-/// once past the 900 s window or on explicit ask.
+/// `Bug <id> is open`. Reporting alone opens no Inbox item.
 #[test]
 fn wakes_a_sleeping_owner_on_a_new_bug_record() {
     let mut fx = fx();

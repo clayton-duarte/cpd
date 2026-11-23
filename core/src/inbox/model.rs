@@ -7,8 +7,6 @@ use std::fs::File;
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use ts_rs::TS;
 
 use crate::error::{CpdError, ErrorCode};
@@ -492,19 +490,10 @@ impl Changes {
 /// The open items whose condition has the same identity and has moved inside it, and the item follows it in place
 /// without closing, so a snooze or a dismissal stays: a `curate-*` item (subject `curate-retire:<context>`) whose
 /// count moved changes its label (hs-d549, hs-d551); a `pr-ready` item changes its label or its links (url, context,
-/// plan, session); a `dialog` item changes its label (the Verdict's option); a `drafts-parked` item changes its label (the count of drafts, hs-d731); an `unread` item changes its label (Row 2, the title).
+/// plan, session); a `dialog` item changes its label (the Verdict's option).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| {
-            matches!(
-                i.kind,
-                Kind::CurateRetire
-                    | Kind::PrReady
-                    | Kind::Dialog
-                    | Kind::DraftsParked
-                    | Kind::Unread
-            )
-        })
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::PrReady | Kind::Dialog))
         .filter_map(|i| {
             conditions
                 .iter()
@@ -548,39 +537,17 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
     )
 }
 
-pub const BUG_MITIGATION_WINDOW_SECS: i64 = 900;
-
-/// The whole seconds between `now` and `reported_at`.
-fn bug_age(now: &str, reported_at: &str) -> Result<i64, CpdError> {
-    let now_dt = OffsetDateTime::parse(now, &Rfc3339).map_err(|e| {
-        CpdError::new(
-            ErrorCode::StoreFailed,
-            format!("inbox now {now:?} does not parse: {e}"),
-        )
-        .with("now", now)
-    })?;
-    let at_dt = OffsetDateTime::parse(reported_at, &Rfc3339).map_err(|e| {
-        CpdError::new(
-            ErrorCode::StoreFailed,
-            format!("bug reported_at {reported_at:?} does not parse: {e}"),
-        )
-        .with("reported_at", reported_at)
-    })?;
-    Ok((now_dt - at_dt).whole_seconds())
-}
-
-/// The `bug` Inbox conditions (contract §2.2 "Inbox item", "Bug record"; air-d104, air-d105,
-/// air-n120, pro-d578): one yellow item per open `bug_records` row with no mitigation that has breached
-/// the protocol window (900 s) or where the owner explicitly asked the User.
+/// One yellow item per open, unmitigated bug explicitly escalated to the User.
+/// Elapsed time alone is for the bug protocol's internal owner notice, not the Inbox.
 /// It links the owner Session (the Plan's Lead when the record names a
 /// Plan, else the live Manager of Context `cpd`, pro-d204), the record's Plan and its Context (`cpd`
 /// for a cross-Plan bug). The rule lives here because [`reconcile`] is the single write path for
 /// Inbox items; an item closes when the bug is mitigated or its `status` turns `closed`.
-pub fn bug_conditions(conn: &Connection, now: &str) -> Result<Vec<Condition>, CpdError> {
+fn bug_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT b.id, b.plan, b.title, p.context, p.lead_session, b.reported_at, b.escalated_at IS NOT NULL
+        "SELECT b.id, b.plan, b.title, p.context, p.lead_session
            FROM bug_records b LEFT JOIN plans p ON p.id = b.plan
-          WHERE b.status = 'open' AND b.mitigation IS NULL
+          WHERE b.status = 'open' AND b.mitigation IS NULL AND b.escalated_at IS NOT NULL
           ORDER BY b.id",
     )?;
     let rows = stmt
@@ -591,16 +558,11 @@ pub fn bug_conditions(conn: &Connection, now: &str) -> Result<Vec<Condition>, Cp
                 r.get::<_, String>(2)?,
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, bool>(6)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
-    for (id, plan, title, plan_context, lead, reported_at, escalated) in rows {
-        if !escalated && bug_age(now, &reported_at)? < BUG_MITIGATION_WINDOW_SECS {
-            continue;
-        }
+    for (id, plan, title, plan_context, lead) in rows {
         let plan = plan
             .map(|p| PlanId::parse(&p))
             .transpose()
@@ -671,18 +633,17 @@ fn corrupt_plan(id: &str, e: CpdError) -> CpdError {
 /// condition with no open item of its identity (`kind`, `subject`,
 /// `urgency`), closes each open item with no condition, and appends
 /// `inbox-opened` and `inbox-closed` for them, closed ones first. A `curate-*`,
-/// `dialog`, `pr-ready`, `drafts-parked` or `unread` item whose condition moved inside its identity (see
+/// `dialog` or `pr-ready` item whose condition moved inside its identity (see
 /// `relabelled`) is updated in place, with no Event. Writes
 /// nothing, not even a `txns` row, when nothing changed. `now` is §1.3's time.
 ///
-/// The `bug` conditions are computed here, by [`bug_conditions`], so the single write path owns the
-/// rule the engine step E25's owner wake and the User's breach indicator share (§2.2 "Bug record").
+/// Explicit bug escalations are computed here, independently of E25's owner wake (§2.2 "Bug record").
 pub fn reconcile(
     store: &mut Store,
     conditions: &[Condition],
     now: &str,
 ) -> Result<Changes, CpdError> {
-    let mut wanted = store.read(|conn| bug_conditions(conn, now))?;
+    let mut wanted = store.read(bug_conditions)?;
     wanted.extend_from_slice(conditions);
     let conditions = wanted.as_slice();
     let open = store.read(open_items)?;
