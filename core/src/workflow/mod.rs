@@ -144,6 +144,9 @@ pub struct CancelArgs {
     /// Cancel a dispatch Workflow whose merged work another Workflow carried: that Workflow, as <plan>/<key> (a bare <key> is of the Plan)
     #[arg(long = "superseded-by", value_name = "ref")]
     superseded_by: Option<add::WorkflowRef>,
+    /// Explicitly abandon obsolete checkpointed work, with a reason (not a claim of supersession)
+    #[arg(long, value_name = "reason", conflicts_with = "superseded_by")]
+    abandon: Option<String>,
     #[command(flatten)]
     plan: PlanArg,
 }

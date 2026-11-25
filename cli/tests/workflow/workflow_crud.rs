@@ -3417,3 +3417,84 @@ fn add_creates_no_open_job_row_for_a_waiting_workflow() {
         0
     );
 }
+
+#[test]
+fn explicit_abandonment_retains_checkpoints_and_is_idempotent() {
+    let fx = crud("dispatch");
+    fx.locked_pr("busyfix", &fx.web, "dispatch");
+    fx.merged_job("docs", "busyfix");
+    fx.merged_job("tests", "busyfix");
+    fx.job_of("implementation", "busyfix", "work", "failed");
+    fx.pr(&["cancel", "busyfix", "--abandon", "obsolete after fresh IDs"])
+        .ok();
+    assert_eq!(fx.workflow_status("busyfix"), "cancelled");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'docs'"),
+        "merged"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'tests'"),
+        "merged"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'implementation'"),
+        "cancelled"
+    );
+    assert_eq!(
+        fx.pr(&["cancel", "busyfix", "--abandon", "obsolete after fresh IDs"])
+            .ok()["already"],
+        true
+    );
+}
+
+#[test]
+fn explicit_abandonment_refuses_ineligible_and_active_without_writes() {
+    let fx = crud("dispatch");
+    fx.locked_pr("busyfix", &fx.web, "dispatch");
+    fx.job_of("implementation", "busyfix", "work", "failed");
+    let writes = fx.writes();
+    fx.refused(
+        &fx.pr(&["cancel", "busyfix", "--abandon", "obsolete"]),
+        "workflow_in_use",
+        3,
+        writes,
+    );
+    fx.merged_job("docs", "busyfix");
+    fx.job_of("running", "busyfix", "work", "running");
+    let writes = fx.writes();
+    fx.refused(
+        &fx.pr(&["cancel", "busyfix", "--abandon", "obsolete"]),
+        "workflow_in_use",
+        3,
+        writes,
+    );
+    fx.env.sql("UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'running'; INSERT INTO attempts (plan,id,job,number,tier,origin,status,branch,worktree,started_at) VALUES ('pay-1','running-a1','running',1,'S2','ladder','running','cpd/pay-1/test','/w','t');");
+    let writes = fx.writes();
+    fx.refused(
+        &fx.pr(&["cancel", "busyfix", "--abandon", "obsolete"]),
+        "workflow_in_use",
+        3,
+        writes,
+    );
+    assert_eq!(fx.workflow_status("busyfix"), "dispatch");
+    assert_eq!(fx.job_row("implementation"), "failed/-/timed_out");
+}
+
+#[test]
+fn explicit_abandonment_does_not_touch_an_unrelated_active_workflow() {
+    let fx = crud("dispatch");
+    fx.locked_pr("busyfix", &fx.web, "dispatch");
+    fx.locked_pr("other", &fx.pay, "dispatch");
+    fx.merged_job("docs", "busyfix");
+    fx.job_of("other-job", "other", "work", "running");
+    fx.pr(&["cancel", "busyfix", "--abandon", "obsolete"]).ok();
+    assert_eq!(fx.workflow_status("other"), "dispatch");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT status FROM jobs WHERE key = 'other-job'"),
+        "running"
+    );
+}

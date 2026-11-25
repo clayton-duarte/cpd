@@ -373,9 +373,18 @@ impl Merged {
 /// (`workflow cancel` clears it), so its Lead worktree is the one contract §7.1 names, when that is a worktree of the repo
 /// on the Workflow's Lead Branch (or its aside leftover is on disk).
 pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
+    // Abandonment predates a structured disposition: its cancellation Event's workflow and
+    // explicit text prefix are the durable distinction from ordinary cancellation and supersession.
     let mut workflows = conn.prepare(
         "SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number, p.status
-           FROM workflows p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('dispatch', 'open', 'merged', 'cancelled') AND NOT (p.status = 'cancelled' AND q.state IS 'open') ORDER BY p.plan, p.key",
+           FROM workflows p LEFT JOIN pull_requests q ON q.id = p.pull_request
+          WHERE p.status IN ('dispatch', 'open', 'merged', 'cancelled')
+            AND NOT (p.status = 'cancelled' AND q.state IS 'open')
+            AND NOT (p.status = 'cancelled' AND EXISTS (
+                SELECT 1 FROM events e WHERE e.plan = p.plan AND e.kind = 'workflow-cancelled'
+                  AND json_extract(e.data, '$.workflow') = p.key
+                  AND instr(e.text, 'Workflow ' || p.key || ' of Plan ' || p.plan || ' was explicitly abandoned: ') = 1
+            )) ORDER BY p.plan, p.key",
     )?;
     let rows = workflows
         .query_map([], |r| {

@@ -42,6 +42,7 @@ fn cancelling_an_open_workflow_keeps_its_pull_request_identity() {
     let args = CancelArgs {
         key: WorkflowKey::parse("api").unwrap(),
         superseded_by: None,
+        abandon: None,
         plan: crate::args::PlanArg {
             plan: Some(PlanId::parse("pay").unwrap()),
         },
@@ -96,4 +97,25 @@ fn cancelling_an_open_workflow_keeps_its_pull_request_identity() {
             "done".to_owned()
         )
     );
+}
+
+#[test]
+fn cancellation_job_cas_loss_rolls_back_transaction() {
+    let (_dir, mut env) = env();
+    env.store.write("fixture", |tx| {
+        tx.execute_batch("INSERT INTO jobs (plan, workflow, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay','api','remaining','work','Job','S2','g','c','[\"a\"]','[\"b\"]','[]','queued',0,printf('%064d',1),cpd_txn(),'t'); CREATE TRIGGER test_lost_job BEFORE UPDATE OF status ON jobs WHEN OLD.key = 'remaining' AND NEW.status = 'cancelled' BEGIN SELECT RAISE(IGNORE); END;")?;
+        Ok(())
+    }).unwrap();
+    let plan = PlanId::parse("pay").unwrap();
+    let key = WorkflowKey::parse("api").unwrap();
+    let result = env.store.write("test", |tx| {
+        tx.execute(
+            "UPDATE workflows SET title = 'changed' WHERE plan = 'pay' AND key = 'api'",
+            [],
+        )?;
+        cancel_jobs(tx, &plan, &key)
+    });
+    assert!(result.is_err());
+    let row: (String, Option<String>) = env.store.read(|c| Ok(c.query_row("SELECT (SELECT status FROM jobs WHERE key = 'remaining'), (SELECT title FROM workflows WHERE key = 'api')", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    assert_eq!(row, ("queued".into(), None));
 }

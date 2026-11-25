@@ -2096,6 +2096,7 @@
   },
   "workflow cancel": {
     "flags": {
+      "--abandon": true,
       "--help": false,
       "--plan": true,
       "--superseded-by": true
